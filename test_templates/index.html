@@ -1,0 +1,1344 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Интернет-магазин</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <!-- Подключение стилей (CSS) для оформления -->
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@200;500&display=swap');
+
+    :root {
+      --color-primary-darker: hsl(from var(--tg-theme-bg-color) h s calc(l - 5%)); 
+      --color-primary-lighten: hsl(from var(--tg-theme-bg-color) h s calc(l + 10%)); 
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Muntserrat', sans-serif;
+      font-size: 16px; /* changed from 200 to 16px */
+      color: var(--tg-theme-text-color);
+      background: var(--tg-theme-bg-color);
+    }
+
+    #main, #orders, #shopping_cart {
+      width: 100%;
+      padding-bottom: 100px;
+      text-align: center;
+    }
+
+    h1 {
+      margin-top: 50px;
+      margin-bottom: 10px;
+    }
+
+    img {
+      width: 90%;
+      margin: 30px auto;
+      border-radius: 10px;
+    }
+
+    p {
+      width: 350px;
+      margin: 0 auto;
+    }
+
+    button {
+      border: 0;
+      border-radius: 5px;
+      margin-top: 50px;
+      height: 60px;
+      width: 200px;
+      font-size: 20px;
+      font-weight: 500; /* removed px from 500 */
+      cursor: pointer;
+      transition: all 500ms ease;
+      color: var(--tg-theme-button-color);
+      background: var(--tg-theme-button-text-color);
+    }
+
+    button:hover {
+      background: var(--tg-theme-secondary-bg-color);
+    }
+
+    #orders, #shopping_cart {
+      display: none;
+      text-align: center;
+    }
+
+    input {
+      width: 90%;
+      outline: none;
+      margin: 10px 5%;
+      padding: 15px 10px;
+      font-size: 14px;
+      border: 2px solid silver;
+      border-radius: 5px;
+    }
+
+    input:focus {
+      border-color: #db5d5d;
+    }
+
+    /* Новые стили для нижнего блока */
+    #bottom-block {
+      position: fixed;
+      bottom: 0;
+      width: 100%;
+      background-color: var(--tg-theme-bg-color);
+      color: var(--tg-theme-text-color);
+      background: var(--tg-theme-bg-color);
+      padding: 20px 0;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    #bottom-block button {
+      width: 50%;
+      height: 50px;
+      border: none;
+      border-radius: 5px;
+      font-size: 18px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      margin: 5px;
+    }
+
+    #bottom-block button:hover {
+      background-color: var(--tg-theme-secondary-bg-color);
+    }
+
+    .product {
+      border: 2px solid var(--tg-theme-button-text-color);
+      padding: 20px;
+      margin: 10px;
+      border-radius: 20px;
+      background: var(--color-primary-lighten );
+    }
+
+    .disabled {
+        background-color: #ccc;
+        cursor: not-allowed;
+    }
+    /* << --------- КАРТИНКИ --------- */
+    .carousel-container {
+  position: relative;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.carousel-slide {
+  display: flex;
+  transition: transform 0.5s ease;
+  align-items: center;
+}
+
+.carousel-image {
+  width: 100%;
+  height: auto;
+}
+
+.prevBtn, .nextBtn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background-color: rgba(255, 255, 255, 0.5);
+  border: none;
+  color: black;
+  padding: 10px;
+  cursor: pointer;
+  font-size: 18px;
+}
+
+.prevBtn {
+  left: 0;
+}
+
+.nextBtn {
+  right: 0;
+}
+    /* >> --------- КАРТИНКИ --------- */
+    /* << --------- БЛОК ОБРАТНОЙ СВЯЗИ --------- */
+    .button-container {
+    display: inline-block;
+  }
+
+  .button {
+    padding: 10px 20px;
+    background-color: #007bff;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+  }
+
+  .block {
+    display: none;
+    padding: 20px;
+    background-color: #f0f0f0;
+    color: #333;
+    border-radius: 5px;
+    margin-top: 10px;
+  }
+  /* >> --------- БЛОК ОБРАТНОЙ СВЯЗИ --------- */
+  /* << --------- ВСПЛЫВАЮЩИЙ БЛОК --------- */
+  .popup {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        background-color: #333;
+        color: #fff;
+        padding: 10px 20px;
+        border-radius: 5px;
+        z-index: 9999;
+        display: none;
+  }
+     /* >> --------- ВСПЛЫВАЮЩИЙ БЛОК --------- */
+  </style>
+</head>
+<body>
+  <div class="popup" id="popup">This is a popup</div>
+
+  <div id="main" class="menu-div">
+
+    <h1>Добро пожаловать в интернет-магазин!</h1>
+    <div id="cart-items-main"></div> 
+  </div>
+
+  <div id="item" style="display: none;" class="menu-div all-size">
+    <h1>Товар</h1>
+    <button class="btn close-btn" onclick="setMenuDiv('main')"><< Назад</button>
+    <div id="cart-item"></div> 
+  </div>
+
+  <div id="orders" style="display: none;" class="menu-div">
+    <h1>Ваши заказы</h1>
+    <div id="cart-orders"></div> 
+  </div>
+
+  <div id="order" style="display: none;" class="menu-div all-size">
+    <h1>Заказ</h1>
+    <button class="btn close-btn" onclick="setMenuDiv('orders')"><< Назад</button>
+    <div id="cart-order"></div> 
+  </div>
+
+  <div id="shopping_cart" style="display: none;" class="menu-div">
+    <h1>Ваша корзина</h1>
+    <div id="cart-items-shop"></div> 
+    <button id="create-order" style="display: none;">Перейти к оформлению</button>
+  </div>
+
+  <div id="additional-fields" style="display: none;" class="menu-div all-size">
+    <button id="back-menu"><- Назад</button>
+    <form id="additional-fields-form">
+      <!-- Динамически создаваемые поля будут добавлены сюда -->
+      <input type="submit" id="send-and-pay" class="disabled" value="Оформить заказ">
+    </form>
+  </div>
+
+  <!-- Нижний блок -->
+  <div id="bottom-block">
+    <button id="menu-btn">Меню</button>
+    <button id="orders-btn">Заказы</button>
+    <button id="cart-btn">Корзина<p id="item-count-in-shop"></p></button>
+  </div>
+
+  <!-- Скрипт для логики и взаимодействия -->
+  <script>
+    var currentURL = window.location.href;
+    var urlWithoutParams = currentURL.split('?')[0];
+    //const urlTgParams = urlWithoutParams.split('#')[0];
+
+    const urlTgParams = 'https://designer-tg-bot.ru/gAAAAABmECxzjzjd693OWoAgJrRP6u-SwQ9-FOnyGDRHuBrHnIr4lNbQ4kjeEP4cN33Z9BDdQX282j4dQiPu7roVUM9oPZSXoI_SuMJ8zXjiGO_a_KaxXyzGfOS516uEkUQCg8AEgPgn'
+    const DomainUrl = 'https://designer-tg-bot.ru/';
+
+    // Ваши скрипты здесь
+    const menuButton = document.getElementById('menu-btn');
+    const orders_btn = document.getElementById('orders-btn');
+    const cart_btn = document.getElementById('cart-btn');
+    const send_and_pay = document.getElementById('send-and-pay');
+    const create_order = document.getElementById('create-order');
+    const back_menu = document.getElementById('back-menu');
+
+    const main = document.getElementById('main');
+    const item_cart = document.getElementById('item');
+    const orders = document.getElementById('orders');
+    const order_cart = document.getElementById('order');
+    const shopping_cart = document.getElementById('shopping_cart');
+    const bottom_block = document.getElementById('bottom-block');
+    const additional_fields = document.getElementById('additional-fields');
+    const additional_fields_form = document.getElementById('additional-fields-form');
+
+    const additional_fields_form_inputs = document.querySelectorAll('#additional-fields-form input');
+    
+    menuButton.addEventListener('click', () => {
+      setMenuDiv('main');
+    });
+
+    orders_btn.addEventListener('click', () => {
+      setMenuDiv('orders');
+    });
+
+    cart_btn.addEventListener('click', () => {
+      main.style.display = 'none';
+      orders.style.display = 'none';
+      shopping_cart.style.display = 'block';
+    });
+
+    back_menu.addEventListener('click', () => {
+      setMenuDiv('shopping_cart');
+    });
+
+    create_order.addEventListener('click', () => {
+      // проверяем, что в заказе товара уже хватает
+      let totalShopPrice = 0;
+      console.log(cartItems)
+      // Перебираем каждый элемент в словаре
+      for (const key in cartItems) {
+        // Выводим значение элемента с ключом "value"
+        console.log(cartItems[key], key);
+        //if (cartItems[key].hasOwnProperty('price')) {
+          totalShopPrice += cartItems[key].price * cartItems[key].quantity;
+        //}
+      }
+      /*
+      for (let i = 0; i < cartItems.length; i++) {
+          // Проверяем наличие ключа "amount" в текущем элементе
+          console.log(cartItems[i]);
+          if (cartItems[i].hasOwnProperty('price')) {
+              // Если ключ "amount" есть, добавляем его значение к общей сумме
+              totalShopPrice += cartItems[i].price;
+          }
+      }
+      */
+      if (getPriceDec(totalShopPrice, 0)  < settings_site.min_amount) {
+        showCustomPopup("Минимальная корзина " + settings_site.min_amount + ' рублей!', 3000); 
+        return 
+      }
+
+      setOtherData();
+    });
+
+    function setBottom() {
+      bottom_block.style.display = 'flex'; 
+    }
+
+    function closeBottom() {
+      bottom_block.style.display = 'none'; 
+    }
+
+    function setMenuDiv(divIdToShow) {
+      setBottom();
+
+      var menuDivs = document.querySelectorAll('.menu-div'); // Получаем все div'ы с классом "menu-div"
+      for (var i = 0; i < menuDivs.length; i++) {
+          if (menuDivs[i].id === divIdToShow) {
+              menuDivs[i].style.display = 'block'; // Показываем div, если его id совпадает с переданным аргументом
+              if (menuDivs[i].classList.contains('all-size')) {
+                  closeBottom();
+              }
+          } else {
+              menuDivs[i].style.display = 'none'; // Скрываем остальные div'ы
+          }
+          }
+    }
+
+    // Функция для сохранения словаря в куки
+    function saveDictionaryToCookie(dictionary, cookieName, expirationDays) {
+        const jsonDictionary = JSON.stringify(dictionary);
+        const expirationDate = new Date();
+        expirationDate.setDate(expirationDate.getDate() + expirationDays);
+
+        document.cookie = `${cookieName}=${encodeURIComponent(jsonDictionary)};expires=${expirationDate.toUTCString()};path=/`;
+    }
+
+    // Функция для загрузки словаря из куки
+    function loadDictionaryFromCookie(cookieName) {
+        const cookieString = document.cookie.split('; ').find(row => row.startsWith(cookieName + '='));
+        if (cookieString) {
+            const jsonDictionary = decodeURIComponent(cookieString.split('=')[1]);
+            return JSON.parse(jsonDictionary);
+        }
+        return null;
+    }
+    //saveAwatingFieldsToCookie({ok:'o'})
+
+    var additional_field_data = loadDictionaryFromCookie('AwatingFields');
+    for (const key in additional_field_data) {
+        // Выводим значение элемента с ключом "value"
+        console.log(additional_field_data[key].value, key);
+        var inputElement = document.getElementById(key);
+
+
+        // Проверяем, найден ли элемент
+        if (inputElement) {
+            // Устанавливаем новое значение
+            inputElement.value = additional_field_data[key].value;
+        }
+        console.log(inputElement);
+    }
+
+    //console.log('additional_field_data', additional_field_data);
+
+    //console.log(loadShopDictFromCookie());
+
+    // Объект для хранения товаров в корзине
+    const cartItems = {};
+  </script>
+
+  <script>
+    var tg = window.Telegram.WebApp;
+    tg.expand();
+
+    const tg_id = tg.initDataUnsafe.user && tg.initDataUnsafe.user.id ? tg.initDataUnsafe.user.id : 123;
+  </script>
+
+  <script>
+      async function getSettingsSite() {
+        try {
+            const response = await fetch(urlTgParams + '/get_settings_site', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ user_id: tg_id})
+            });
+            const data = await response.json();
+            settings_site = data.settings_site;
+            return data.settings_site; // Предполагается, что ваш API возвращает массив товаров
+        } catch (error) {
+            console.error('Ошибка при получении данных о товарах:', error);
+            return [];
+        }
+    }
+    var settings_site;
+    getSettingsSite()
+  </script>
+
+
+  <script>
+    var isOpenFindProduct = false;
+    // Открываем товар, если он есть в поисковой строке
+    function openFindProduct() {  
+      isOpenFindProduct = true;    
+      const urlParams = new URLSearchParams(window.location.search);
+      const item_id_open = urlParams.get('item');
+
+      console.log('item_id_open', item_id_open);
+      if (item_id_open) {
+        var product = getProductByNo(item_id_open);
+        if (product.id == 0) {
+          showCustomPopup('Видимо товар закончился(', 3000);
+          return
+        }
+        renderProduct(product);
+        setMenuDiv('item');
+      }
+    }
+  </script>
+
+  <script>
+    // << ==================== ЗАКАЗЫ ====================
+    async function fetchOrders() {
+        try {
+            const response = await fetch(urlTgParams + '/get_user_orders', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ user_id: tg_id})//tg.initDataUnsafe.user.id }) // передача текста 'qwerqwqwe'
+            });
+            const data = await response.json();
+            return data.user_orders; // Предполагается, что ваш API возвращает массив товаров
+        } catch (error) {
+            console.error('Ошибка при получении данных о товарах:', error);
+            return [];
+        }
+    }
+
+    // Функция для создания HTML-элементов товаров
+    async function renderOrders() {
+        const orders = await fetchOrders();
+        console.log(orders);
+
+        const cart_orders = document.getElementById('cart-orders');
+        cart_orders.innerHTML = ''; // Очистка содержимого перед добавлением новых товаров
+
+        orders.forEach(order => {
+            const orderElement = document.createElement('div');
+            orderElement.classList.add('order');
+            orderElement.setAttribute('id', `order-${order.id}`); // Установка ID для каждой карточки товара
+            console.log(`order-${order.no}`);
+
+            orderElement.innerHTML = `
+                <h2>${order.no}</h2>
+                <p>${order.status}</p>
+                <p>Создан: ${order.create_dt}</p>
+            `;
+
+            cart_orders.appendChild(orderElement);
+
+            orderElement.addEventListener('click', () => {
+                renderOreder(order);
+
+                setMenuDiv('order');
+            });
+        });
+    }
+
+    async function renderOreder(order) {
+        order_cart.innerHTML = ''; // Очистка содержимого перед добавлением новых товаров
+
+        const orderDetails = document.createElement('div');
+        orderDetails.classList.add('product');
+
+        var awaitingFields = `<h2>Доп поля:</h2>`;
+        var additional_fields_list = order.additional_fields;
+
+        for (let key in additional_fields_list) {
+            if (additional_fields_list.hasOwnProperty(key)) {
+                let additional_fields_data = additional_fields_list[key];
+                console.log("Ключ: " + key + ", Значение: " + additional_fields_data);
+                awaitingFields += `<p>${additional_fields_data.description}: ${additional_fields_data.value}</p><br>`;
+            }
+        }
+
+        orderDetails.innerHTML = `
+            <h2>Заказ: <p>${order.no}</p></h2>
+            <h3>Status: <p>${order.status}</p></h3>
+            <label for="selectList">Статус:</label>
+            <select id="selectStatusList" disabled>
+                <option value="NEW">Новый</option>
+                <option value="REQUIRES_CONFIRM_MENAGER">Ожидает подтверждения менаджера</option>
+                <option value="NEED_PAYMENTS">Ожидает оплаты</option>
+                <option value="PAYMENT_SUCCESS">Оплачен</option>
+                <option value="ASSEMBLING">Собирается</option>
+                <option value="SENT">Отправлен</option>
+                <option value="READY_TO_ISSUDE">Готов к выдаче</option>
+                <option value="COMPLETED">Завершён</option>
+                <option value="CANCEL">Отменён</option>
+            </select>
+            <button id="issue-invoice" class="bnt" style="display: none;">Выслать счёт на оплату</button>
+            <h3>Дата создания: <p>${order.create_dt}</p></h3>
+            <br>
+            <h2>Оплата произведена:</h2>
+            <input id="is_paid_for" type="checkbox" name="is_paid_for" ${order.is_paid_for ? 'checked' : ''} disabled>
+            <br>
+            <h2>Строки:</h2>
+        `;
+
+        if (order.lines && order.lines.length > 0) {
+            order.lines.forEach(line => {
+                const lineItem = document.createElement('div');
+                lineItem.classList.add('order-item');
+                lineItem.innerHTML = `
+                    <h4>ID товара: <p>${line.item_id}</p></h4>
+                    <h4>Цена: <p>${getPriceDec(line.price)}</p></h4>
+                    <h4>Колличество: <p>${line.quantity}</p></h4>
+                `;
+                orderDetails.appendChild(lineItem);
+            });
+        }; 
+
+        orderDetails.innerHTML += awaitingFields;
+
+        const helpManagers = await fetchHelpManager();
+        console.log(helpManagers);
+        var helpManagerList = '';
+        for (let helpManager in helpManagers) {
+          const helpManagerItem = helpManagers[helpManager]
+          console.log(helpManagerItem);
+          helpManagerList += `<a href="${helpManagerItem.url}">${helpManagerItem.username}</a><br>`;
+        }
+        orderDetails.innerHTML += `
+        <div class="button-container">
+          <button id="helpButton" class="button" onclick="transformHelpButton()">Задать вопрос</button>
+          <div id="blockText" class="block">По вопросам связанным с заказом, можете написать нашим менаджерам:\n${helpManagerList}</div>
+        </div>`;
+
+        order_cart.appendChild(orderDetails);
+
+        var selectStatusList = document.getElementById('selectStatusList');
+
+        // Используем switch для установки атрибута selected в зависимости от значения order.status
+        selectStatusList.querySelector(`option[value="${order.status}"]`).selected = true;
+    }
+
+
+    function transformHelpButton() {
+        var button = document.getElementById("helpButton");
+        var blockText = document.getElementById("blockText");
+
+        button.style.display = "none";
+        blockText.style.display = "block";
+    }
+
+    renderOrders();
+    // >> ==================== ЗАКАЗЫ ====================
+
+    // Функция для получения данных о товарах с помощью API
+    async function fetchProducts() {
+        try {
+            const currentPageUrl = urlTgParams + '/get_items';
+            const response = await fetch(currentPageUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ user_id: tg_id})//tg.initDataUnsafe.user.id }) // передача текста 'qwerqwqwe'
+            });
+            const data = await response.json();
+            return data.items; // Предполагается, что ваш API возвращает массив товаров
+        } catch (error) {
+            console.error('Ошибка при получении данных о товарах:', error);
+            return [];
+        }
+    }
+
+    var products;
+
+    const getProductByNo = (product_no) => {
+        console.log(products);
+        product_no = parseInt(product_no);
+        var product = products.find(product => product.id === product_no);
+        if (!product) {
+            product = {
+                id: '0',
+                media_list: [''],
+                name: '',
+                description: '',
+                price: 0,
+                quantity: 0,
+                discount: 0,
+                requires_confirm_menager: false,
+                activ: true
+            }
+        }
+        return product;
+    };
+    
+    // Функция для создания HTML-элементов товаров
+    async function renderProducts() {
+        products = await fetchProducts();
+
+        const cart_items_main = document.getElementById('cart-items-main');
+        cart_items_main.innerHTML = ''; // Очистка содержимого перед добавлением новых товаров
+
+        products.forEach(product => {
+            const productElement = document.createElement('div');
+            productElement.classList.add('product');
+            productElement.setAttribute('id', `product-${product.id}`); // Установка ID для каждой карточки товара
+            var price = parseFloat(product.price) / 100;
+
+            var plusPrice = '';
+            if (product.discount != 0) {
+              plusPrice = `
+                  <p class="price"><s>${price}</s></p>
+                  <p>Скидка: <p class="price">${product.discount}</p>%</p>
+              `
+            };
+
+            productElement.innerHTML = `
+                <h2>${product.name}</h2>
+                <div class="carousel-container">
+                    <div id="carousel-slide-${product.id}" class="carousel-slide">
+                        <img src="${DomainUrl}${product.media_list[0]}" alt="${product.name}" class="carousel-image">
+                    </div>
+                    <button id="prevBtn-${product.id}" class="prevBtn">&#10094;</button>
+                    <button id="nextBtn-${product.id}" class="nextBtn">&#10095;</button>
+                </div>
+                <p class="description-product">${product.description}</p>
+                ${plusPrice}
+                <p>Цена: <p class="price_end">${getNormalPrice(price, product.discount)}</p></p>
+                <div class="div-button">
+                    <button class="btn add-to-cart" data-product-id="${product.id}" id="add-to-cart-${product.id}">Добавить в корзину</button>
+                    <div id="cart-${product.id}" class="cart-block" style="display: none;">
+                        <button class="btn remove-item" id="remove-item-${product.id}">-</button>
+                        <span class="cart-count" id="cart-count-${product.id}">0</span>
+                        <button class="btn add-item" id="add-item-${product.id}">+</button>
+                    </div>
+                </div>
+            `;
+
+            cart_items_main.appendChild(productElement);
+
+            //if (cartItems[product.id]) {
+            //  const productId = event.target.dataset.productId;
+            //  addProductButton(product, cartItems[product.id].quantity)
+            //}
+
+            // Обработчик блока изменения колличества
+            const addButton = document.getElementById(`add-item-${product.id}`);
+            const removeButton = document.getElementById(`remove-item-${product.id}`);
+            const cartCount = document.getElementById(`cart-count-${product.id}`);
+            
+            addButton.addEventListener('click', function(event) {
+              event.stopImmediatePropagation(); 
+              addProductButton(product, 1)
+            });
+            
+            removeButton.addEventListener('click', function(event) {
+              event.stopImmediatePropagation(); 
+              remuveProductButton(product, 1);
+            });
+
+            const carouselSlide = document.getElementById(`carousel-slide-${product.id}`);
+            const prevBtn = document.getElementById(`prevBtn-${product.id}`);
+            const nextBtn = document.getElementById(`nextBtn-${product.id}`);
+
+            let counter = 0;
+
+            // Функция для загрузки изображений в карусель
+            function loadImages() {
+                carouselSlide.innerHTML = '';
+                product.media_list.forEach((image, index) => {
+                    const img = document.createElement('img');
+                    img.src = DomainUrl + image;
+                    img.alt = product.name;
+                    img.style.maxWidth = '100%';
+                    img.style.height = '100%';
+                    img.classList.add('carousel-image');
+                    if (index === counter) {
+                        img.classList.add('active');
+                    }
+                    carouselSlide.appendChild(img);
+                });
+            }
+
+            // Загрузка изображений при загрузке страницы
+            loadImages();
+
+            // Обработчики для кнопок "Предыдущее" и "Следующее"
+            prevBtn.addEventListener('click', () => {
+                counter--;
+                if (counter < 0) {
+                    counter = product.media_list.length - 1;
+                }
+                slideImage();
+            });
+
+            nextBtn.addEventListener('click', () => {
+                counter++;
+                if (counter >= product.media_list.length) {
+                    counter = 0;
+                }
+                slideImage();
+            });
+
+            // Функция для плавного перемещения изображений
+            function slideImage() {
+                const imgWidth = carouselSlide.querySelector('.carousel-image').clientWidth;
+                carouselSlide.style.transform = `translateX(-${counter * imgWidth}px)`;
+            }
+
+            productElement.addEventListener('click', () => {
+              renderProduct(product);
+              setMenuDiv('item');
+            });
+        }); // товар оконсания цикл по их созданию
+
+        // Назначаем обработчик событий на кнопки "Добавить в корзину"
+        const addToCartButtons = document.querySelectorAll('.add-to-cart');
+        addToCartButtons.forEach(button => {
+            button.addEventListener('click', function(event) {
+              event.stopImmediatePropagation(); 
+              const productId = event.target.dataset.productId;
+              addToCart(productId);
+              addProductButton(cartItems[productId], 1);
+            });
+        });
+
+        await updateShopCookie();
+
+        if (!isOpenFindProduct)
+          await openFindProduct();
+    }
+
+    function addProductButton(product, count_plus) {
+      const addButton = document.getElementById(`add-item-${product.id}`);
+      const removeButton = document.getElementById(`remove-item-${product.id}`);
+      const cartCount = document.getElementById(`cart-count-${product.id}`);
+      
+      let count = parseInt(cartCount.textContent);
+      count += count_plus;
+
+      if (product.quantity < count) {
+        return
+      }
+
+      cartCount.textContent = count;
+
+      if (cartItems[product.id]) {
+        cartItems[product.id].quantity = count;
+        updateCartItem(product.id);
+      }
+
+      saveDictionaryToCookie(cartItems, 'shopDict', 7);
+    }
+
+    function remuveProductButton(product, count_minus) {
+      const addButton = document.getElementById(`add-item-${product.id}`);
+      const removeButton = document.getElementById(`remove-item-${product.id}`);
+      const cartCount = document.getElementById(`cart-count-${product.id}`);
+
+      let count = parseInt(cartCount.textContent);
+      if (count > 1) {
+          count -= count_minus;
+          cartCount.textContent = count;
+          if (cartItems[product.id]) {
+            cartItems[product.id].quantity = count;
+            updateCartItem(product.id);
+          }
+      }
+      else {
+          const cartBlock = document.getElementById(`cart-${product.id}`);
+          const buttonAddToCart = document.getElementById(`add-to-cart-${product.id}`);
+          cartBlock.style.display = 'none';
+          buttonAddToCart.style.display = 'block'; 
+          //cartItems[product.id].quantity = 0;
+          //updateCartItem(product.id);
+          cartCount.textContent = 0;
+          delete cartItems[product.id];
+          const cartItemElement = document.getElementById(`cart-item-${product.id}`);
+          cartItemElement.remove();
+
+          const itemCountInShop = document.getElementById(`item-count-in-shop`);
+          var itemCount =  Object.keys(cartItems).length;
+          if (itemCount == 0) {
+              itemCountInShop.innerHTML = '';
+          }
+          else {
+              itemCountInShop.innerHTML = itemCount;
+          }
+      }
+      saveDictionaryToCookie(cartItems, 'shopDict', 7);
+    }
+
+    var popup = document.getElementById('popup');
+        
+    // Функция для показа всплывающего окна с заданным текстом и временем задержки
+    function showCustomPopup(text, delay) {
+        popup.textContent = text; // Устанавливаем текст всплывающего окна
+        popup.style.display = 'block'; // Показываем всплывающее окно
+        setTimeout(hidePopup, delay); // Исчезнет через указанное время
+    }
+    
+    // Скрыть всплывающее окно
+    function hidePopup() {
+        popup.style.display = 'none';
+    }
+
+    async function renderProduct(product) {
+      //cart-item
+      const item_cart_div = document.getElementById(`cart-item`);
+      item_cart_div.innerHTML = '';
+      const productElement = document.createElement('div');
+      productElement.classList.add('product');
+      productElement.setAttribute('id', `product-${product.id}`); // Установка ID для каждой карточки товара
+      var price = parseFloat(product.price) / 100;
+
+      var plusPrice = '';
+      if (product.discount != 0) {
+        plusPrice = `
+            <p class="price"><s>${price}</s></p>
+            <p>Скидка: <p class="price">${product.discount}</p>%</p>
+        `
+      };
+
+      productElement.innerHTML = `
+          <button class="btn" id="share-btn">Отправить</button>
+          <h2>${product.name}</h2>
+          <div class="carousel-container">
+              <div id="carousel-slide" class="carousel-slide">
+              </div>
+              <button id="prevBtn" class="prevBtn">&#10094;</button>
+              <button id="nextBtn" class="nextBtn">&#10095;</button>
+          </div>
+          <p class="description-product">${product.description}</p>
+          ${plusPrice}
+          <p>Цена: <p class="price_end">${getNormalPrice(price, product.discount)}</p></p>
+          <div class="div-button">
+              <button class="btn add-to-cart" data-product-id="${product.id}" id="add-to-cart">Добавить в корзину</button>
+              <div id="cart-product" class="cart-block" style="display: none;">
+                  <button class="btn remove-item" id="remove-item">-</button>
+                  <span class="cart-count" id="cart-count">0</span>
+                  <button class="btn add-item" id="add-item">+</button>
+              </div>
+          </div>
+      `;
+
+      item_cart_div.appendChild(productElement);
+
+      const share_btn = document.getElementById(`share-btn`);
+      share_btn.addEventListener('click', function(event) {
+        var textToCopy = `Товар: ` + product.name + '\n';
+        textToCopy += 'Описание: ' + product.description;
+        if (product.discount) {
+          textToCopy += '\nСкидка: ' + product.discount;
+          textToCopy += '\nЦена без скидки: ' + price;
+        }
+        textToCopy += '\nЦена: ' + getNormalPrice(price, product.discount);
+        textToCopy += '\n\n https://t.me/' + bot_params.username + '?start=item_' + product.id;
+
+        // Копируем текст или ссылку в буфер обмена
+        navigator.clipboard.writeText(textToCopy)
+          .then(function() {
+            // Успешно скопировано
+            showCustomPopup("Скопированно в буфер обмена", 2000); 
+          })
+          .catch(function(err) {
+            // В случае ошибки при копировании
+            console.error('Ошибка копирования: ', err);
+            showCustomPopup("Ошибка копирования в буфер", 2000); 
+          });
+      });
+
+      const button_add_produkt = document.getElementById(`add-to-cart`);
+      button_add_produkt.addEventListener('click', function(event) {
+        const cartBlock = document.getElementById(`cart-product`);
+        cartBlock.style.display = 'block';
+        event.target.style.display = 'none'; 
+        addToCart(product.id);
+        addProductButton(product, 1);
+        const cartCountId = document.getElementById(`cart-count-${product.id}`);
+      
+        let count = parseInt(cartCountId.textContent);
+        cartCount.textContent = count;
+      }); 
+
+      // Обработчик блока изменения колличества
+      const addButton = document.getElementById(`add-item`);
+      const removeButton = document.getElementById(`remove-item`);
+      const cartCount = document.getElementById(`cart-count`);
+      const cartCountId = document.getElementById(`cart-count-${product.id}`);
+      const cartBlock = document.getElementById(`cart-product`);
+
+      let countProduct = parseInt(cartCountId.textContent);
+      if (countProduct > 0) {
+        cartCount.textContent = countProduct;
+        cartBlock.style.display = 'block';
+        button_add_produkt.style.display = 'none'; 
+      }
+      
+      addButton.addEventListener('click', () => {
+        addProductButton(product, 1);
+        const cartCountId = document.getElementById(`cart-count-${product.id}`);
+      
+        let count = parseInt(cartCountId.textContent);
+        cartCount.textContent = count;
+        /*
+          let count = parseInt(cartCount.textContent);
+          count++;
+          cartCount.textContent = count;
+          cartCountId.textContent = count;
+
+          if (cartItems[product.id]) {
+            cartItems[product.id].quantity = count;
+            updateCartItem(product.id);
+          }
+        */
+      });
+      
+      removeButton.addEventListener('click', () => {
+        remuveProductButton(product, 1);
+        const cartCountId = document.getElementById(`cart-count-${product.id}`);
+      
+        let count = parseInt(cartCountId.textContent);
+        cartCount.textContent = count;
+        if (count == 0) {
+          cartBlock.style.display = 'none';
+          button_add_produkt.style.display = 'block'; 
+        }
+        /*
+          let count = parseInt(cartCount.textContent);
+          if (count > 1) {
+              count--;
+              cartCount.textContent = count;
+              cartCountId.textContent = count;
+              if (cartItems[product.id]) {
+                cartItems[product.id].quantity = count;
+                updateCartItem(product.id);
+              }
+          }
+          else {
+              const cartBlock = document.getElementById(`cart-product`);
+              const buttonAddToCart = document.getElementById(`add-to-cart`);
+              cartBlock.style.display = 'none';
+              buttonAddToCart.style.display = 'block'; 
+              delete cartItems[product.id];
+              const cartItemElement = document.getElementById(`cart-item`);
+              cartItemElement.remove();
+
+              const itemCountInShop = document.getElementById(`item-count-in-shop`);
+              var itemCount =  Object.keys(cartItems).length;
+              if (itemCount == 0) {
+                  itemCountInShop.innerHTML = '';
+              }
+              else {
+                  itemCountInShop.innerHTML = itemCount;
+              }
+          }
+          */
+      });
+
+      const carouselSlide = document.getElementById(`carousel-slide`);
+      const prevBtn = document.getElementById(`prevBtn`);
+      const nextBtn = document.getElementById(`nextBtn`);
+
+      let counter = 0;
+
+      // Функция для загрузки изображений в карусель
+      function loadImages() {
+          carouselSlide.innerHTML = '';
+          product.media_list.forEach((image, index) => {
+              const img = document.createElement('img');
+              img.src = DomainUrl + image;
+              img.alt = product.name;
+              img.style.maxWidth = '100%';
+              img.style.height = '100%';
+              img.classList.add('carousel-image');
+              if (index === counter) {
+                  img.classList.add('active');
+              }
+              carouselSlide.appendChild(img);
+          });
+      }
+
+      // Загрузка изображений при загрузке страницы
+      loadImages();
+
+      // Обработчики для кнопок "Предыдущее" и "Следующее"
+      prevBtn.addEventListener('click', () => {
+          counter--;
+          if (counter < 0) {
+              counter = product.media_list.length - 1;
+          }
+          slideImage();
+      });
+
+      nextBtn.addEventListener('click', () => {
+          counter++;
+          if (counter >= product.media_list.length) {
+              counter = 0;
+          }
+          slideImage();
+      });
+
+      // Функция для плавного перемещения изображений
+      function slideImage() {
+          const imgWidth = carouselSlide.querySelector('.carousel-image').clientWidth;
+          carouselSlide.style.transform = `translateX(-${counter * imgWidth}px)`;
+      }
+    }
+
+    // Функция для добавления товара в корзину
+    function addToCart(productId) {
+        const product = getProductByNo(productId)
+        //const productId = event.target.dataset.productId;
+        const productElement = document.getElementById(`product-${productId}`);
+
+        const productName = productElement.querySelector('h2').innerText;
+        const productImage = productElement.querySelector('img').src;
+        const productPrice = productElement.querySelector('.price_end').innerText;
+        const productDescription = productElement.querySelector('.description-product').innerText;
+        const priceFloat = parseFloat(productPrice); // преобразование строки в тип данных float
+        const priceInt = parseInt(priceFloat * 100); // умножение на 100 и преобразование в тип данных int        
+
+        create_order.style.display = 'block'; 
+
+        const cartBlock = document.getElementById(`cart-${productId}`);
+        const addToCart_btn = document.getElementById(`add-to-cart-${productId}`);
+        
+        cartBlock.style.display = 'block';
+        addToCart_btn.style.display = 'none'; 
+        //event.target.style.display = 'none'; 
+        
+
+        // Если товар уже есть в корзине, увеличиваем количество
+        if (cartItems[productId]) {
+            console.log('product.quantity', product.quantity, cartItems[productId].quantity);
+            if (product.quantity <= cartItems[productId].quantity) {
+              return
+            }
+            cartItems[productId].quantity++;
+            updateCartItem(productId);
+        } else {
+            // Если товара нет в корзине, добавляем его
+            cartItems[productId] = {
+                id: productId,
+                name: productName,
+                image: productImage,
+                description: productDescription,
+                price: priceInt,
+                quantity: 1
+            };
+            addCartItem(productId);
+        }
+        const itemCountInShop = document.getElementById(`item-count-in-shop`);
+        itemCountInShop.innerHTML = Object.keys(cartItems).length;
+
+        saveDictionaryToCookie(cartItems, 'shopDict', 7);
+    }
+
+    // Функция для добавления нового товара в корзину
+    function addCartItem(productId) {
+        const cartItem = document.createElement('div');
+        cartItem.classList.add('cart-item');
+        cartItem.setAttribute('id', `cart-item-${productId}`);
+        console.log(cartItems[productId]);
+        cartItem.innerHTML = `
+            <img src="${cartItems[productId].image}" alt="${cartItems[productId].name}">
+            <div>
+                <h3>${cartItems[productId].name}</h3>
+                <p>${getPriceDec(cartItems[productId].price)}</p>
+                <p>Количество: ${cartItems[productId].quantity}</p>
+            </div>
+        `;
+        const cartItemsContainer = document.getElementById('cart-items-shop');
+        cartItemsContainer.appendChild(cartItem);
+    }
+
+    // Функция для обновления количества товара в корзине
+    function updateCartItem(productId) {
+        const cartItemElement = document.getElementById(`cart-item-${productId}`);
+        cartItemElement.querySelector('p:last-child').innerText = `Количество: ${cartItems[productId].quantity}`;
+    }
+
+    renderProducts();
+
+    // Подгружаем корзину из куки
+    async function updateShopCookie() {
+        var cartItemsCookie = loadDictionaryFromCookie('shopDict');
+        console.log('loadShopDictFromCookie', cartItemsCookie);
+        for (let key in cartItemsCookie) {
+            console.log('products', products);
+            const product = getProductByNo(key);
+            if (product.id != 0) {
+                let cartItemData = cartItemsCookie[key];
+                addToCart(key);
+                console.log(product.id, key, cartItemData.quantity);
+                var add_quantity = cartItemData.quantity;
+                if (product.quantity < add_quantity) {
+                  add_quantity = product.quantity;
+                }
+                addProductButton(product, add_quantity)
+            }
+        }
+    }
+  </script>
+
+  <script>
+     async function fetchCreateOrder() {
+        var elements = additional_fields_form.elements;
+        var formData = {}; 
+        for (var i = 0; i < elements.length; i++) {
+            var element = elements[i];
+            if (element.type !== 'submit') { // Проверяем, что элемент не является кнопкой отправки
+                formData[element.id] = {
+                  value: element.value,
+                  description: element.getAttribute('description')
+                } // Используем id элемента как ключ, значение - значение элемента
+            }
+        }
+        console.log(formData);
+        saveDictionaryToCookie(formData, 'AwatingFields', 360);
+        // делаем запрос на создание заказа передавая выбранный товар
+        try {
+            const response = await fetch(urlTgParams + '/create_order', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ items: cartItems, user_id: tg_id, additional_fields: formData})//tg.initDataUnsafe.user.id }) // передача текста 'qwerqwqwe'
+            });
+            const data = await response.json();
+            if (!data.success) {
+              showCustomPopup(data.error, 3000)
+              return []
+            }
+            renderOrders();
+            setMenuDiv('orders');
+            return data.items; // Предполагается, что ваш API возвращает массив товаров
+        } catch (error) {
+            console.error('Ошибка при создании заказа', error);
+            return [];
+        }
+    }
+
+    async function setOtherData(){
+      // открываем окно для ввода дополнительных полей
+      bottom_block.style.display = 'none';
+      shopping_cart.style.display = 'none';
+      additional_fields.style.display = 'block';
+
+
+    }
+
+    additional_fields_form_inputs.forEach(function(input) {
+        input.addEventListener('input', function() {
+            checkForm();
+        });
+    });
+
+    function checkForm() {
+        var allFieldsFilled = true;
+
+        additional_fields_form_inputs.forEach(function(input) {
+            if (!input.value) {
+                allFieldsFilled = false;
+            }
+        });
+
+        if (allFieldsFilled) {
+            // Все поля заполнены
+            send_and_pay.classList.remove('disabled');
+            send_and_pay.disabled = false;
+        } else {
+            // Есть незаполненные поля
+            send_and_pay.classList.add('disabled');
+            send_and_pay.disabled = true;
+        }
+    }
+
+    document.getElementById('additional-fields-form').addEventListener('submit', function(event) {
+        // Отменяем стандартное действие формы (отправку на сервер)
+        event.preventDefault();
+        
+        // Получаем все поля ввода
+        var inputs = document.querySelectorAll('#additional-fields-form input');
+
+        var allFieldsFilled = true;
+        // Проверяем каждое поле ввода
+        inputs.forEach(function(input) {
+            if (!input.value) {
+                allFieldsFilled = false;
+            }
+        });
+
+        // Если все поля заполнены, отправляем форму
+        if (allFieldsFilled) {
+            //this.submit();
+            fetchCreateOrder();
+            console.log('заказ отправлен');
+        } else {
+            alert('Пожалуйста, заполните все поля формы.');
+        }
+    });
+
+    function getNormalPrice(price, discount) {
+        const discountedPrice = price - (price * discount/ 100);
+        const endPrice = discountedPrice ;
+
+        return endPrice.toFixed(2); // Округляем до двух знаков после запятой
+    }
+
+    function getPriceDec(price) {
+        return price / 100;
+    }
+
+    function getPriceToSend(price) {
+        return Math.round(price * 100);
+    }
+
+    async function fetchHelpManager() {
+        try {
+            const response = await fetch(urlTgParams + '/get_help_manager', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                //body: JSON.stringify({ user_id: tg_id})//tg.initDataUnsafe.user.id }) // передача текста 'qwerqwqwe'
+            });
+            const data = await response.json();
+            return data.help_manager; // Предполагается, что ваш API возвращает массив товаров
+        } catch (error) {
+            console.error('Ошибка при получении данных о товарах:', error);
+            return [];
+        }
+    }
+
+    async function getBotParams() {
+        // делаем запрос на создание заказа передавая выбранный товар
+        try {
+            const response = await fetch(urlTgParams + '/get_bot_params', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                //body: JSON.stringify({ })//tg.initDataUnsafe.user.id }) // передача текста 'qwerqwqwe'
+            });
+            const data = await response.json();
+            bot_params = data.bot_params;
+            console.log('bot_params', bot_params);
+            return data.bot_params; // Предполагается, что ваш API возвращает массив товаров
+        } catch (error) {
+            console.error('Ошибка при создании заказа', error);
+            return [];
+        }
+    }
+
+    var bot_params;
+    getBotParams();
+  </script>
+  <script>
+    async function getAwaitingFields(user_id) {
+      try {
+        const response = await fetch(urlTgParams + '/get_awaiting_fields', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ user_id: user_id })
+        });
+        const data = await response.json();
+        return data.awaiting_fields; // Предполагается, что ваш API возвращает массив товаров
+      } catch (error) {
+        console.error('Ошибка при получении данных о товарах:', error);
+        return [];
+      }
+    }
+
+    function createInputField(field) {
+      const inputWrapper = document.createElement('div');
+      
+      const label = document.createElement('h4');
+      label.textContent = field.description;
+      inputWrapper.appendChild(label);
+
+      const input = document.createElement('input');
+      input.type = field.type;
+      input.name = field.name;
+      input.id = `additional-field-${field.id}`;
+      input.placeholder = field.placeholder;
+      input.setAttribute('description', field.description);
+      
+      inputWrapper.appendChild(input);
+      return inputWrapper;
+    }
+
+    async function populateForm() {
+      const user_id = tg_id; // Убедитесь, что у вас есть переменная tg_id
+      const fields = await getAwaitingFields(user_id);
+      
+      const form = document.getElementById('additional-fields-form');
+      fields.forEach(field => {
+        const inputField = createInputField(field);
+        form.insertBefore(inputField, form.querySelector('#send-and-pay'));
+      });
+    }
+
+    populateForm();
+
+  </script>
+
+
+</body>
+</html>

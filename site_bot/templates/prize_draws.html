@@ -1,0 +1,327 @@
+{% extends "base.html" %}
+{% block title %}Розыгрыши Призов – rtd-bot{% endblock %}
+
+{% block content %}
+  <!-- Навигация -->
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb mb-2">
+      <li class="breadcrumb-item">
+        <a href="/prize-draws" class="text-secondary text-decoration-none">
+          Розыгрыши призов
+        </a>
+      </li>
+      <li class="breadcrumb-item active" aria-current="page">Список</li>
+    </ol>
+  </nav>
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h1 class="h3">Розыгрыши призов</h1>
+    <button id="btn-new-draw" class="btn btn-primary">Создать новый розыгрыш</button>
+  </div>
+
+  <!-- Таблица -->
+  <div class="card">
+    <div class="card-body">
+      <table class="table table-hover">
+        <thead>
+          <tr>
+            <th>Название</th>
+            <th>Дата начала</th>
+            <th>Дата окончания</th>
+            <th>Статус</th>
+          </tr>
+        </thead>
+        <tbody id="draws-table-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Модал -->
+  <div class="modal fade" id="modal-draw-edit" tabindex="-1" aria-labelledby="modalDrawLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="modalDrawLabel">Редактирование розыгрыша</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body d-flex flex-column" style="height: 80vh;">
+          <!-- Основные поля -->
+          <div class="mb-4 px-3">
+            <div class="row g-3 align-items-end">
+              <div class="col-md-3">
+                <label for="edit-draw-title" class="form-label">Название</label>
+                <input type="text" id="edit-draw-title" class="form-control" />
+              </div>
+              <div class="col-md-2">
+                <label for="edit-draw-start" class="form-label">Дата начала</label>
+                <input type="date" id="edit-draw-start" class="form-control" />
+              </div>
+              <div class="col-md-2">
+                <label for="edit-draw-end" class="form-label">Дата окончания</label>
+                <input type="date" id="edit-draw-end" class="form-control" />
+              </div>
+              <div class="col-md-3">
+                <label for="main-draw-status" class="form-label">Статус</label>
+                <select id="main-draw-status" class="form-select">
+                  <option value="upcoming">Ожидается</option>
+                  <option value="active">Активен</option>
+                  <option value="finished">Завершён</option>
+                </select>
+              </div>
+              <div class="col-md-2 text-end">
+                <button id="btn-copy-draw" class="btn btn-outline-secondary">Копировать розыгрыш</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Добавить этап -->
+          <div class="px-3 mb-3">
+            <button id="btn-add-stage" class="btn btn-outline-primary">Добавить этап</button>
+          </div>
+
+          <!-- Вкладки -->
+          <ul class="nav nav-tabs px-3" id="drawStagesTabs" role="tablist"></ul>
+          <div class="tab-content flex-grow-1 overflow-auto px-3 border border-top-0" id="drawStagesTabsContent"></div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Закрыть</button>
+          <button id="btn-save-draw" type="button" class="btn btn-primary">Сохранить изменения</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Шаблон этапа -->
+  <template id="tpl-stage-content">
+    <div class="tab-pane fade p-3" role="tabpanel">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h6 class="mb-0">Этап: <span class="stage-title-text"></span></h6>
+        <div class="btn-group">
+          <button class="btn btn-sm btn-outline-secondary btn-rename-stage"><i class="bi bi-pencil"></i> Переименовать</button>
+          <button class="btn btn-sm btn-outline-danger btn-delete-stage"><i class="bi bi-trash"></i> Удалить этап</button>
+        </div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Описание этапа</label>
+        <textarea class="form-control stage-text" rows="3"></textarea>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Количество победителей</label>
+        <input type="number" class="form-control stage-winners-count" min="1" value="1" />
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Текст до списка победителей</label>
+        <textarea class="form-control stage-text-before" rows="2"></textarea>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Текст после списка победителей</label>
+        <textarea class="form-control stage-text-after" rows="2"></textarea>
+      </div>
+      <div class="mb-3 d-flex gap-2">
+        <button class="btn btn-sm btn-outline-secondary btn-export-winners"><i class="bi bi-download"></i> Экспорт списка победителей</button>
+        <button class="btn btn-sm btn-outline-info btn-test-send"><i class="bi bi-envelope"></i> Тестовая рассылка</button>
+        <button class="btn btn-sm btn-success btn-send"><i class="bi bi-send"></i> Рассылка</button>
+        <button class="btn btn-sm btn-primary btn-determine-winner"><i class="bi bi-trophy"></i> Определить победителя</button>
+      </div>
+      <div>
+        <h6>Список победителей</h6>
+        <ul class="list-group winners-list mb-3"></ul>
+      </div>
+    </div>
+  </template>
+
+  <!-- JS -->
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const drawsData = {{ draws_data | default([]) | tojson }};
+      const drawsTableBody = document.getElementById("draws-table-body");
+      let currentDraw = null, stageCount = 0;
+
+      function renderDrawRow(draw) {
+        const tr = document.createElement("tr");
+        tr.dataset.drawId = draw.id;
+        tr.innerHTML = `
+          <td>${draw.title}</td>
+          <td>${new Date(draw.start).toLocaleDateString("ru-RU")}</td>
+          <td>${new Date(draw.end).toLocaleDateString("ru-RU")}</td>
+          <td><span class="badge ${
+            draw.status==="active"?"bg-success":draw.status==="upcoming"?"bg-warning":"bg-secondary"
+          }">${
+            draw.status==="active"?"Активен":draw.status==="upcoming"?"Ожидается":"Завершён"
+          }</span></td>`;
+        tr.addEventListener("click", () => openDrawModal(draw.id));
+        drawsTableBody.appendChild(tr);
+      }
+
+      drawsData.forEach(renderDrawRow);
+      const modalEl = document.getElementById("modal-draw-edit");
+      const bsModal = new bootstrap.Modal(modalEl);
+
+      function openDrawModal(id) {
+        currentDraw = drawsData.find(d=>d.id===id);
+        if(!currentDraw) return;
+        // заполняем поля
+        document.getElementById("edit-draw-title").value = currentDraw.title;
+        document.getElementById("edit-draw-start").value = currentDraw.start;
+        document.getElementById("edit-draw-end").value = currentDraw.end;
+        document.getElementById("main-draw-status").value = currentDraw.status;
+        // чистим старые вкладки
+        document.getElementById("drawStagesTabs").innerHTML = "";
+        document.getElementById("drawStagesTabsContent").innerHTML = "";
+        stageCount = 0;
+        currentDraw.stages.forEach(createStageTab);
+        bsModal.show();
+      }
+
+      function createStageTab(stageData) {
+        stageCount++;
+        const stageId = stageData.__id || `stage-${stageCount}`;
+        stageData.__id = stageId;
+
+        // таб
+        const li = document.createElement("li");
+        li.className = "nav-item"; li.role="presentation";
+        li.innerHTML = `<button class="nav-link" id="${stageId}-tab" data-bs-toggle="tab" data-bs-target="#${stageId}-content" type="button" role="tab" aria-controls="${stageId}-content">${stageData.name}</button>`;
+        document.getElementById("drawStagesTabs").append(li);
+
+        // контент
+        const pane = document.getElementById("tpl-stage-content").content.cloneNode(true).children[0];
+        pane.id = `${stageId}-content`;
+        pane.setAttribute("aria-labelledby", `${stageId}-tab`);
+        pane.querySelector(".stage-title-text").textContent = stageData.name;
+        pane.querySelector(".stage-text").value = stageData.description||"";
+        pane.querySelector(".stage-winners-count").value = stageData.winnersCount||1;
+        pane.querySelector(".stage-text-before").value = stageData.textBefore||"";
+        pane.querySelector(".stage-text-after").value = stageData.textAfter||"";
+        const winnersListEl = pane.querySelector(".winners-list");
+        winnersListEl.innerHTML = "";
+        (stageData.winners||[]).forEach(w=>{
+          const liw = document.createElement("li");
+          liw.className="list-group-item"; liw.style.cursor="pointer"; liw.textContent=w;
+          liw.onclick = ()=>alert(`Нажатие на победителя: ${w}`);
+          winnersListEl.append(liw);
+        });
+
+        // кнопки внутри вкладки
+        pane.querySelector(".btn-rename-stage").onclick = ()=>{
+          const newName = prompt("Новое имя этапа:", stageData.name);
+          if(newName){
+            stageData.name=newName;
+            li.querySelector("button").textContent=newName;
+            pane.querySelector(".stage-title-text").textContent=newName;
+          }
+        };
+        pane.querySelector(".btn-delete-stage").onclick = ()=>{
+          if(confirm(`Удалить этап «${stageData.name}»?`)) {
+            document.querySelector(`#${stageId}-tab`).closest("li.nav-item").remove();
+            document.getElementById(`${stageId}-content`).remove();
+            const idx = currentDraw.stages.indexOf(stageData);
+            if(idx!==-1) currentDraw.stages.splice(idx,1);
+          }
+        };
+        pane.querySelector(".btn-export-winners").onclick = ()=>alert("Экспорт (заглушка)");
+        pane.querySelector(".btn-test-send").onclick = ()=>alert("Тестовая рассылка");
+        pane.querySelector(".btn-send").onclick = ()=>{
+          if(confirm("Отправить рассылку?")) alert("Рассылка отправлена");
+        };
+        pane.querySelector(".btn-determine-winner").onclick = ()=>{
+          if(stageData.winners && stageData.winners.length && !confirm("Перевыбрать?")) return;
+          const cnt = +pane.querySelector(".stage-winners-count").value || 1;
+          stageData.winners = [];
+          for(let i=1;i<=cnt;i++) stageData.winners.push(`Победитель ${i}`);
+          winnersListEl.innerHTML="";
+          stageData.winners.forEach(w=>{
+            const liw = document.createElement("li");
+            liw.className="list-group-item"; liw.style.cursor="pointer"; liw.textContent=w;
+            winnersListEl.append(liw);
+          });
+        };
+
+        document.getElementById("drawStagesTabsContent").append(pane);
+        new bootstrap.Tab(li.querySelector("button")).show();
+      }
+
+      // кнопка «Добавить этап»
+      document.getElementById("btn-add-stage").onclick = () => {
+        if (!currentDraw) return;
+        const name = prompt("Название этапа:");
+        if (!name) return;
+        const newStage = {
+          __id: `stage-${++stageCount}`,
+          name, description: "", winnersCount: 1,
+          textBefore: "", textAfter: "", winners: []
+        };
+        currentDraw.stages.push(newStage);
+        createStageTab(newStage);
+      };
+
+      // кнопка «Новый розыгрыш»
+      document.getElementById("btn-new-draw").onclick = () => {
+        document.getElementById("edit-draw-title").value = "";
+        document.getElementById("edit-draw-start").value = "";
+        document.getElementById("edit-draw-end").value = "";
+        document.getElementById("main-draw-status").value = "upcoming";
+        document.getElementById("drawStagesTabs").innerHTML = "";
+        document.getElementById("drawStagesTabsContent").innerHTML = "";
+        stageCount = 0;
+        currentDraw = { id: null, title: "", start: "", end: "", status: "upcoming", stages: [] };
+        bsModal.show();
+      };
+
+      // === НОВЫЙ КОПИРОВАНИЕ ===
+      document.getElementById("btn-copy-draw").onclick = async () => {
+        if (!currentDraw) return;
+        // 1) делаем глубокий клон без id
+        const clone = JSON.parse(JSON.stringify(currentDraw));
+        clone.id = null; // чтобы backend вставил новый
+        // 2) добавляем « (копия)» в название
+        clone.title = currentDraw.title + " (копия)";
+        // 3) отправляем сразу на сервер
+        const resp = await fetch("/prize-draws", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(clone)
+        });
+        if (!resp.ok) {
+          alert("Не удалось создать копию");
+          return;
+        }
+        const body = await resp.json();
+        // 4) получаем реальный id и пушим в drawsData
+        clone.id = body.id;
+        drawsData.push(clone);
+        // 5) перерисовываем таблицу и открываем модал для правок
+        drawsTableBody.innerHTML = "";
+        drawsData.forEach(renderDrawRow);
+        openDrawModal(clone.id);
+      };
+
+      // кнопка «Сохранить изменения»
+      document.getElementById("btn-save-draw").onclick = async () => {
+        // складываем все поля обратно в currentDraw
+        currentDraw.title = document.getElementById("edit-draw-title").value;
+        currentDraw.start = document.getElementById("edit-draw-start").value;
+        currentDraw.end = document.getElementById("edit-draw-end").value;
+        currentDraw.status = document.getElementById("main-draw-status").value;
+        currentDraw.stages.forEach(sd => {
+          const pane = document.getElementById(`${sd.__id}-content`);
+          sd.description = pane.querySelector(".stage-text").value;
+          sd.winnersCount = +pane.querySelector(".stage-winners-count").value || 1;
+          sd.textBefore = pane.querySelector(".stage-text-before").value;
+          sd.textAfter = pane.querySelector(".stage-text-after").value;
+        });
+
+        const res = await fetch("/prize-draws", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(currentDraw)
+        });
+        if (res.ok) {
+          location.reload();
+        } else {
+          alert("Ошибка сохранения");
+        }
+      };
+    });
+  </script>
+{% endblock %}

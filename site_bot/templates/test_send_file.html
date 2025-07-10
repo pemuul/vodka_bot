@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Photo Gallery</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+
+        #gallery {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .photo {
+            margin: 10px;
+            position: relative;
+        }
+
+        .photo img {
+            width: 200px;
+            height: auto;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+        }
+
+        .remove-btn {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background-color: red;
+            color: white;
+            border: none;
+            padding: 5px;
+            cursor: pointer;
+        }
+
+        #upload-form {
+            margin-top: 20px;
+        }
+
+        #submit-btn {
+            margin-top: 20px;
+            background-color: green;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h1>Photo Gallery</h1>
+    
+    <!-- Галерея фотографий -->
+    <div id="gallery"></div>
+
+    <!-- Кнопка для добавления изображений -->
+    <form id="upload-form" action="/upload_test" method="POST" enctype="multipart/form-data">
+        <input type="file" name="photos" accept="image/*" multiple>
+        <button type="submit">Add Images</button>
+    </form>
+
+    <!-- Кнопка отправить -->
+    <button id="submit-btn">Submit Changes</button>
+
+    <form id="delete-form" action="/delete" method="POST">
+        <input type="hidden" name="delete_images" id="delete-images">
+    </form>
+
+    <script>
+        let removedImages = [];
+
+        // Функция для отображения галереи изображений
+        function loadGallery(images) {
+            const gallery = document.getElementById('gallery');
+            gallery.innerHTML = '';  // Очищаем галерею
+            images.forEach(filename => {
+                const photoDiv = document.createElement('div');
+                photoDiv.className = 'photo';
+                photoDiv.setAttribute('data-filename', filename);
+
+                const img = document.createElement('img');
+                img.src = `/static/uploads/${filename}`;
+                img.alt = filename;
+
+                const removeBtn = document.createElement('button');
+                removeBtn.className = 'remove-btn';
+                removeBtn.textContent = 'Remove';
+                removeBtn.onclick = () => removeImage(filename);
+
+                photoDiv.appendChild(img);
+                photoDiv.appendChild(removeBtn);
+                gallery.appendChild(photoDiv);
+            });
+        }
+
+        // Удаление изображения с экрана
+        function removeImage(filename) {
+            const imageElement = document.querySelector(`[data-filename="${filename}"]`);
+            if (imageElement) {
+                imageElement.style.display = "none";
+                removedImages.push(filename);
+            }
+        }
+
+        // Отправка изменений
+        document.getElementById('submit-btn').onclick = function() {
+            const deleteInput = document.getElementById('delete-images');
+            deleteInput.value = JSON.stringify(removedImages);
+            document.getElementById('delete-form').submit();
+        };
+
+        // Загрузка галереи изображений при старте
+        window.onload = function() {
+            fetch('/images')
+                .then(response => response.json())
+                .then(data => loadGallery(data.images))
+                .catch(error => console.error('Error loading images:', error));
+        };
+    </script>
+</body>
+</html>

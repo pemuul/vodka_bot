@@ -1,0 +1,516 @@
+{% extends "base.html" %}
+{% block title %}Участники – rtd-bot{% endblock %}
+
+{% block content %}
+  <style>
+    .chat-bubble,
+    .chat-bubble * {
+      white-space: pre-wrap;
+    }
+    .history-btn-container {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      margin-top: 0.5rem;
+    }
+    .history-btn {
+      background-color: #e9ecef;
+      border: 1px solid #ced4da;
+      color: #495057;
+      padding: 0.25rem 0.5rem;
+      font-size: 0.875rem;
+      border-radius: 0.25rem;
+      text-align: left;
+      pointer-events: none;
+    }
+    /* общий fixed размер для медиа */
+    .chat-img,
+    .chat-gif,
+    .chat-sticker,
+    .chat-video,
+    .chat-video-note {
+      height: 200px;
+      object-fit: contain;
+      cursor: pointer;
+      margin-bottom: 0.5rem;
+      background: #f8f9fa; /* чтобы было где-то видно контейнер */
+    }
+    .chat-audio {
+      width: 100%;
+      max-width: 300px;
+      margin-bottom: 0.5rem;
+    }
+    .chat-voice {
+      width: 100%;
+      max-width: 900px; /* втрое шире */
+      margin-bottom: 0.5rem;
+    }
+    /* модалка для увеличения */
+    .img-modal {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0,0,0,0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2000;
+    }
+    .img-modal img,
+    .img-modal video {
+      max-width: 90%;
+      max-height: 90%;
+    }
+  </style>
+  <!-- Контейнер списка участников -->
+  <div id="participants-list" class="h-100 d-flex flex-column">
+    <!-- Хлебные крошки и заголовок -->
+    <nav aria-label="breadcrumb" class="px-3 pt-3">
+      <ol class="breadcrumb mb-2">
+        <li class="breadcrumb-item">
+          <a href="/participants" class="text-decoration-none text-secondary">
+            Участники
+          </a>
+        </li>
+        <li class="breadcrumb-item active" aria-current="page">Список</li>
+      </ol>
+    </nav>
+
+    <div class="d-flex justify-content-between align-items-center mb-3 px-3">
+      <h1 class="h3 mb-0">Участники</h1>
+      <button id="export-participants-btn" class="btn btn-primary">
+        Выгрузка
+      </button>
+    </div>
+
+    <!-- Поле поиска -->
+    <div class="px-3 mb-2">
+      <div class="input-group w-50">
+        <span class="input-group-text"><i class="bi bi-search"></i></span>
+        <input
+          type="text"
+          id="search-input"
+          class="form-control"
+          placeholder="Поиск по пользователям..."
+        />
+      </div>
+    </div>
+
+    <!-- Карточка с таблицей участников -->
+    <div class="card mx-3 mb-3 shadow-sm flex-grow-1">
+      <div class="card-body p-0">
+        <div class="table-responsive" style="max-height: calc(100vh - 310px);">
+          <table class="table table-hover mb-0" id="participants-table">
+            <thead class="table-light sticky-top">
+              <tr>
+                <th scope="col">#</th>
+                <th scope="col">ID</th>
+                <th scope="col">Пользователь</th>
+                <th scope="col">Номер телефона</th>
+                <th scope="col">Telegram ID</th>
+                <th scope="col">Создано</th>
+              </tr>
+            </thead>
+            <tbody>
+              <!-- JS заполнит строки -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Нижняя часть карточки: статистика, выбор «на страницу» и пагинация -->
+      <div class="card-footer d-flex justify-content-between align-items-center">
+        <div class="text-muted">
+          Показано с <span id="page-start">0</span> по <span id="page-end">0</span> из <span id="page-total">0</span>
+        </div>
+        <div class="d-flex align-items-center">
+          <label for="records-per-page" class="me-2 mb-0">на страницу:</label>
+          <select id="records-per-page" class="form-select form-select-sm">
+            <option value="5">5</option>
+            <option value="10" selected>10</option>
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="all">Все</option>
+          </select>
+        </div>
+        <nav aria-label="Пагинация">
+          <ul class="pagination mb-0" id="pagination-ul"></ul>
+        </nav>
+      </div>
+    </div>
+  </div>
+
+  <!-- Контейнер просмотра профиля участника и чата -->
+  <div id="participant-view" class="d-none d-flex flex-column h-100">
+    <div class="d-flex px-3 py-2 border-bottom align-items-center">
+      <button id="back-to-participants" class="btn btn-link p-0 me-3">← К списку</button>
+      <div class="row g-2 align-items-center flex-grow-1">
+        <div class="col-auto">
+          <label for="part-name-field" class="col-form-label">Имя:</label>
+        </div>
+        <div class="col-auto">
+          <input type="text" id="part-name-field" class="form-control form-control-sm" required />
+        </div>
+        <div class="col-auto">
+          <label for="part-phone-field" class="col-form-label">Телефон:</label>
+        </div>
+        <div class="col-auto">
+          <input type="text" id="part-phone-field" class="form-control form-control-sm" required />
+        </div>
+      </div>
+      <div class="d-flex align-items-center ms-3">
+        <div class="form-check form-check-inline me-3 mb-0">
+          <input class="form-check-input" type="checkbox" id="blocked-checkbox" />
+          <label class="form-check-label" for="blocked-checkbox">Заблокирован</label>
+        </div>
+        <div class="form-check form-check-inline me-4 mb-0">
+          <input class="form-check-input" type="checkbox" id="tester-checkbox" />
+          <label class="form-check-label" for="tester-checkbox">Тестировщик</label>
+        </div>
+        <button id="save-participant-btn" class="btn btn-success btn-sm">Сохранить</button>
+      </div>
+    </div>
+
+    <div class="px-3 py-2 border-bottom">
+      <h5 id="part-username-display" class="mb-0">Имя пользователя</h5>
+      <small id="part-userid" class="text-muted">ID: 0</small>
+    </div>
+
+    <div id="participant-chat-window" class="flex-grow-1 overflow-auto px-3 py-3" style="background-color: #f1f3f5;"></div>
+
+    <div class="px-3 py-2 border-top">
+      <div class="d-flex">
+        <textarea id="participant-message-input" class="form-control me-2" rows="2" placeholder="Ваше сообщение..."></textarea>
+        <button id="participant-send-btn" class="btn btn-primary">Отправить</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="position-fixed top-0 end-0 p-3" style="z-index: 1100;">
+    <div id="saveToast" class="toast align-items-center text-bg-success border-0" role="alert" aria-live="assertive" aria-atomic="true">
+      <div class="d-flex">
+        <div class="toast-body">
+          Изменения успешно сохранены!
+        </div>
+        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      // формат даты/времени
+      function fmtDateTime(s) {
+        const d = new Date(s);
+        return d.toLocaleString("ru-RU", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit"
+        });
+      }
+
+      // DOM-элементы
+      const participants         = {{ participants_data | tojson }};
+      const listContainer        = document.getElementById("participants-list");
+      const detailContainer      = document.getElementById("participant-view");
+      const tableBody            = document.querySelector("#participants-table tbody");
+      const backBtn              = document.getElementById("back-to-participants");
+      const exportBtn            = document.getElementById("export-participants-btn");
+      const searchInput          = document.getElementById("search-input");
+      const recordsPerPageSelect = document.getElementById("records-per-page");
+      const pageStartElem        = document.getElementById("page-start");
+      const pageEndElem          = document.getElementById("page-end");
+      const pageTotalElem        = document.getElementById("page-total");
+      const chatWindow           = document.getElementById("participant-chat-window");
+      const messageInput         = document.getElementById("participant-message-input");
+      const sendBtn              = document.getElementById("participant-send-btn");
+      const userNameDisplay      = document.getElementById("part-username-display");
+      const userIdElem           = document.getElementById("part-userid");
+      const blockedCheckbox      = document.getElementById("blocked-checkbox");
+      const testerCheckbox       = document.getElementById("tester-checkbox");
+      const saveBtn              = document.getElementById("save-participant-btn");
+      const nameField            = document.getElementById("part-name-field");
+      const phoneField           = document.getElementById("part-phone-field");
+
+      // состояние
+      let filtered        = [...participants];
+      let currentPage     = 1;
+      let currentUserId   = null;
+      let lastMessagesJson = "";
+      let pollIntervalId  = null;
+
+      // пагинация
+      function getPaginated() {
+        const per = recordsPerPageSelect.value === "all"
+          ? filtered.length
+          : +recordsPerPageSelect.value;
+        return per === filtered.length
+          ? filtered
+          : filtered.slice((currentPage - 1) * per, (currentPage - 1) * per + per);
+      }
+      function updatePagination() {
+        const per   = recordsPerPageSelect.value === "all"
+                    ? filtered.length
+                    : +recordsPerPageSelect.value;
+        const total = filtered.length;
+        pageStartElem.textContent = total ? ((currentPage - 1) * per + 1) : 0;
+        pageEndElem.textContent   = per ? Math.min(currentPage * per, total) : total;
+        pageTotalElem.textContent = total;
+      }
+
+      // список участников
+      function renderList() {
+        tableBody.innerHTML = "";
+        const rows = getPaginated();
+        const per  = recordsPerPageSelect.value === "all"
+                    ? rows.length
+                    : +recordsPerPageSelect.value;
+        rows.forEach((p, i) => {
+          const tr = document.createElement("tr");
+          tr.style.cursor = "pointer";
+          tr.onclick = () => openParticipant(p);
+          [
+            (currentPage - 1) * per + i + 1,
+            p.id,
+            p.name,
+            p.phone,
+            p.telegramId,
+            fmtDateTime(p.createdAt)
+          ].forEach(txt => {
+            const td = document.createElement("td");
+            td.textContent = txt;
+            tr.append(td);
+          });
+          tableBody.append(tr);
+        });
+        updatePagination();
+      }
+
+      // фильтр и события
+      searchInput.oninput = () => {
+        const q = searchInput.value.trim().toLowerCase();
+        filtered = participants.filter(p =>
+          p.name.toLowerCase().includes(q) ||
+          p.phone.includes(q) ||
+          String(p.telegramId).includes(q) ||
+          String(p.id).includes(q)
+        );
+        currentPage = 1;
+        renderList();
+      };
+      recordsPerPageSelect.onchange = () => {
+        currentPage = 1;
+        renderList();
+      };
+      saveBtn.onclick = async () => {
+        const id = +userIdElem.textContent.replace("ID: ", "");
+        const payload = {
+          name:    nameField.value,
+          phone:   phoneField.value,
+          blocked: blockedCheckbox.checked,
+          tester:  testerCheckbox.checked
+        };
+        const res = await fetch(`/participants/${id}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          Object.assign(participants.find(x => x.id === id), payload);
+          renderList();
+          new bootstrap.Toast(document.getElementById("saveToast")).show();
+        } else {
+          alert("Ошибка сохранения");
+        }
+      };
+      exportBtn.onclick = () => alert("Выгрузка участников");
+
+      // возвращаемся к списку
+      backBtn.onclick = () => {
+        detailContainer.classList.add("d-none");
+        listContainer.classList.remove("d-none");
+        clearInterval(pollIntervalId);
+        currentUserId = null;
+      };
+
+      // рендер чата
+      function renderChat(messages) {
+        chatWindow.innerHTML = "";
+        messages.forEach(msg => {
+          const wrapper = document.createElement("div");
+          wrapper.className = "d-flex mb-3" + (msg.sender === "admin" ? " justify-content-end" : "");
+          const bubble = document.createElement("div");
+          bubble.classList.add("chat-bubble");
+          bubble.style.maxWidth = "75%";
+
+          if (msg.is_deleted) {
+            bubble.classList.add("text-muted", "fst-italic");
+            bubble.textContent = "Сообщение удалено";
+          } else if (msg.sender === "user" && msg.buttons?.length) {
+            bubble.classList.add("bg-light", "border", "rounded", "p-2");
+            bubble.innerHTML = `
+              <span>Нажал кнопку </span>
+              <span class="badge bg-secondary">${msg.buttons[0].text || msg.buttons[0].callback_data}</span>
+              <small class="text-muted d-block mt-1">${fmtDateTime(msg.timestamp)}</small>
+            `;
+          } else {
+            const isUser = msg.sender === "user";
+            bubble.classList.add(
+              isUser ? "bg-white" : "bg-primary",
+              isUser ? "border" : "text-white",
+              "rounded", "p-2"
+            );
+            if (!isUser) bubble.classList.add("text-white");
+
+            const textEl = document.createElement("div");
+            textEl.className = "mb-1";
+            textEl.textContent = msg.text;
+            bubble.append(textEl);
+
+            if (!isUser && msg.buttons?.length) {
+              const c = document.createElement("div");
+              c.className = "history-btn-container";
+              msg.buttons.forEach(b => {
+                const d = document.createElement("div");
+                d.className = "history-btn";
+                d.textContent = b.text;
+                c.append(d);
+              });
+              bubble.append(c);
+            }
+
+            const ctrl = document.createElement("div");
+            ctrl.className = "d-flex align-items-center mt-1";
+            const tm = document.createElement("small");
+            tm.className = isUser ? "text-muted" : "text-light";
+            tm.textContent = fmtDateTime(msg.timestamp);
+            ctrl.append(tm);
+            bubble.append(ctrl);
+          }
+
+          if (msg.media?.length) {
+            const mcont = document.createElement("div");
+            mcont.className = "d-flex flex-column mt-2";
+            msg.media.forEach(m => {
+              let el, src = `/api/file/${m.file_id}`;
+              switch (m.type) {
+                case "photo":
+                  el = document.createElement("img");
+                  el.src = src;
+                  el.className = "chat-img";
+                  el.onclick = () => { /* modal */ };
+                  break;
+                case "animation":
+                  el = document.createElement("img");
+                  el.src = src;
+                  el.className = "chat-gif";
+                  break;
+                case "sticker":
+                  el = document.createElement("img");
+                  el.src = src;
+                  el.className = "chat-sticker";
+                  break;
+                case "video":
+                  el = document.createElement("video");
+                  el.src = src;
+                  el.controls = true;
+                  el.className = "chat-video";
+                  break;
+                case "video_note":
+                  el = document.createElement("video");
+                  el.src = src;
+                  el.controls = true;
+                  el.className = "chat-video-note";
+                  break;
+                case "audio":
+                  el = document.createElement("audio");
+                  el.src = src;
+                  el.controls = true;
+                  el.className = "chat-audio";
+                  break;
+                case "voice":
+                  el = document.createElement("audio");
+                  el.src = src;
+                  el.controls = true;
+                  el.className = "chat-voice";
+                  break;
+                default:
+                  el = document.createElement("a");
+                  el.href = src;
+                  el.target = "_blank";
+                  el.textContent = m.file_name || "Файл";
+                  el.className = "d-block mb-2";
+              }
+              mcont.append(el);
+            });
+            bubble.append(mcont);
+          }
+
+          wrapper.append(bubble);
+          chatWindow.append(wrapper);
+        });
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+      }
+
+      // открытие чата и запуск опроса
+      async function openParticipant(p) {
+        listContainer.classList.add("d-none");
+        detailContainer.classList.remove("d-none");
+        userNameDisplay.textContent = p.name;
+        userIdElem.textContent      = `ID: ${p.id}`;
+        nameField.value             = p.name;
+        phoneField.value            = p.phone;
+        blockedCheckbox.checked     = p.blocked;
+        testerCheckbox.checked      = p.tester;
+        messageInput.value          = "";
+        currentUserId               = p.id;
+
+        // первый рендер
+        const resp = await fetch(`/api/participants/${p.id}/messages`);
+        if (!resp.ok) {
+          chatWindow.textContent = "Ошибка загрузки переписки";
+          return;
+        }
+        const { messages } = await resp.json();
+        lastMessagesJson = JSON.stringify(messages);
+        renderChat(messages);
+
+        // polling каждую секунду
+        clearInterval(pollIntervalId);
+        pollIntervalId = setInterval(async () => {
+          const r = await fetch(`/api/participants/${p.id}/messages`);
+          if (!r.ok) return;
+          const { messages: msgs } = await r.json();
+          const j = JSON.stringify(msgs);
+          if (j !== lastMessagesJson) {
+            lastMessagesJson = j;
+            renderChat(msgs);
+          }
+        }, 1000);
+      }
+
+      // отправка сообщения
+      sendBtn.onclick = async () => {
+        const text   = messageInput.value.trim();
+        if (!text) return;
+        const userId = +userIdElem.textContent.replace("ID: ", "");
+        const res    = await fetch(`/api/participants/${userId}/messages`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text })
+        });
+        if (!res.ok) {
+          alert("Ошибка отправки: " + await res.text());
+          return;
+        }
+        messageInput.value = "";
+        // обновление при следующем poll
+      };
+
+      // запуск
+      renderList();
+    });
+  </script>
+{% endblock %}

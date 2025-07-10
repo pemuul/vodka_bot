@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}Рассылки – rtd-bot{% endblock %}
+
+{% block content %}
+  <div id="messages-list" class="h-100 overflow-auto">
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb mb-2">
+        <li class="breadcrumb-item">
+          <a href="/scheduled-messages" class="text-secondary text-decoration-none">
+            Рассылки
+          </a>
+        </li>
+        <li class="breadcrumb-item active" aria-current="page">Список</li>
+      </ol>
+    </nav>
+    <div class="d-flex justify-content-between align-items-center mb-4">
+      <h1 class="h3">Рассылки</h1>
+      <button id="create-message-btn" class="btn btn-primary">Создать рассылку</button>
+    </div>
+    <div class="card mb-4">
+      <div class="card-body">
+        <table class="table table-hover" id="messages-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Название рассылки</th>
+              <th>Время отправки</th>
+              <th>Статус</th>
+              <th>Действия</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="message-form-view" class="d-none d-flex flex-column h-100">
+    <div class="px-3 pt-2 mb-3">
+      <button id="back-to-messages" class="btn btn-link p-0">← Вернуться к списку рассылок</button>
+    </div>
+    <div class="px-3 mb-4"><h2 id="form-title">Новая рассылка</h2></div>
+    <div class="flex-grow-1 overflow-auto px-3">
+      <div class="card">
+        <div class="card-body">
+          <form id="message-form">
+            <input type="hidden" id="message-id" />
+            <div class="mb-3">
+              <label for="message-name" class="form-label">Название рассылки</label>
+              <input type="text" id="message-name" class="form-control" required />
+            </div>
+            <div class="mb-3">
+              <label for="message-content" class="form-label">Текст рассылки</label>
+              <textarea id="message-content" class="form-control" rows="5" required></textarea>
+            </div>
+            <div class="mb-3">
+              <label for="message-schedule" class="form-label">Время отправки</label>
+              <input type="datetime-local" id="message-schedule" class="form-control" required />
+            </div>
+            <div class="mb-3 d-none" id="status-group">
+              <label for="message-status" class="form-label">Статус</label>
+              <select id="message-status" class="form-select">
+                <option value="Новый">Новый</option>
+                <option value="Ожидает отправки">Ожидает отправки</option>
+                <option value="Отправлено">Отправлено</option>
+              </select>
+            </div>
+            <div class="d-flex justify-content-end">
+              <button type="submit" class="btn btn-primary me-2" id="save-message">Сохранить</button>
+              <button type="button" class="btn btn-secondary" id="cancel-message">Отмена</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      // данные из бэка
+      let messages = {{ scheduled_data | default([]) | tojson }};
+      const listContainer = document.getElementById("messages-list");
+      const formContainer = document.getElementById("message-form-view");
+      const tableBody = document.querySelector("#messages-table tbody");
+      const createBtn = document.getElementById("create-message-btn");
+      const backBtn = document.getElementById("back-to-messages");
+      const cancelBtn = document.getElementById("cancel-message");
+      const form = document.getElementById("message-form");
+      const formTitle = document.getElementById("form-title");
+      const idInput = document.getElementById("message-id");
+      const nameInput = document.getElementById("message-name");
+      const contentInput = document.getElementById("message-content");
+      const scheduleInput = document.getElementById("message-schedule");
+      const statusGroup = document.getElementById("status-group");
+      const statusInput = document.getElementById("message-status");
+
+      function renderMessages() {
+        tableBody.innerHTML = "";
+        messages.forEach((msg, i) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${i+1}</td>
+            <td>${msg.name}</td>
+            <td>${new Date(msg.schedule).toLocaleString("ru-RU", {
+              year:"numeric",month:"2-digit",day:"2-digit",
+              hour:"2-digit",minute:"2-digit"
+            }).replace(",", "")}</td>
+            <td>
+              <span class="badge ${
+                msg.status==="Новый"?"bg-primary":
+                msg.status==="Ожидает отправки"?"bg-warning":"bg-success"
+              }">${msg.status}</span>
+            </td>
+            <td>
+              <button class="btn btn-sm btn-outline-secondary me-1" data-action="edit" data-id="${msg.id}">Редактировать</button>
+              <button class="btn btn-sm btn-outline-info me-1" data-action="copy" data-id="${msg.id}">Сделать копию</button>
+              <button class="btn btn-sm btn-outline-danger" data-action="delete" data-id="${msg.id}">Удалить</button>
+            </td>`;
+          tableBody.appendChild(tr);
+        });
+      }
+
+      function openForm(mode, id=null) {
+        listContainer.classList.add("d-none");
+        formContainer.classList.remove("d-none");
+        form.reset();
+        statusGroup.classList.add("d-none");
+        idInput.value = "";
+        if (mode==="create") {
+          formTitle.textContent = "Новая рассылка";
+        } else {
+          const msg = messages.find(m=>m.id===id);
+          if (!msg) return;
+          if (mode==="edit") {
+            formTitle.textContent = "Редактировать рассылку";
+            idInput.value = msg.id;
+            nameInput.value = msg.name;
+            contentInput.value = msg.content;
+            scheduleInput.value = msg.schedule;
+            statusGroup.classList.remove("d-none");
+            statusInput.value = msg.status;
+          } else if (mode==="copy") {
+            formTitle.textContent = "Копия рассылки";
+            nameInput.value = msg.name + " (копия)";
+            contentInput.value = msg.content;
+            scheduleInput.value = msg.schedule;
+            statusGroup.classList.add("d-none");
+          }
+        }
+      }
+
+      function closeForm() {
+        formContainer.classList.add("d-none");
+        listContainer.classList.remove("d-none");
+      }
+
+      tableBody.addEventListener("click", async e => {
+        const btn = e.target.closest("button");
+        if (!btn) return;
+        const id = parseInt(btn.dataset.id);
+        const action = btn.dataset.action;
+        if (action==="edit"||action==="copy") {
+          openForm(action, id);
+        } else if (action==="delete") {
+          if (!confirm("Удалить рассылку?")) return;
+          const res = await fetch(`/scheduled-messages/${id}`, { method:"DELETE" });
+          if (res.ok) location.reload();
+          else alert("Ошибка при удалении");
+        }
+      });
+
+      form.addEventListener("submit", async e => {
+        e.preventDefault();
+        const payload = {
+          id: idInput.value ? parseInt(idInput.value) : null,
+          name: nameInput.value.trim(),
+          content: contentInput.value.trim(),
+          schedule: new Date(scheduleInput.value),
+          status: statusInput.value
+        };
+        const res = await fetch("/scheduled-messages", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          location.reload();
+        } else {
+          alert("Ошибка при сохранении");
+        }
+      });
+
+      createBtn.addEventListener("click", ()=>openForm("create"));
+      backBtn.addEventListener("click", closeForm);
+      cancelBtn.addEventListener("click", closeForm);
+
+      renderMessages();
+    });
+  </script>
+{% endblock %}

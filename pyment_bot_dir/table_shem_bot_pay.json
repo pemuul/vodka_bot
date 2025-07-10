@@ -1,0 +1,5 @@
+{
+    "payment_invite": "payment_invite (random_key TEXT DEFAULT (lower(hex(randomblob(10)))) PRIMARY KEY, data_json TEXT, create_dt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+    "pyment_log": "pyment_log (id INTEGER PRIMARY KEY AUTOINCREMENT, data_json TEXT, create_dt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+    "payment_need_pay": "payment_need_pay (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT, data_json TEXT, create_dt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+}

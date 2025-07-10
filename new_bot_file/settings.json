@@ -1,0 +1,41 @@
+{
+    "TELEGRAM_BOT_TOKEN": "",
+    "VERSION_BOT": "v_2",
+    "commands": {
+    },
+    "bot_settings": {
+        "restart": {
+            "hour": 10,
+            "minet": 0
+        }
+    },
+    "site": {
+        "site_on": true,
+        "input_order_fields": [
+        ],
+        "API_order_status": {
+            "create_order": {
+                "API": "",
+                "header": ""
+            },
+            "pyment_order": {
+                "API": "",
+                "header": ""
+            },
+            "sucess_pyment": {
+                "API": "",
+                "header": ""
+            }
+        },
+        "settings": {
+            "PAYMENTS_TOKEN": "",
+            "min_amount": "60"
+        }
+    },
+    "pyment_settings": {
+        "описание": "это всё данные только для оплаты и работы с кошельком",
+        "pyment_limit_per_mounth": 50000,
+        "monthly_payment": 1000,
+        "procent_pyment_limit": 1
+    }
+}

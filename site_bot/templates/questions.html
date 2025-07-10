@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}Вопросы – rtd-bot{% endblock %}
+
+{% block content %}
+  <div id="questions-list" class="h-100 overflow-auto">
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb mb-2">
+        <li class="breadcrumb-item">
+          <a href="/questions" class="text-secondary text-decoration-none">Вопросы</a>
+        </li>
+        <li class="breadcrumb-item active" aria-current="page">Список</li>
+      </ol>
+    </nav>
+    <div class="d-flex justify-content-between align-items-center mb-4">
+      <h1 class="h3">Вопросы</h1>
+      <button id="refresh-questions" class="btn btn-outline-primary">Обновить</button>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <table class="table table-hover" id="questions-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Текст вопроса</th>
+              <th>Тип</th>
+              <th>Статус</th>
+              <th>Действия</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="conversation-view" class="d-none d-flex flex-column h-100">
+    <div class="px-3 pt-2">
+      <button id="back-to-list" class="btn btn-link p-0 mb-2">← Вернуться к списку вопросов</button>
+      <div class="d-flex align-items-center mb-3">
+        <div class="me-3"><i class="bi bi-person-circle fs-2"></i></div>
+        <div>
+          <h5 id="conv-username" class="mb-0"></h5>
+          <small id="conv-userid" class="text-muted"></small>
+        </div>
+      </div>
+    </div>
+
+    <div id="chat-window"
+         class="flex-grow-1 mx-3 mb-2 p-3 border rounded overflow-auto"
+         style="background-color: #f8f9fa;">
+    </div>
+
+    <div class="px-3 mb-2">
+      <h6 class="mb-1">Вопрос пользователя:</h6>
+      <div class="border rounded p-3 bg-white" id="original-question"></div>
+    </div>
+
+    <div class="px-3 pb-3 mb-2">
+      <div class="d-flex">
+        <textarea id="answer-input" class="form-control me-2" rows="2" placeholder="Ваш ответ..."></textarea>
+        <button id="send-answer" class="btn btn-primary">Отправить</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // данные из бэка
+    const questionsData = {{ questions_data | default([]) | tojson }};
+    const messagesData = {{ messages_data | default({}) | tojson }};
+
+    document.addEventListener("DOMContentLoaded", () => {
+      const listContainer = document.getElementById("questions-list");
+      const convContainer = document.getElementById("conversation-view");
+      const tableBody    = document.querySelector("#questions-table tbody");
+      const refreshBtn   = document.getElementById("refresh-questions");
+      const backBtn      = document.getElementById("back-to-list");
+
+      function renderQuestions() {
+        tableBody.innerHTML = "";
+        questionsData.forEach((q, i) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${i+1}</td>
+            <td>${q.text.length>50 ? q.text.slice(0,47)+"…" : q.text}</td>
+            <td>${q.type}</td>
+            <td>
+              <span class="badge ${q.status==='Новый'?'bg-primary':'bg-success'}">
+                ${q.status}
+              </span>
+            </td>
+            <td>
+              <button class="btn btn-sm btn-outline-primary">Ответить</button>
+            </td>`;
+          tr.querySelector("button").onclick = () => openConversation(q);
+          tableBody.appendChild(tr);
+        });
+      }
+
+      function openConversation(question) {
+        listContainer.classList.add("d-none");
+        convContainer.classList.remove("d-none");
+
+        document.getElementById("conv-username").textContent = question.user.name;
+        document.getElementById("conv-userid").textContent   = `ID: ${question.user.id}`;
+        document.getElementById("original-question").textContent = question.text;
+
+        const chatWindow = document.getElementById("chat-window");
+        chatWindow.innerHTML = "";
+
+        const history = messagesData[question.id] || [];
+        history.forEach(msg => {
+          const div = document.createElement("div");
+          div.classList.add("mb-2","p-2","rounded");
+          div.style.maxWidth = "75%";
+          if (msg.sender === "user") {
+            div.classList.add("bg-white","text-dark","border");
+            div.style.alignSelf = "flex-start";
+          } else {
+            div.classList.add("bg-primary","text-white");
+            div.style.alignSelf = "flex-end";
+          }
+          div.innerHTML = `<p class="mb-1">${msg.text}</p>
+                           <small class="text-muted">${msg.timestamp}</small>`;
+          chatWindow.appendChild(div);
+        });
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+
+        document.getElementById("send-answer").onclick = () => {
+          const input = document.getElementById("answer-input");
+          const text = input.value.trim();
+          if (!text) return;
+          const now = new Date();
+          const ts = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ` +
+                     `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+          const newMsg = { sender: "admin", text, timestamp: ts };
+          history.push(newMsg);
+
+          const div = document.createElement("div");
+          div.classList.add("mb-2","p-2","rounded","bg-primary","text-white");
+          div.style.alignSelf = "flex-end"; div.style.maxWidth = "75%";
+          div.innerHTML = `<p class="mb-1">${text}</p><small class="text-muted">${ts}</small>`;
+          chatWindow.appendChild(div);
+          chatWindow.scrollTop = chatWindow.scrollHeight;
+          input.value = "";
+        };
+      }
+
+      backBtn.onclick = () => {
+        convContainer.classList.add("d-none");
+        listContainer.classList.remove("d-none");
+        document.getElementById("answer-input").value = "";
+        document.getElementById("chat-window").innerHTML = "";
+      };
+
+      refreshBtn.onclick = renderQuestions;
+
+      // старт
+      renderQuestions();
+    });
+  </script>
+{% endblock %}

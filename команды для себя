@@ -1,0 +1,57 @@
+scp -r information_telegram_bot server@95.163.243.196:/home/server/python_project/construct_bot/v_1 
+scp -r /Users/romanzhdanov/My_project/information_telegram_bot server@80.78.243.187:/home/server/tg_build_bot/v_1 
+
+scp server@95.163.243.196:/home/server/python_project/construct_bot/bots/my_info_bot/tree_data.json tree_data.json 
+
+scp server@95.163.243.196:/home/server/python_project/construct_bot/bots/olchon_info_bot/load_files/data_tree_58.json tree_data_58.json 
+
+
+FLASK_APP=run_site.py flask run --host=0.0.0.0 --port=8000
+
+ssh server@80.78.243.187
+
+
+убить процесс на порту
+sudo kill -9 $(sudo lsof -t -i:8000)
+
+
+sftpuser01
+cSj5TjzCy9-zfrVMf
+sftp sftpuser01@80.78.243.187
+
+sftpuser02
+Q11mkI_pb42GX9kr1r
+
+sftpuser01
+5V-TVF2IF6iLlrcxN
+sftp sftpuser01@80.78.243.187
+
+sftpuser
+l5n8_mUu_oaTszcxy
+sftp sftpuser@80.78.243.187
+
+
+/home/server/delete_user.sh: open for write: no such file or directory
+Ошибка:        	Передача файла потерпела неудачу
+
+
+
+newuser
+userpassword
+sftp newuser@80.78.243.187
+
+
+
+
+
+cp -r /home/server/tg_build_bot/information_telegram_bot /home/server/tg_build_bot/old/information_telegram_bot_$(date +"%Y-%m-%d_%H-%M-%S")
+
+
+[ $(find /home/server/tg_build_bot/old -maxdepth 1 -type d | wc -l) -gt 10 ] && find /home/server/tg_build_bot/old -maxdepth 1 -type d -exec stat --format '%Y %n' {} \; | sort | head -n 1 | cut -d' ' -f2 | xargs rm -rf
+
+
+тут настройки
+/etc/supervisor/conf.d
+
+
+./create_new_bot.sh constructor_test_pem_bot 

@@ -1,0 +1,144 @@
+server {
+        listen 80;
+        #listen [::]:80;
+        server_name designer-tg-bot.ru www.designer-tg-bot.ru;
+        underscores_in_headers on;
+        root /home/server/;
+
+
+        location /static {
+                alias /home/server /static;
+        }
+
+        location / {
+                proxy_pass http://localhost:8000;
+                include /etc/nginx/proxy_params;
+                proxy_redirect off;
+        }
+}
+server {
+        listen 80;
+        server_name 80.78.243.187;
+        return 301 http://designer-tg-bot.ru;
+}
+server {
+        listen 443 ssl http2;
+        #listen [::]:443 ssl;
+        server_name designer-tg-bot.ru www.designer-tg-bot.ru;
+        underscores_in_headers on;
+        root /home/server/;
+
+        ssl_protocols       TLSv1 TLSv1.1 TLSv1.2;
+        ssl_ciphers         HIGH:!aNULL:!MD5;
+
+        #ssl on;
+        ssl_certificate /home/ssl/designer-tg-bot.ru.crt; # managed by Certbot
+        ssl_certificate_key /home/ssl/designer-tg-bot.ru.key;
+
+        location /static {
+                alias /home/server/static;
+        }
+
+        location / {
+                proxy_pass http://localhost:8000;
+                include /etc/nginx/proxy_params;
+                proxy_redirect off;
+        }
+}
+
+
+
+
+-----BEGIN CERTIFICATE-----
+MIIHujCCBqKgAwIBAgIMFBqKVl69ep3ExEAPMA0GCSqGSIb3DQEBCwUAMFMxCzAJ
+BgNVBAYTAkJFMRkwFwYDVQQKExBHbG9iYWxTaWduIG52LXNhMSkwJwYDVQQDEyBH
+bG9iYWxTaWduIEdDQyBSMyBEViBUTFMgQ0EgMjAyMDAeFw0yNDAxMjkxMTMzNTda
+Fw0yNDA4MzAxMTMzNTdaMCExHzAdBgNVBAMTFnd3dy5kZXNpZ25lci10Zy1ib3Qu
+cnUwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQDUa8Axr9Z2Npl/7d1w
+oqCdxiP0DJWETW9I2KKfvdP0TgEDEDqfKv1WRJ6eDiOm2mo2qy2faETahPCq3WA0
+65o2kQe8s7vU1g70GPcLmrQdqWb4XKYj50PcquH9QHfFyj/4IQtvmGDVwV/Q66P3
+yrkN1JNHueq6eXtxpJRjhc/+hyvdkkmNy6X+A2HT1MWZreQa9dZB1xqlxNjv2ZHQ
+1LJwKgFPUPd1kXMhEB2G5Dhasm9+w+gJzhVHAm59fZAoNfB2OcBoOoQ6YwGVsNfV
+XS4YqrwcsX8ISsPXi8OMyE9zOgqQmiz0Q+gUAHvJ4z5bTnfzqhv5eWdnqlrPbEtp
+D5YQf/B1MlE7UF+0I/G5u4NSdYoTor+Hz6FNI2LfBS+fuGm9KsbQ+dfZRRME5JoF
+C8duQgqPoQHrS0rbfRU27waxQpiMUrnYBwCT8HIDDKYSg1BdlOsBCc1J78j4VRQy
+B0eg/aZoUNaunGVoBt3haG5ELMaImrCY6vXxMZKnzhuQCIfRDXjWhL4uImjWawQ8
+kH1N7sP2YzpIzSVstwPvScRPZf0Lr8oOxcvb2z10utqg1c4NwS3of4OldJJyqLbb
+ym4Ecyjh+iaTY3UQSAGtwrl2FzhRTeUebM/cU/V29GOTi1WypWc0wis1SBUmFMgh
+Dnit3Q7Whwll9OCKIAMaup1LywIDAQABo4IDvjCCA7owDgYDVR0PAQH/BAQDAgWg
+MAwGA1UdEwEB/wQCMAAwgZMGCCsGAQUFBwEBBIGGMIGDMEYGCCsGAQUFBzAChjpo
+dHRwOi8vc2VjdXJlLmdsb2JhbHNpZ24uY29tL2NhY2VydC9nc2djY3IzZHZ0bHNj
+YTIwMjAuY3J0MDkGCCsGAQUFBzABhi1odHRwOi8vb2NzcC5nbG9iYWxzaWduLmNv
+bS9nc2djY3IzZHZ0bHNjYTIwMjAwVgYDVR0gBE8wTTBBBgkrBgEEAaAyAQowNDAy
+BggrBgEFBQcCARYmaHR0cHM6Ly93d3cuZ2xvYmFsc2lnbi5jb20vcmVwb3NpdG9y
+eS8wCAYGZ4EMAQIBMEEGA1UdHwQ6MDgwNqA0oDKGMGh0dHA6Ly9jcmwuZ2xvYmFs
+c2lnbi5jb20vZ3NnY2NyM2R2dGxzY2EyMDIwLmNybDCBiAYDVR0RBIGAMH6CFnd3
+dy5kZXNpZ25lci10Zy1ib3QucnWCH2F1dG9kaXNjb3Zlci5kZXNpZ25lci10Zy1i
+b3QucnWCF21haWwuZGVzaWduZXItdGctYm90LnJ1ghZvd2EuZGVzaWduZXItdGct
+Ym90LnJ1ghJkZXNpZ25lci10Zy1ib3QucnUwHQYDVR0lBBYwFAYIKwYBBQUHAwEG
+CCsGAQUFBwMCMB8GA1UdIwQYMBaAFA2YwHN/q7292UdLSa0KSgysPsd8MB0GA1Ud
+DgQWBBQ850zDS4Dls65uEC+660IuWZWdJTCCAX0GCisGAQQB1nkCBAIEggFtBIIB
+aQFnAHcAPxdLT9ciR1iUHWUchL4NEu2QN38fhWrrwb8ohez4ZG4AAAGNVP9i6AAA
+BAMASDBGAiEA1Cxey0jPTgl6xrxzx5WnJD3fHlaOjiQ7xZMSISgI4rsCIQDQUm1H
+3ViVKIXwVb4MV+ZVWUhxMStYDnadG4bi4Hm7sgB1AN/hVuuqBa+1nA+GcY2owDJO
+rlbZbqf1pWoB0cE7vlJcAAABjVT/Y3sAAAQDAEYwRAIgAOOHc4kvIalxVZwRwI1R
+AMSZsvJouLrcV/vv+YOmNywCIA6B2j1l+ZpZr1j1wIXb9qsJpI8vyvUCseKkDYKn
+FQQ7AHUA7s3QZNXbGs7FXLedtM0TojKHRny87N7DUUhZRnEftZsAAAGNVP9j+wAA
+BAMARjBEAiB4O+YyMnlbl93/Z7xdHxPZ5JLM30JtSe74KRWuv+fPSwIgXLbGx306
+Sz09PJ2E7cCWh4/ktpc3SJUo4ptWQ7LXHFAwDQYJKoZIhvcNAQELBQADggEBAKkQ
+6p77TrRqG/xflHXUCbmGP6OTjVoveb0cM5kn7tMfsHgNKU+bXbXwh8wtq3mpZnG5
+Hpgs2OYftELMGfU3TFqP3rfIBg6tS7gRVZVAAhd/fsTLvfE7FuFWa1HUIhQbliou
+EOio2onkQmAfUA/O8gBkchKpgAOrJhQWTwWDgLZtyP9BsiSCeIZghTOfxwzhyZJw
+/rv5tBP47V4YugLGsiJEm5mlbIsJ+/adZzRTLdprNdDn5BFNonmY4iZIDUzqc10C
+zT6H40gSOGGRlcKzG68h2h/zM/4+ooRngVK7DE6JxZBQStRCXiswzlcL20YVER1C
+bZgSSValxA0UF/Cgs80=
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIIDXzCCAkegAwIBAgILBAAAAAABIVhTCKIwDQYJKoZIhvcNAQELBQAwTDEgMB4G
+A1UECxMXR2xvYmFsU2lnbiBSb290IENBIC0gUjMxEzARBgNVBAoTCkdsb2JhbFNp
+Z24xEzARBgNVBAMTCkdsb2JhbFNpZ24wHhcNMDkwMzE4MTAwMDAwWhcNMjkwMzE4
+MTAwMDAwWjBMMSAwHgYDVQQLExdHbG9iYWxTaWduIFJvb3QgQ0EgLSBSMzETMBEG
+A1UEChMKR2xvYmFsU2lnbjETMBEGA1UEAxMKR2xvYmFsU2lnbjCCASIwDQYJKoZI
+hvcNAQEBBQADggEPADCCAQoCggEBAMwldpB5BngiFvXAg7aEyiie/QV2EcWtiHL8
+RgJDx7KKnQRfJMsuS+FggkbhUqsMgUdwbN1k0ev1LKMPgj0MK66X17YUhhB5uzsT
+gHeMCOFJ0mpiLx9e+pZo34knlTifBtc+ycsmWQ1z3rDI6SYOgxXG71uL0gRgykmm
+KPZpO/bLyCiR5Z2KYVc3rHQU3HTgOu5yLy6c+9C7v/U9AOEGM+iCK65TpjoWc4zd
+QQ4gOsC0p6Hpsk+QLjJg6VfLuQSSaGjlOCZgdbKfd/+RFO+uIEn8rUAVSNECMWEZ
+XriX7613t2Saer9fwRPvm2L7DWzgVGkWqQPabumDk3F2xmmFghcCAwEAAaNCMEAw
+DgYDVR0PAQH/BAQDAgEGMA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYEFI/wS3+o
+LkUkrk1Q+mOai97i3Ru8MA0GCSqGSIb3DQEBCwUAA4IBAQBLQNvAUKr+yAzv95ZU
+RUm7lgAJQayzE4aGKAczymvmdLm6AC2upArT9fHxD4q/c2dKg8dEe3jgr25sbwMp
+jjM5RcOO5LlXbKr8EpbsU8Yt5CRsuZRj+9xTaGdWPoO4zzUhw8lo/s7awlOqzJCK
+6fBdRoyV3XpYKBovHd7NADdBj+1EbddTKJd+82cEHhXXipa0095MJ6RMG3NzdvQX
+mcIfeg7jLQitChws/zyrVQ4PkX4268NXSb7hLi18YIvDQVETI53O9zJrlAGomecs
+Mx86OyXShkDOOyyGeMlhLxS67ttVb9+E7gUJTb0o2HLO02JQZR7rkpeDMdmztcpH
+WD9f
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIIEsDCCA5igAwIBAgIQd70OB0LV2enQSdd00CpvmjANBgkqhkiG9w0BAQsFADBM
+MSAwHgYDVQQLExdHbG9iYWxTaWduIFJvb3QgQ0EgLSBSMzETMBEGA1UEChMKR2xv
+YmFsU2lnbjETMBEGA1UEAxMKR2xvYmFsU2lnbjAeFw0yMDA3MjgwMDAwMDBaFw0y
+OTAzMTgwMDAwMDBaMFMxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBHbG9iYWxTaWdu
+IG52LXNhMSkwJwYDVQQDEyBHbG9iYWxTaWduIEdDQyBSMyBEViBUTFMgQ0EgMjAy
+MDCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAKxnlJV/de+OpwyvCXAJ
+IcxPCqkFPh1lttW2oljS3oUqPKq8qX6m7K0OVKaKG3GXi4CJ4fHVUgZYE6HRdjqj
+hhnuHY6EBCBegcUFgPG0scB12Wi8BHm9zKjWxo3Y2bwhO8Fvr8R42pW0eINc6OTb
+QXC0VWFCMVzpcqgz6X49KMZowAMFV6XqtItcG0cMS//9dOJs4oBlpuqX9INxMTGp
+6EASAF9cnlAGy/RXkVS9nOLCCa7pCYV+WgDKLTF+OK2Vxw3RUJ/p8009lQeUARv2
+UCcNNPCifYX1xIspvarkdjzLwzOdLahDdQbJON58zN4V+lMj0msg+c0KnywPIRp3
+BMkCAwEAAaOCAYUwggGBMA4GA1UdDwEB/wQEAwIBhjAdBgNVHSUEFjAUBggrBgEF
+BQcDAQYIKwYBBQUHAwIwEgYDVR0TAQH/BAgwBgEB/wIBADAdBgNVHQ4EFgQUDZjA
+c3+rvb3ZR0tJrQpKDKw+x3wwHwYDVR0jBBgwFoAUj/BLf6guRSSuTVD6Y5qL3uLd
+G7wwewYIKwYBBQUHAQEEbzBtMC4GCCsGAQUFBzABhiJodHRwOi8vb2NzcDIuZ2xv
+YmFsc2lnbi5jb20vcm9vdHIzMDsGCCsGAQUFBzAChi9odHRwOi8vc2VjdXJlLmds
+b2JhbHNpZ24uY29tL2NhY2VydC9yb290LXIzLmNydDA2BgNVHR8ELzAtMCugKaAn
+hiVodHRwOi8vY3JsLmdsb2JhbHNpZ24uY29tL3Jvb3QtcjMuY3JsMEcGA1UdIARA
+MD4wPAYEVR0gADA0MDIGCCsGAQUFBwIBFiZodHRwczovL3d3dy5nbG9iYWxzaWdu
+LmNvbS9yZXBvc2l0b3J5LzANBgkqhkiG9w0BAQsFAAOCAQEAy8j/c550ea86oCkf
+r2W+ptTCYe6iVzvo7H0V1vUEADJOWelTv07Obf+YkEatdN1Jg09ctgSNv2h+LMTk
+KRZdAXmsE3N5ve+z1Oa9kuiu7284LjeS09zHJQB4DJJJkvtIbjL/ylMK1fbMHhAW
+i0O194TWvH3XWZGXZ6ByxTUIv1+kAIql/Mt29PmKraTT5jrzcVzQ5A9jw16yysuR
+XRrLODlkS1hyBjsfyTNZrmL1h117IFgntBA5SQNVl9ckedq5r4RSAU85jV8XK5UL
+REjRZt2I6M9Po9QL7guFLu4sPFJpwR1sPJvubS2THeo7SxYoNDtdyBHs7euaGcMa
+D/fayQ==
+-----END CERTIFICATE-----

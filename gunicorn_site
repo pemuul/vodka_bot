@@ -1,0 +1,10 @@
+[program:site_information_telegram_bot]
+directory=/home/server/tg_build_bot/v_1
+command=/home/server/venv/bin/gunicorn -w 3 app:run_site  --preload
+user=server
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+stderr_logfile=/var/log/tg_build_bot/site.err.log
+stdout_logfile=/var/log/tg_build_bot/site.out.log

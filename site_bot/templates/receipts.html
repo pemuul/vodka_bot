@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+{% block title %}Чеки – rtd-bot{% endblock %}
+
+{% block content %}
+  <!-- Навигация и заголовок -->
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb mb-2">
+      <li class="breadcrumb-item">
+        <a href="/receipts" class="text-secondary text-decoration-none">Чеки</a>
+      </li>
+      <li class="breadcrumb-item active" aria-current="page">Список</li>
+    </ol>
+  </nav>
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h1 class="h3">Чеки</h1>
+    <!-- кнопка "Добавить чек" убрана -->
+  </div>
+
+  <!-- Карточка со списком чеков -->
+  <div class="card mb-3">
+    <!-- тело карточки -->
+    <div class="card-body p-0">
+      <!-- вот тут добавили height -->
+      <div class="table-responsive" style="max-height: calc(100vh - 250px); height: calc(100vh - 250px);">
+        <table class="table table-hover mb-0" id="receipts-table">
+          <thead class="table-light sticky-top">
+            <tr>
+              <th>#</th>
+              <th>Номер</th>
+              <th>Дата</th>
+              <th>Сумма</th>
+              <th>Пользователь</th>
+              <th>Действия</th>
+            </tr>
+          </thead>
+          <tbody id="receipts-table-body">
+            <!-- JS-вставка -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- футер с пагинацией и выбором кол-ва -->
+    <div class="card-footer d-flex justify-content-between align-items-center">
+      <div class="text-muted">
+        Показано с <span id="page-start">0</span> по <span id="page-end">0</span> из <span id="page-total">0</span>
+      </div>
+      <div class="d-flex align-items-center">
+        <label for="records-per-page" class="me-2 mb-0">на страницу:</label>
+        <select id="records-per-page" class="form-select form-select-sm">
+          <option value="5">5</option>
+          <option value="10" selected>10</option>
+          <option value="25">25</option>
+          <option value="50">50</option>
+          <option value="all">Все</option>
+        </select>
+      </div>
+      <nav aria-label="Пагинация">
+        <ul class="pagination mb-0" id="pagination-ul"></ul>
+      </nav>
+    </div>
+  </div>
+
+  <!-- Модал просмотра чека -->
+  <div class="modal fade" id="modal-receipt-view" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Просмотр чека</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <img id="receipt-img" src="" alt="Чек" class="img-fluid mb-3"/>
+          <ul class="list-group">
+            <li class="list-group-item"><strong>Номер:</strong> <span id="view-number"></span></li>
+            <li class="list-group-item"><strong>Дата:</strong> <span id="view-date"></span></li>
+            <li class="list-group-item"><strong>Сумма:</strong> <span id="view-amount"></span> ₽</li>
+            <li class="list-group-item">
+              <strong>Пользователь TG ID:</strong> <span id="view-user"></span>
+              <a href="#" id="go-dialog" class="btn btn-sm btn-outline-primary float-end">
+                Перейти в диалог
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const data = {{ receipts_data | default([]) | tojson }};
+      const tableBody = document.getElementById("receipts-table-body");
+      const pageStart = document.getElementById("page-start");
+      const pageEnd   = document.getElementById("page-end");
+      const pageTotal = document.getElementById("page-total");
+      const recPerPageSel = document.getElementById("records-per-page");
+      const paginationUl = document.getElementById("pagination-ul");
+
+      let filtered = [...data];
+      let currentPage = 1;
+
+      function getPaginated() {
+        if (recPerPageSel.value === "all") return filtered;
+        const per = parseInt(recPerPageSel.value, 10);
+        const start = (currentPage - 1) * per;
+        return filtered.slice(start, start + per);
+      }
+
+      function buildPagination() {
+        paginationUl.innerHTML = "";
+        const total = filtered.length;
+        const per = recPerPageSel.value === "all" ? total : parseInt(recPerPageSel.value, 10);
+        const totalPages = per===0?1:Math.ceil(total / per);
+        if (totalPages <= 1) return;
+
+        const makeBtn = (label, disabled, onClick) => {
+          const li = document.createElement("li");
+          li.className = "page-item" + (disabled?" disabled":"");
+          li.innerHTML = `<button class="page-link">${label}</button>`;
+          li.onclick = () => { if(!disabled) { onClick(); render(); } };
+          paginationUl.appendChild(li);
+        };
+
+        makeBtn("«", currentPage===1, () => currentPage--);
+
+        let startPage = Math.max(1, currentPage - 2);
+        let endPage   = Math.min(totalPages, startPage + 4);
+        if (endPage - startPage < 4) startPage = Math.max(1, endPage - 4);
+
+        if (startPage>1) makeBtn(1, false, ()=>currentPage=1);
+        if (startPage>2) {
+          const dots = document.createElement("li");
+          dots.className="page-item disabled";
+          dots.innerHTML=`<span class="page-link">…</span>`;
+          paginationUl.appendChild(dots);
+        }
+
+        for(let p=startPage; p<=endPage; p++){
+          const li = document.createElement("li");
+          li.className = "page-item" + (p===currentPage?" active":"");
+          li.innerHTML = `<button class="page-link">${p}</button>`;
+          li.onclick = () => { if(p!==currentPage){ currentPage=p; render(); } };
+          paginationUl.appendChild(li);
+        }
+
+        if (endPage<totalPages) {
+          if (endPage<totalPages-1) {
+            const dots = document.createElement("li");
+            dots.className="page-item disabled";
+            dots.innerHTML=`<span class="page-link">…</span>`;
+            paginationUl.appendChild(dots);
+          }
+          makeBtn(totalPages, false, ()=>currentPage=totalPages);
+        }
+
+        makeBtn("»", currentPage===totalPages, ()=>currentPage++);
+      }
+
+      function render() {
+        tableBody.innerHTML = "";
+        const list = getPaginated();
+        const total = filtered.length;
+        const per = recPerPageSel.value==="all"?total:parseInt(recPerPageSel.value,10);
+        const startIdx = total? (currentPage-1)*per + 1 : 0;
+        const endIdx   = total? Math.min(currentPage*per, total) : 0;
+
+        pageStart.textContent = startIdx;
+        pageEnd.textContent   = endIdx;
+        pageTotal.textContent = total;
+
+        list.forEach((r,i)=>{
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${startIdx + i}</td>
+            <td>${r.number}</td>
+            <td>${new Date(r.date).toLocaleDateString("ru-RU")}</td>
+            <td>${r.amount.toLocaleString()} ₽</td>
+            <td>${r.user_tg_id}</td>
+            <td>
+              <button class="btn btn-sm btn-outline-secondary btn-view">Просмотр</button>
+              <button class="btn btn-sm btn-outline-danger btn-del">Удалить</button>
+            </td>`;
+          tr.querySelector(".btn-view").onclick = () => {
+            fetch(`/api/receipts/${r.id}`)
+              .then(res=>res.json())
+              .then(rec=>{
+                document.getElementById("receipt-img").src = rec.file_path;
+                document.getElementById("view-number").textContent = rec.number;
+                document.getElementById("view-date").textContent   = new Date(rec.date).toLocaleDateString("ru-RU");
+                document.getElementById("view-amount").textContent = rec.amount;
+                document.getElementById("view-user").textContent   = rec.user_tg_id;
+                document.getElementById("go-dialog").onclick = () => {
+                  window.location.href = `/participants?user=${rec.user_tg_id}`;
+                };
+                new bootstrap.Modal(document.getElementById("modal-receipt-view")).show();
+              });
+          };
+          tr.querySelector(".btn-del").onclick = () => {
+            if (!confirm("Удалить этот чек?")) return;
+            fetch(`/api/receipts/${r.id}`, { method: "DELETE" })
+              .then(()=>{ filtered = filtered.filter(x=>x.id!==r.id); render(); });
+          };
+          tableBody.appendChild(tr);
+        });
+
+        buildPagination();
+      }
+
+      recPerPageSel.onchange = () => { currentPage = 1; render(); };
+      render();
+    });
+  </script>
+{% endblock %}

@@ -1,0 +1,10 @@
+[program:information_telegram_bot]
+directory=/home/server/python_project/construct_bot/bots/my_info_bot
+command=/home/server/python_project/venv/bin/python run_bot.py
+user=server
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+stderr_logfile=/var/log/information_telegram_bot.err.log
+stdout_logfile=/var/log/information_telegram_bot.out.log
