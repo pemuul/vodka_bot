@@ -170,7 +170,6 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
             await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(True))
         elif tree_item.item_id == 'help':
             await sql_mgt.set_param(message.chat.id, 'GET_HELP', str(True))
-            await message.answer('Введите ваш вопрос и мы скоро ответим.')
     else:
         if await sql_mgt.get_param(message.chat.id, 'GET_CHECK') == str(True):
             await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))

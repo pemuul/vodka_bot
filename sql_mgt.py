@@ -1074,3 +1074,44 @@ async def add_question_message(question_id: int, sender: str, text: str, conn=No
     )
     await conn.commit()
     return cursor.lastrowid
+
+
+@with_connection
+async def get_questions(conn=None) -> List[Dict[str, Any]]:
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT id, user_tg_id, text, type, status, create_dt FROM questions ORDER BY create_dt DESC"
+    )
+    rows = await cursor.fetchall()
+    await conn.commit()
+    return [
+        {
+            "id": r[0],
+            "user_tg_id": r[1],
+            "text": r[2],
+            "type": r[3],
+            "status": r[4],
+            "create_dt": r[5].isoformat() if hasattr(r[5], 'isoformat') else r[5],
+        }
+        for r in rows
+    ]
+
+
+@with_connection
+async def get_question_messages(question_id: int, conn=None) -> List[Dict[str, Any]]:
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT question_id, sender, text, timestamp FROM question_messages WHERE question_id = ? ORDER BY timestamp",
+        (question_id,),
+    )
+    rows = await cursor.fetchall()
+    await conn.commit()
+    return [
+        {
+            "question_id": r[0],
+            "sender": r[1],
+            "text": r[2],
+            "timestamp": r[3].isoformat() if hasattr(r[3], 'isoformat') else r[3],
+        }
+        for r in rows
+    ]
