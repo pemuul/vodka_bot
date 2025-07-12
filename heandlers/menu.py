@@ -168,9 +168,14 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
     if tree_item.item_id:
         if tree_item.item_id == 'check':
             await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(True))
+        elif tree_item.item_id == 'help':
+            await sql_mgt.set_param(message.chat.id, 'GET_HELP', str(True))
+            await message.answer('Введите ваш вопрос и мы скоро ответим.')
     else:
         if await sql_mgt.get_param(message.chat.id, 'GET_CHECK') == str(True):
             await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))
+        if await sql_mgt.get_param(message.chat.id, 'GET_HELP') == str(True):
+            await sql_mgt.set_param(message.chat.id, 'GET_HELP', str(False))
 
     # получаем список изображений из параметров
     if last_media_message_str != '':

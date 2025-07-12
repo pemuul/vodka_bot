@@ -24,7 +24,17 @@ async def set_text(message: Message) -> None:
         await admin.except_message(message, except_message_name)
         return
 
-    if message.text:   
+    # режим приёма вопросов
+    is_get_help = await sql_mgt.get_param(message.chat.id, 'GET_HELP')
+    if is_get_help == str(True):
+        question_id = await sql_mgt.add_question(message.chat.id, message.text)
+        await sql_mgt.add_question_message(question_id, 'user', message.text)
+        await sql_mgt.set_param(message.chat.id, 'GET_HELP', str(False))
+        await message.answer('Ваш вопрос сохранён. Мы постараемся ответить в ближайшее время.')
+        await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', 'yes')
+        return
+
+    if message.text:
         await message.answer("Пока я не умею понимать ваши сообщения, возможно у меня это получиться позже")
 
     await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', 'yes')

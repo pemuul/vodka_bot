@@ -1052,3 +1052,25 @@ async def get_participant_messages(
         }
         for r in rows
     ]
+
+
+@with_connection
+async def add_question(user_tg_id: int, text: str, type_: str = 'text', status: str = 'Новый', conn=None) -> int:
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "INSERT INTO questions (user_tg_id, text, type, status) VALUES (?, ?, ?, ?)",
+        (user_tg_id, text, type_, status),
+    )
+    await conn.commit()
+    return cursor.lastrowid
+
+
+@with_connection
+async def add_question_message(question_id: int, sender: str, text: str, conn=None) -> int:
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "INSERT INTO question_messages (question_id, sender, text) VALUES (?, ?, ?)",
+        (question_id, sender, text),
+    )
+    await conn.commit()
+    return cursor.lastrowid
