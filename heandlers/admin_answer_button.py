@@ -253,10 +253,17 @@ async def admin_panel(callback: CallbackQuery):
     admin_panel_on_off = callback.data.split("_")[2]
     await sql_mgt.set_param(callback.message.chat.id, 'ADMIN_MENU', admin_panel_on_off)
 
-    await menu.get_message(
-        callback.message,
-        replace=True
-    )
+    if admin_panel_on_off == 'off':
+        await menu.get_message(callback.message, replace=False)
+        try:
+            await global_objects.bot.delete_message(
+                chat_id=callback.message.chat.id,
+                message_id=callback.message.message_id,
+            )
+        except Exception:
+            pass
+    else:
+        await menu.get_message(callback.message, replace=True)
 
 
 # обрабатываем нажатие кнопок редактирования элемента
