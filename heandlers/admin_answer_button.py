@@ -56,14 +56,16 @@ async def admin_wallet_msg(message: Message):
 @router.message(F.text == '⭕️ 🔏 Включить админ панель <🔑')
 async def admin_panel_on_msg(message: Message):
     await sql_mgt.set_param(message.chat.id, 'ADMIN_MENU', 'on')
-    await menu.get_message(message, replace=True)
+    await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', 'yes')
+    await menu.get_message(message, replace=False)
     await commands.delete_this_message(message)
 
 
 @router.message(F.text == '⭕️ 🔒 Отключить админ панель <🔑')
 async def admin_panel_off_msg(message: Message):
     await sql_mgt.set_param(message.chat.id, 'ADMIN_MENU', 'off')
-    await menu.get_message(message, replace=True)
+    await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', 'yes')
+    await menu.get_message(message, replace=False)
     await commands.delete_this_message(message)
 
 
