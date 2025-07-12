@@ -1,7 +1,7 @@
 from aiogram import Router, F
 from aiogram.types import Message
 
-from heandlers import menu, commands
+from heandlers import menu, commands, admin
 #from sql_mgt import sql_mgt.set_param
 import sql_mgt
 from keys import SPLITTER_STR
@@ -16,6 +16,7 @@ def init_object(global_objects_inp):
     global_objects = global_objects_inp
     menu.init_object(global_objects)
     sql_mgt.init_object(global_objects)
+    admin.init_object(global_objects)
 
 
 def _build_menu_text(path: str) -> str:
@@ -36,6 +37,11 @@ def _build_menu_text(path: str) -> str:
 @router.message(F.text)
 async def menu_text_handler(message: Message):
     """Handle menu navigation using ReplyKeyboard buttons."""
+    # if admin editing is in progress, delegate to admin.except_message
+    except_message_name = await sql_mgt.get_param(message.chat.id, 'EXCEPT_MESSAGE')
+    if except_message_name:
+        await admin.except_message(message, except_message_name)
+        return
     current_path_id = await sql_mgt.get_param(message.chat.id, 'CURRENT_PATH_ID')
     if current_path_id == '':
         current_path_id = 0
