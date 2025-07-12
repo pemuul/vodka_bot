@@ -42,6 +42,19 @@ async def menu_text_handler(message: Message):
     path = global_objects.tree_data.get_id_to_path(int(current_path_id))
     tree_item = global_objects.tree_data.get_obj_from_path(path)
 
+    # --- admin panel toggle ---
+    if message.text == '⭕️ 🔏 Включить админ панель <🔑':
+        await sql_mgt.set_param(message.chat.id, 'ADMIN_MENU', 'on')
+        await menu.get_message(message, replace=True)
+        await commands.delete_this_message(message)
+        return
+
+    if message.text == '⭕️ 🔒 Отключить админ панель <🔑':
+        await sql_mgt.set_param(message.chat.id, 'ADMIN_MENU', 'off')
+        await menu.get_message(message, replace=True)
+        await commands.delete_this_message(message)
+        return
+
     # обработка кнопки Назад
     if message.text == '>> ↩️ НАЗАД <<':
         previus_path = SPLITTER_STR.join(tree_item.path.split(SPLITTER_STR)[:-1])
