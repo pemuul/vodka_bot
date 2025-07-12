@@ -1,8 +1,7 @@
 from aiogram.types.web_app_info import WebAppInfo
 from aiogram.types import Message
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.utils.media_group import MediaGroupBuilder
-from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, LabeledPrice, FSInputFile
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, FSInputFile
 import base64
 from cryptography.fernet import Fernet  
 import os
@@ -43,18 +42,23 @@ async def open_market_mes(message: Message):
     encode_directory = encode_directory_b.decode('utf-8')
 
     url = f'https://designer-tg-bot.ru/{encode_directory}?hash_key={await set_param_unique_random_value(message.chat.id, "hash_key")}'
-    buttons = InlineKeyboardBuilder()
-    #buttons.add(await get_market_button(f'?key={await set_param_unique_random_value(message.chat.id, "TEST_PARAM")}'))
-    buttons.add(get_market_button(url=url, button_text='🎪 Магазин 🎪'))
+
+    keyboard: list[list[KeyboardButton]] = []
+    keyboard.append([get_market_reply_button(url=url, button_text='🎪 Магазин 🎪')])
 
     if message.chat.id in global_objects.admin_list:
-        buttons.add(get_market_button(url=f'https://designer-tg-bot.ru/{encode_directory}?lk=True', button_text='🛠 Магазин Настройка 🛠'))
+        keyboard.append([
+            get_market_button_setup_reply(
+                url=f'https://designer-tg-bot.ru/{encode_directory}?lk=True',
+                button_text='🛠 Магазин Настройка 🛠'
+            )
+        ])
 
-    buttons.adjust(1)
+    reply_kb = ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
     answer_message = await message.answer(
-        text_message, 
-        reply_markup=buttons.as_markup(), 
+        text_message,
+        reply_markup=reply_kb,
         #parse_mode=ParseMode.HTML,
         disable_notification=True
     )
@@ -169,12 +173,19 @@ async def send_item_message(item_id: int, message: Message):
     encode_directory_b = encrypt_text_by_key(current_directory)
     encode_directory = encode_directory_b.decode('utf-8')
 
-    buttons = InlineKeyboardBuilder()
-    buttons.add(get_market_button(url=f'https://designer-tg-bot.ru/{encode_directory}?item={item_id}', button_text='Открыть товар'))
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[[
+            get_market_reply_button(
+                url=f'https://designer-tg-bot.ru/{encode_directory}?item={item_id}',
+                button_text='Открыть товар'
+            )
+        ]],
+        resize_keyboard=True
+    )
 
     await message.answer(
         text_message,
-        reply_markup=buttons.as_markup(), 
+        reply_markup=keyboard,
         #parse_mode=ParseMode.HTML,
         disable_notification=True
     )
