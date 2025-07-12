@@ -1,20 +1,12 @@
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import asyncio
 import math
 
 from keys import SPLITTER_STR
+from keyboards.callback_data_classes import AdminCommandCallbackFactory, AdminMenuEditCallbackFactory, AdminMoveMenuCallbackFactory, AdminDeleteCallbackFactory, AdminFillWallet
 from sql_mgt import get_admins, get_wallet_data
-from heandlers.web_market import (
-    get_market_reply_button,
-    get_market_button_setup_reply,
-)
-from keyboards.callback_data_classes import (
-    AdminMenuEditCallbackFactory,
-    AdminMoveMenuCallbackFactory,
-    AdminDeleteCallbackFactory,
-    AdminCommandCallbackFactory,
-)
+from heandlers.web_market import get_market_button, get_market_button_setup
 
 
 global_objects = None
@@ -30,31 +22,52 @@ def edit_menu_kb(message, path) -> ReplyKeyboardMarkup:
     next_layers = tree_item.next_layers
     next_buttons = list(next_layers.keys())
 
-    keyboard: list[list[KeyboardButton]] = []
+    buttons = InlineKeyboardBuilder()
     for button in next_buttons:
-        keyboard.append([KeyboardButton(text=button)])
+        next_item = next_layers.get(button)
+        path_id = global_objects.tree_data.get_path_to_id(next_item.path)
+        #next_item.path = ''
 
-    path_id = global_objects.tree_data.get_path_to_id(tree_item.path)
-    keyboard.append([KeyboardButton(text='🔻 ⚙️ Управление  <🔑')])
-
-    if tree_item.path != SPLITTER_STR:
-        keyboard.append([KeyboardButton(text='>> ↩️ НАЗАД <<')])
-
+        buttons.button(text=button, callback_data=f"b_{path_id}")
+        #buttons.button(text='🖊 Изменить', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='EDIT'))
+    
     if tree_item.path == SPLITTER_STR:
         if global_objects.settings_bot.get('site').get('site_on'):
-            keyboard.append([get_market_reply_button()])
-            keyboard.append([get_market_button_setup_reply()])
+            buttons.add(get_market_button())
+            buttons.add(get_market_button_setup())
 
-        if message.chat.id in global_objects.admin_list:
-            wallet_balance = 0
-            wallet_data = get_wallet_data()
-            if wallet_data is not None:
-                wallet_balance = wallet_data.get('balance', 0)
-            keyboard.append([KeyboardButton(text='🔻 Админу <🔑')])
-            keyboard.append([KeyboardButton(text=f'🔻 💰 Кошелёк: {wallet_balance} руб <🔑')])
-            keyboard.append([KeyboardButton(text='⭕️ 🔒 Отключить админ панель <🔑')])
+    path_id = global_objects.tree_data.get_path_to_id(tree_item.path)
+    buttons.button(text='🔻 ⚙️ Управление  <🔑', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='EDIT'))
 
-    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+    if tree_item.path != SPLITTER_STR:
+        previus_path = SPLITTER_STR.join(tree_item.path.split(SPLITTER_STR)[:-1])
+        if not previus_path:
+            previus_path = SPLITTER_STR
+        #print(previus_path)
+        path_id = global_objects.tree_data.get_path_to_id(previus_path)
+        buttons.button(
+            text=f'>> ↩️ НАЗАД <<', callback_data=f"b_{path_id}"
+        )
+        
+    if tree_item.path == SPLITTER_STR and message.chat.id in global_objects.admin_list:
+        #buttons.button(text='>> Вернуть дефолтные значентя <🔑<', callback_data='defolt_data')
+
+        #buttons.button(text='>> Откатить последнюю правку <🔑<', callback_data='return_data')
+        buttons.button(text=f'🔻 Админу <🔑', callback_data=f"admin_help")
+
+        wallet_balance = 0
+        wallet_data = get_wallet_data()
+        if wallet_data != None:
+            wallet_balance = wallet_data.get('balance', 0)
+        buttons.button(text=f'🔻 💰 Кошелёк: {wallet_balance} руб <🔑', callback_data='admin_wallet')
+
+        buttons.button(text='⭕️ 🔒 Отключить админ панель <🔑', callback_data='admin_panel_off')
+    
+    #row_button = [2 for i in range(len(next_buttons))]
+    #row_button.append(1)
+
+    buttons.adjust(1)
+    return buttons.as_markup()
 
 
 def item_edit_kb(path_id):
@@ -185,65 +198,66 @@ def move_item_kb(path_id):
     return buttons.as_markup()
 
 
-def admin_buttons() -> ReplyKeyboardMarkup:
-    keyboard = [
-        [KeyboardButton(text='🔹 Число нажатий на кнопки')],
-        [KeyboardButton(text='🔹 Число посещений')],
-        [KeyboardButton(text='🔹 Добавить Админа')],
-        [KeyboardButton(text='🔻 Удалить Админа')],
-        [KeyboardButton(text='>> ↩️ НАЗАД <<')],
-    ]
+def admin_buttons():
+    buttons = InlineKeyboardBuilder()
 
-    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+    buttons.button(text='🔹 Число нажатий на кнопки', callback_data=AdminCommandCallbackFactory(command='get_log_click', params='10'))
+    buttons.button(text='🔹 Число посещений', callback_data=AdminCommandCallbackFactory(command='get_log_visit', params='10'))
+    buttons.button(text='🔹 Добавить Админа', callback_data=AdminMenuEditCallbackFactory(path_id=0, button='ADD_ADMIN'))
+    buttons.button(text='🔻 Удалить Админа', callback_data=AdminMenuEditCallbackFactory(path_id=0, button='DELETE_ADMIN'))
+    buttons.button(text='>> ↩️ НАЗАД <<', callback_data=f"b_{0}")
+
+    buttons.adjust(1)
+    return buttons.as_markup()
 
 
-async def delete_admin() -> ReplyKeyboardMarkup:
+async def delete_admin():
     admins = await get_admins()
 
-    keyboard: list[list[KeyboardButton]] = []
+    buttons = InlineKeyboardBuilder()
 
     for admin in admins:
-        keyboard.append([KeyboardButton(text=f'{admin[0]} {admin[1]}')])
-        keyboard.append([KeyboardButton(text=f'🔹 🗑 Удалить {admin[0]}')])
+        buttons.button(text=f'{admin[0]} {admin[1]}', callback_data='pass')
+        buttons.button(text='🔹 🗑 Удалить', callback_data=AdminDeleteCallbackFactory(user_id=admin[0]))
+    buttons.button(text='>> ОТМЕНА <<', callback_data=f"b_{0}")
 
-    keyboard.append([KeyboardButton(text='>> ОТМЕНА <<')])
+    adjust_list = [2 for i in range(len(admins))]
 
-    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
-
-
-def wallet_kb() -> ReplyKeyboardMarkup:
-    keyboard = [
-        [KeyboardButton(text='🔹 Пополнить кошелёк')],
-        [KeyboardButton(text='>> ↩️ НАЗАД <<')],
-    ]
-    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+    buttons.adjust(*adjust_list, 1)
+    return buttons.as_markup()
 
 
-def fill_wallet_kb() -> ReplyKeyboardMarkup:
-    keyboard: list[list[KeyboardButton]] = []
-    row: list[KeyboardButton] = []
-    for idx, amount in enumerate([60, 100, 500, 1000, 3000, 5000], start=1):
-        row.append(KeyboardButton(text=f'{amount} руб.'))
-        if idx % 2 == 0:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
+def wallet_kb():
+    buttons = InlineKeyboardBuilder()
 
-    keyboard.append([KeyboardButton(text='>> ↩️ НАЗАД <<')])
+    buttons.button(text='🔹 Пополнить кошелёк', callback_data='fill_wallet')
+    buttons.button(text='>> ↩️ НАЗАД <<', callback_data=f"b_{0}")
 
-    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+    buttons.adjust(1)
+    return buttons.as_markup()
+
+
+def fill_wallet_kb():
+    buttons = InlineKeyboardBuilder()
+
+    for amount in [60, 100, 500, 1000, 3000, 5000]:
+        buttons.button(text=f'{amount} руб.', callback_data=AdminFillWallet(amount=amount))
+    buttons.button(text='>> ↩️ НАЗАД <<', callback_data="admin_wallet")
+
+    buttons.adjust(2)
+    return buttons.as_markup()
     
 
-def fill_wallet_alert_message_kb(need_money: float) -> ReplyKeyboardMarkup:
+def fill_wallet_alert_message_kb(need_money:float):
+    buttons = InlineKeyboardBuilder()
+
     need_money = math.ceil(need_money)
     if need_money < 60:
-        need_money = 60  # ограничения на оплату ТГ
+        need_money = 60 # ограничения на оплату ТГ
 
-    keyboard = [
-        [KeyboardButton(text=f'🔹 Пополнить {need_money} руб.')],
-        [KeyboardButton(text='🔹 💰 Кошелёк')],
-        [KeyboardButton(text='>> СКРЫТЬ <<')],
-    ]
+    buttons.button(text=f'🔹 Пополнить {need_money} руб.', callback_data=AdminFillWallet(amount=need_money))
+    buttons.button(text='🔹 💰 Кошелёк', callback_data="admin_wallet")
+    buttons.button(text='>> СКРЫТЬ <<', callback_data=f"delete")
 
-    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+    buttons.adjust(1)
+    return buttons.as_markup()

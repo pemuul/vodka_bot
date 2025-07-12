@@ -126,22 +126,43 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
     # получаем нужную клавиатуру
     on_off_admin_panel = await sql_mgt.get_param(message.chat.id, 'ADMIN_MENU')
     if on_off_admin_panel == 'on':
-        reply_markup = edit_menu_kb(message, path)
+        inline_kb = edit_menu_kb(message, path)
+        reply_kb = get_menu_kb(message, path)
     else:
-        reply_markup = get_menu_kb(message, path)
+        reply_kb = get_menu_kb(message, path)
+        inline_kb = None
 
-    if replace:
-        #await message.edit_text(text_message, reply_markup=get_menu_kb(message, path), parse_mode=ParseMode.HTML)
-        await message.edit_text(text_message, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+    if on_off_admin_panel == 'on':
+        # update reply keyboard separately
+        tmp_msg = await message.answer('.', reply_markup=reply_kb, disable_notification=True)
+        try:
+            await global_objects.bot.delete_message(chat_id=tmp_msg.chat.id, message_id=tmp_msg.message_id)
+        except Exception:
+            pass
+
+        if replace:
+            await message.edit_text(text_message, reply_markup=inline_kb, parse_mode=ParseMode.HTML)
+        else:
+            last_message = await message.answer(
+                text_message,
+                reply_markup=inline_kb,
+                parse_mode=ParseMode.HTML,
+                disable_notification=True
+            )
+            last_message_id_new = last_message.message_id
+            await sql_mgt.set_param(message.chat.id, 'LAST_MESSAGE_ID', str(last_message_id_new))
     else:
-        last_message = await message.answer(
-            text_message, 
-            reply_markup=reply_markup, 
-            parse_mode=ParseMode.HTML,
-            disable_notification=True
-        )
-        last_message_id_new = last_message.message_id
-        await sql_mgt.set_param(message.chat.id, 'LAST_MESSAGE_ID', str(last_message_id_new))
+        if replace:
+            await message.edit_text(text_message, reply_markup=reply_kb, parse_mode=ParseMode.HTML)
+        else:
+            last_message = await message.answer(
+                text_message,
+                reply_markup=reply_kb,
+                parse_mode=ParseMode.HTML,
+                disable_notification=True
+            )
+            last_message_id_new = last_message.message_id
+            await sql_mgt.set_param(message.chat.id, 'LAST_MESSAGE_ID', str(last_message_id_new))
 
     # для определённых id выполняем действия
     if tree_item.item_id:
