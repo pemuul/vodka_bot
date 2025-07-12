@@ -43,24 +43,28 @@ async def admin_help_msg(message: Message):
         reply_markup=admin_kb.admin_buttons(),
         parse_mode=ParseMode.HTML,
     )
+    await commands.delete_this_message(message)
 
 
 @router.message(F.text.startswith('🔻 💰 Кошелёк'))
 async def admin_wallet_msg(message: Message):
     msg_text, kb = await get_message_admin_wallet(message)
     await message.answer(msg_text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    await commands.delete_this_message(message)
 
 
 @router.message(F.text == '⭕️ 🔏 Включить админ панель <🔑')
 async def admin_panel_on_msg(message: Message):
     await sql_mgt.set_param(message.chat.id, 'ADMIN_MENU', 'on')
     await menu.get_message(message, replace=True)
+    await commands.delete_this_message(message)
 
 
 @router.message(F.text == '⭕️ 🔒 Отключить админ панель <🔑')
 async def admin_panel_off_msg(message: Message):
     await sql_mgt.set_param(message.chat.id, 'ADMIN_MENU', 'off')
     await menu.get_message(message, replace=True)
+    await commands.delete_this_message(message)
 
 
 @router.message(F.text == '🔻 ⚙️ Управление  <🔑')
@@ -72,16 +76,19 @@ async def admin_manage_msg(message: Message):
     if not last_message_id_param:
         last_message_id_param = message.message_id
     await edit_message(message.chat.id, int(last_message_id_param), int(current_path_id))
+    await commands.delete_this_message(message)
 
 
 @router.message(F.text == '🔹 Число нажатий на кнопки')
 async def cmd_log_click_msg(message: Message):
     await commands.cmd_get_log_click(message, 10)
+    await commands.delete_this_message(message)
 
 
 @router.message(F.text == '🔹 Число посещений')
 async def cmd_log_visit_msg(message: Message):
     await commands.cmd_get_log_visit(message, 10)
+    await commands.delete_this_message(message)
 
 
 @router.message(F.text == '🔹 Добавить Админа')
@@ -93,12 +100,14 @@ async def add_admin_msg(message: Message):
     url_start += await sql_mgt.create_invite_admin_key(message.chat.id)
     answerd_text = admin_set_new_admin_help + f'<a href="{url_start}">СТАТЬ АДМИНОМ</a>'
     await message.answer(answerd_text, reply_markup=tu_menu('В МЕНЮ'), parse_mode=ParseMode.HTML)
+    await commands.delete_this_message(message)
 
 
 @router.message(F.text == '🔻 Удалить Админа')
 async def delete_admin_start_msg(message: Message):
     kb = await admin_kb.delete_admin()
     await message.answer('Удалите ненужных администраторов', reply_markup=kb, parse_mode=ParseMode.HTML)
+    await commands.delete_this_message(message)
 
 
 @router.message(lambda m: m.text and m.text.startswith('🔹 🗑 Удалить'))
@@ -114,6 +123,7 @@ async def delete_admin_confirm_msg(message: Message):
         kb = await admin_kb.delete_admin()
         await message.answer('Удалите ненужных администраторов' + add_text, reply_markup=kb, parse_mode=ParseMode.HTML)
         global_objects.admin_list = [admin[0] for admin in await sql_mgt.get_admins()]
+    await commands.delete_this_message(message)
 
 
 @router.message(F.text == '🔹 Пополнить кошелёк')
@@ -123,12 +133,14 @@ async def fill_wallet_msg(message: Message):
         reply_markup=admin_kb.fill_wallet_kb(),
         parse_mode=ParseMode.HTML,
     )
+    await commands.delete_this_message(message)
 
 
 @router.message(lambda m: m.text and m.text.endswith(' руб.') and m.text.split()[0].isdigit())
 async def fill_amount_wallet_msg(message: Message):
     amount = int(message.text.split()[0])
     await send_payment_link(message, amount)
+    await commands.delete_this_message(message)
 
 
 @router.callback_query(F.data.startswith("admin_help"))
