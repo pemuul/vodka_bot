@@ -29,6 +29,8 @@ from aiogram.types import (
     InputMedia,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
     PhotoSize,
     Document,
     Video,
@@ -50,6 +52,10 @@ from pyment_bot_dir.pyment_mgt import monthly_payment_with_conn
 from heandlers import commands, answer_button_menu, import_files, text_heandler, admin_answer_button, media_heandler, pyments, order, answer_button_settings, answer_button_subscription, confirm_age_phone
 
 MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
+
+# Keep track of the last reply keyboard sent to each user so we can
+# recognize when a text message is actually a button press.
+last_reply_keyboard: Dict[int, List[str]] = {}
 
 
 ################################################################################
@@ -86,6 +92,26 @@ class RequestLogger(BaseRequestMiddleware):
                                     "url":          getattr(btn, "url", None),
                                     "web_app_url":  getattr(getattr(btn, "web_app", None), "url", None),
                                 })
+                        # inline клавиатура не заменяет reply, поэтому очищаем
+                        last_reply_keyboard.pop(chat_id, None)
+                    elif isinstance(markup, ReplyKeyboardMarkup):
+                        btn_texts: List[str] = []
+                        for row in markup.keyboard:
+                            for btn in row:
+                                btn_info = {"text": btn.text}
+                                if btn.request_contact:
+                                    btn_info["request_contact"] = True
+                                if btn.request_location:
+                                    btn_info["request_location"] = True
+                                if btn.web_app:
+                                    btn_info["web_app_url"] = btn.web_app.url
+                                buttons.append(btn_info)
+                                btn_texts.append(btn.text)
+                        if btn_texts:
+                            last_reply_keyboard[chat_id] = btn_texts
+                    else:
+                        # если клавиатуры нет, забываем прошлую
+                        last_reply_keyboard.pop(chat_id, None)
 
                     # 3) медиа
                     media_list: List[Dict[str, Any]] = []
@@ -120,11 +146,19 @@ class IncomingLogger(BaseMiddleware):
         if isinstance(event, Message):
             user = event.from_user
             if user and event.text:
-                await sql_mgt.add_participant_message(
-                    user_tg_id=user.id,
-                    sender="user",
-                    text=event.text
-                )
+                if event.text in last_reply_keyboard.get(user.id, []):
+                    await sql_mgt.add_participant_message(
+                        user_tg_id=user.id,
+                        sender="user",
+                        text="",
+                        buttons=[{"text": event.text}],
+                    )
+                else:
+                    await sql_mgt.add_participant_message(
+                        user_tg_id=user.id,
+                        sender="user",
+                        text=event.text
+                    )
 
         # 2) Нажатия на inline-кнопки (CallbackQuery)
         elif isinstance(event, CallbackQuery):
@@ -172,7 +206,7 @@ class LoggingMiddleware(BaseMiddleware):
             user_id = msg.from_user.id
             text = msg.text or msg.caption or None
 
-            # Кнопки
+            # Кнопки, если бот отправил сообщение с клавиатурой
             buttons: List[Dict[str, Any]] = []
             if isinstance(msg.reply_markup, InlineKeyboardMarkup):
                 for row in msg.reply_markup.inline_keyboard:
@@ -183,6 +217,24 @@ class LoggingMiddleware(BaseMiddleware):
                             "url":           btn.url,
                             "web_app_url":   getattr(getattr(btn, "web_app", None), "url", None),
                         })
+                last_reply_keyboard.pop(user_id, None)
+            elif isinstance(msg.reply_markup, ReplyKeyboardMarkup):
+                btn_texts: List[str] = []
+                for row in msg.reply_markup.keyboard:
+                    for btn in row:
+                        btn_info = {"text": btn.text}
+                        if btn.request_contact:
+                            btn_info["request_contact"] = True
+                        if btn.request_location:
+                            btn_info["request_location"] = True
+                        if btn.web_app:
+                            btn_info["web_app_url"] = btn.web_app.url
+                        buttons.append(btn_info)
+                        btn_texts.append(btn.text)
+                if btn_texts:
+                    last_reply_keyboard[user_id] = btn_texts
+            else:
+                last_reply_keyboard.pop(user_id, None)
 
             # Медиа
             media: List[Dict[str, Any]] = []
@@ -269,14 +321,23 @@ class LoggingMiddleware(BaseMiddleware):
                     "duration":  vn.duration,
                 })
 
-            # Сохраняем всё это в таблице participant_messages
-            await sql_mgt.add_participant_message(
-                user_tg_id=user_id,
-                sender="user",
-                text=text,
-                buttons=buttons or None,
-                media=media or None,
-            )
+            # Определяем, является ли сообщение нажатием кнопки ReplyKeyboard
+            if text and text in last_reply_keyboard.get(user_id, []):
+                await sql_mgt.add_participant_message(
+                    user_tg_id=user_id,
+                    sender="user",
+                    text="",
+                    buttons=[{"text": text}],
+                    media=media or None,
+                )
+            else:
+                await sql_mgt.add_participant_message(
+                    user_tg_id=user_id,
+                    sender="user",
+                    text=text,
+                    buttons=buttons or None,
+                    media=media or None,
+                )
 
         # --- Нажатие на inline-кнопку тоже приходит в Update ---
         if event.callback_query:
