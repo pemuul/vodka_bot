@@ -1,9 +1,10 @@
 from aiogram import Router, F
-from aiogram.types import CallbackQuery
+from aiogram.types import Message
 
 from heandlers import menu
 #from sql_mgt import sql_mgt.set_param
 import sql_mgt
+from keys import SPLITTER_STR
 
 
 router = Router()
@@ -16,65 +17,24 @@ def init_object(global_objects_inp):
     menu.init_object(global_objects)
     sql_mgt.init_object(global_objects)
 
-'''
-@router.callback_query(F.data.startswith("b_"))
-async def callbacks_num(callback: CallbackQuery):
-    print(callback.data)
-    path_id = callback.data.split("_")[1]
-    # !!!! надо переделать на данные которые не в кнопках
-    # и добавить дату последнй загрузки туда
-    # проверять её с датой последнего обновления данных, если такая была, то 
-    # возвращаем в главное меню
-    path = global_objects.tree_data.get_id_to_path(int(path_id))
-    await menu.get_message(callback.message, path=path, replace=True)
-'''
+@router.message(F.text)
+async def menu_text_handler(message: Message):
+    """Handle menu navigation using ReplyKeyboard buttons."""
+    current_path_id = await sql_mgt.get_param(message.chat.id, 'CURRENT_PATH_ID')
+    if current_path_id == '':
+        current_path_id = 0
+    path = global_objects.tree_data.get_id_to_path(int(current_path_id))
+    tree_item = global_objects.tree_data.get_obj_from_path(path)
 
-@router.callback_query(F.data.startswith("b_"))
-async def callbacks_num(callback: CallbackQuery):
-    #print(callback.data)
-    path_id = callback.data.split("_")[1]
-    path = global_objects.tree_data.get_id_to_path(int(path_id))
-    await menu.get_message(callback.message, path=path, replace=True)
+    # обработка кнопки Назад
+    if message.text == '>> ↩️ НАЗАД <<':
+        previus_path = SPLITTER_STR.join(tree_item.path.split(SPLITTER_STR)[:-1])
+        if not previus_path:
+            previus_path = SPLITTER_STR
+        await menu.get_message(message, path=previus_path, replace=False)
+        return
 
+    next_item = tree_item.next_layers.get(message.text)
+    if next_item:
+        await menu.get_message(message, path=next_item.path, replace=False)
 
-@router.callback_query(F.data.startswith("fix_"))
-async def callbacks_fix(callback: CallbackQuery):
-    #print(callback.data)
-    path_id = callback.data.split("_")[1]
-    path = global_objects.tree_data.get_id_to_path(int(path_id))
-    current_text = callback.message.text
-    current_text = '📌\n\n' + current_text
-    current_keyboard = callback.message.reply_markup
-
-    # Проверяем, что у нас есть хотя бы две кнопки для удаления предпоследней
-    if current_keyboard and len(current_keyboard.inline_keyboard) > 0:
-        # Удаляем предпоследнюю кнопку из первого ряда
-        current_keyboard.inline_keyboard.pop(-2)
-    await sql_mgt.set_param(callback.message.chat.id, 'LAST_MEDIA_LIST', '')
-    await sql_mgt.set_param(callback.message.chat.id, 'DELETE_LAST_MESSAGE', '')
-    await sql_mgt.set_param(callback.message.chat.id, 'LAST_MESSAGE_ID', '0')
-    await global_objects.bot.edit_message_text(chat_id=callback.message.chat.id,
-                                message_id=callback.message.message_id,
-                                text=current_text,
-                                #reply_markup=current_keyboard
-                                )
-    await global_objects.bot.pin_chat_message(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id
-    )
-    await menu.get_message(
-        callback.message,
-        path=path,
-        replace=False
-    )
-
-@router.callback_query(F.data.startswith("site_"))
-async def callbacks_site(callback: CallbackQuery):
-    pass
-    '''
-    await menu.get_message(
-        callback.message,
-        path='',
-        replace=False
-    )
-    '''

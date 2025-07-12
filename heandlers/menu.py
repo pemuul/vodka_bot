@@ -42,6 +42,8 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
     await sql_mgt.set_param(message.chat.id, 'DELETE_ANSWER_LEATER', '')
 
     tree_item = global_objects.tree_data.get_obj_from_path(path)
+    path_id_current = global_objects.tree_data.get_path_to_id(tree_item.path)
+    await sql_mgt.set_param(message.chat.id, 'CURRENT_PATH_ID', str(path_id_current))
 
     tree_name = tree_item.path.split(SPLITTER_STR)[-1]
     #print(tree_item) 

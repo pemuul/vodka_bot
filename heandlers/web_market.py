@@ -2,7 +2,7 @@ from aiogram.types.web_app_info import WebAppInfo
 from aiogram.types import Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.utils.media_group import MediaGroupBuilder
-from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, FSInputFile
+from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, LabeledPrice, FSInputFile
 import base64
 from cryptography.fernet import Fernet  
 import os
@@ -87,6 +87,38 @@ def get_market_button_setup(url='', button_text='🛠 Магазин Настр�
         url = f'https://designer-tg-bot.ru/{encode_directory}?lk=True'
 
     button = InlineKeyboardButton(
+        text=button_text,
+        web_app=WebAppInfo(url=url)
+    )
+
+    return button
+
+
+def get_market_reply_button(url='', button_text='🎪 Магазин 🎪'):
+    """Return KeyboardButton with WebApp link for ReplyKeyboard."""
+    if url == '':
+        current_directory = os.path.abspath(os.path.dirname(sys.argv[0]))
+        encode_directory_b = encrypt_text_by_key(current_directory)
+        encode_directory = encode_directory_b.decode('utf-8')
+        url = f'https://designer-tg-bot.ru/{encode_directory}'
+
+    button = KeyboardButton(
+        text=button_text,
+        web_app=WebAppInfo(url=url)
+    )
+
+    return button
+
+
+def get_market_button_setup_reply(url='', button_text='🛠 Магазин Настройка 🛠'):
+    """Reply version of setup button."""
+    if url == '':
+        current_directory = os.path.abspath(os.path.dirname(sys.argv[0]))
+        encode_directory_b = encrypt_text_by_key(current_directory)
+        encode_directory = encode_directory_b.decode('utf-8')
+        url = f'https://designer-tg-bot.ru/{encode_directory}?lk=True'
+
+    button = KeyboardButton(
         text=button_text,
         web_app=WebAppInfo(url=url)
     )
