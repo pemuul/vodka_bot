@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery
 
 from heandlers import menu, commands, admin
 #from sql_mgt import sql_mgt.set_param
@@ -106,4 +106,11 @@ async def menu_text_handler(message: Message):
 
         await menu.get_message(message, path=path, replace=False)
         await commands.delete_this_message(message)
+
+@router.callback_query(F.data.startswith("b_"))
+async def menu_callback_handler(callback: CallbackQuery):
+    """Handle inline button presses in admin mode."""
+    path_id = callback.data.split("_")[1]
+    path = global_objects.tree_data.get_id_to_path(int(path_id))
+    await menu.get_message(callback.message, path=path, replace=True)
 
