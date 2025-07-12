@@ -58,34 +58,32 @@ async def menu_text_handler(message: Message):
         return
 
     if message.text == 'Закрепить 📌':
-        last_message_id_param = await sql_mgt.get_param(message.chat.id, 'LAST_MESSAGE_ID')
-        if last_message_id_param:
-            last_message_id = int(last_message_id_param)
-            path_text = _build_menu_text(path)
-            pin_text = '📌\n\n' + path_text
+        path_text = _build_menu_text(path)
+        pin_text = '📌\n\n' + path_text
 
-            await sql_mgt.set_param(message.chat.id, 'LAST_MEDIA_LIST', '')
-            await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', '')
-            await sql_mgt.set_param(message.chat.id, 'LAST_MESSAGE_ID', '0')
+        await sql_mgt.set_param(message.chat.id, 'LAST_MEDIA_LIST', '')
+        await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', '')
+        await sql_mgt.set_param(message.chat.id, 'LAST_MESSAGE_ID', '0')
 
+        try:
+            # Try to remove any previously pinned message
             try:
-                await global_objects.bot.edit_message_text(
-                    chat_id=message.chat.id,
-                    message_id=last_message_id,
-                    text=pin_text,
-                )
-                try:
-                    await global_objects.bot.unpin_chat_message(chat_id=message.chat.id)
-                except Exception as e:
-                    # it is fine if there was no pinned message
-                    print(f'Ошибка при откреплении: {e}')
-                await global_objects.bot.pin_chat_message(
-                    chat_id=message.chat.id,
-                    message_id=last_message_id,
-                    disable_notification=True,
-                )
+                await global_objects.bot.unpin_chat_message(chat_id=message.chat.id)
             except Exception as e:
-                print(f'Ошибка при закреплении: {e}')
+                # It's fine if there was nothing to unpin
+                print(f'Ошибка при откреплении: {e}')
+
+            pin_message = await message.answer(
+                pin_text,
+                disable_notification=True,
+            )
+            await global_objects.bot.pin_chat_message(
+                chat_id=message.chat.id,
+                message_id=pin_message.message_id,
+                disable_notification=True,
+            )
+        except Exception as e:
+            print(f'Ошибка при закреплении: {e}')
 
         await menu.get_message(message, path=path, replace=False)
         await commands.delete_this_message(message)
