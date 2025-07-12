@@ -74,9 +74,15 @@ async def menu_text_handler(message: Message):
                     message_id=last_message_id,
                     text=pin_text,
                 )
+                try:
+                    await global_objects.bot.unpin_chat_message(chat_id=message.chat.id)
+                except Exception as e:
+                    # it is fine if there was no pinned message
+                    print(f'Ошибка при откреплении: {e}')
                 await global_objects.bot.pin_chat_message(
                     chat_id=message.chat.id,
                     message_id=last_message_id,
+                    disable_notification=True,
                 )
             except Exception as e:
                 print(f'Ошибка при закреплении: {e}')
