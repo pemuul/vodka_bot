@@ -84,6 +84,7 @@ HAS_QM_IS_ANSWER = 'is_answer' in question_messages_table.c
 HAS_SM_MEDIA = 'media' in scheduled_messages_table.c
 receipts_table             = Table("receipts", metadata, autoload_with=engine)
 HAS_RECEIPT_STATUS = 'status' in receipts_table.c
+HAS_RECEIPT_MSG_ID = 'message_id' in receipts_table.c
 images_table               = Table("images", metadata, autoload_with=engine)
 deleted_images_table       = Table("deleted_images", metadata, autoload_with=engine)
 notifications_table        = Table("notifications", metadata, autoload_with=engine)
@@ -692,13 +693,15 @@ async def receipts(request: Request):
     )
     receipts = []
     for r in rows:
+        file_path = r["file_path"]
+        if file_path and not file_path.startswith("/static"):
+            file_path = f"/static/uploads/{Path(file_path).name}"
         receipts.append({
             "id": r["id"],
             "number": r["number"],
             "date": r["date"].isoformat() if r["date"] else None,
-            "amount": r["amount"],
             "user_tg_id": r["user_tg_id"],
-            "file_path": r["file_path"],
+            "file_path": file_path,
             "status": r["status"] if HAS_RECEIPT_STATUS and "status" in r else None,
         })
     return templates.TemplateResponse(
@@ -713,15 +716,48 @@ async def get_receipt(receipt_id: int):
     )
     if not r:
         raise HTTPException(404, "Receipt not found")
+    file_path = r["file_path"]
+    if file_path and not file_path.startswith("/static"):
+        file_path = f"/static/uploads/{Path(file_path).name}"
     return {
         "id": r["id"],
         "number": r["number"],
         "date": r["date"].isoformat() if r["date"] else None,
         "amount": r["amount"],
         "user_tg_id": r["user_tg_id"],
-        "file_path": r["file_path"],
+        "file_path": file_path,
         "status": r["status"] if HAS_RECEIPT_STATUS and "status" in r else None,
+        "message_id": r["message_id"] if HAS_RECEIPT_MSG_ID and "message_id" in r else None,
     }
+
+class ReceiptUpdate(BaseModel):
+    status: str
+
+@app.post("/api/receipts/{receipt_id}")
+async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
+    values = {"status": upd.status}
+    await database.execute(
+        receipts_table.update().where(receipts_table.c.id == receipt_id).values(**values)
+    )
+    # fetch row for messaging
+    if HAS_RECEIPT_MSG_ID or HAS_RECEIPT_STATUS:
+        r = await database.fetch_one(
+            receipts_table.select().where(receipts_table.c.id == receipt_id)
+        )
+    else:
+        r = None
+    if r and HAS_RECEIPT_MSG_ID and r.get("message_id") and r.get("user_tg_id"):
+        text = None
+        if upd.status == "Распознан":
+            text = "Чек принят!"
+        elif upd.status == "Отменён":
+            text = "Чек отклонён"
+        if text:
+            try:
+                await bot.send_message(r["user_tg_id"], text, reply_to_message_id=r["message_id"])
+            except Exception as e:
+                print(f"Failed to send receipt status message: {e}")
+    return {"success": True}
 
 @app.delete("/api/receipts/{receipt_id}")
 async def delete_receipt(receipt_id: int):

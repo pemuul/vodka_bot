@@ -1121,23 +1121,48 @@ async def get_question_messages(question_id: int, conn=None) -> List[Dict[str, A
 
 
 @with_connection
-async def add_receipt(file_path: str, user_tg_id: int, status: str = "не подтвержден", number: str = None, date: str = None, amount: float = None, conn=None) -> int:
+async def add_receipt(file_path: str, user_tg_id: int, status: str = "не подтвержден", number: str = None, date: str = None, amount: float = None, message_id: int | None = None, conn=None) -> int:
     """Сохранить чек пользователя."""
     cursor = await conn.cursor()
-    await cursor.execute(
-        "INSERT INTO receipts (number, date, amount, user_tg_id, file_path, status) VALUES (?, ?, ?, ?, ?, ?)",
-        (number, date, amount, user_tg_id, file_path, status),
-    )
+    if 'message_id' in receipts_table.c:
+        await cursor.execute(
+            "INSERT INTO receipts (number, date, amount, user_tg_id, message_id, file_path, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (number, date, amount, user_tg_id, message_id, file_path, status),
+        )
+    else:
+        await cursor.execute(
+            "INSERT INTO receipts (number, date, amount, user_tg_id, file_path, status) VALUES (?, ?, ?, ?, ?, ?)",
+            (number, date, amount, user_tg_id, file_path, status),
+        )
     await conn.commit()
     return cursor.lastrowid
 
 
 @with_connection
-async def update_receipt_status(receipt_id: int, status: str, conn=None) -> None:
-    """Update status field for a receipt."""
+async def update_receipt_status(receipt_id: int, status: str, conn=None) -> str | None:
+    """Update status field for a receipt. Returns previous status."""
     cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT status FROM receipts WHERE id = ?",
+        (receipt_id,)
+    )
+    row = await cursor.fetchone()
+    old_status = row[0] if row else None
     await cursor.execute(
         "UPDATE receipts SET status = ? WHERE id = ?",
         (status, receipt_id),
     )
     await conn.commit()
+    return old_status
+
+
+@with_connection
+async def get_receipt(receipt_id: int, conn=None) -> dict | None:
+    """Return a receipt row as dict or None."""
+    cursor = await conn.cursor()
+    await cursor.execute("SELECT * FROM receipts WHERE id = ?", (receipt_id,))
+    row = await cursor.fetchone()
+    if not row:
+        return None
+    columns = [col[0] for col in cursor.description]
+    return dict(zip(columns, row))

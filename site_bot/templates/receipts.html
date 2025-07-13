@@ -28,7 +28,6 @@
               <th>#</th>
               <th>Номер</th>
               <th>Дата</th>
-              <th>Сумма</th>
               <th>Пользователь</th>
               <th>Статус</th>
               <th>Действия</th>
@@ -75,15 +74,26 @@
           <ul class="list-group">
             <li class="list-group-item"><strong>Номер:</strong> <span id="view-number"></span></li>
             <li class="list-group-item"><strong>Дата:</strong> <span id="view-date"></span></li>
-            <li class="list-group-item"><strong>Сумма:</strong> <span id="view-amount"></span> ₽</li>
             <li class="list-group-item">
               <strong>Пользователь TG ID:</strong> <span id="view-user"></span>
               <a href="#" id="go-dialog" class="btn btn-sm btn-outline-primary float-end">
                 Перейти в диалог
               </a>
             </li>
-            <li class="list-group-item"><strong>Статус:</strong> <span id="view-status"></span></li>
+            <li class="list-group-item">
+              <strong>Статус:</strong>
+              <select id="receipt-status" class="form-select form-select-sm d-inline-block w-auto ms-2">
+                <option value="В авто обработке">В авто обработке</option>
+                <option value="Распознан">Распознан</option>
+                <option value="Не распознан">Не распознан</option>
+                <option value="Отменён">Отменён</option>
+                <option value="не подтвержден">не подтвержден</option>
+              </select>
+            </li>
           </ul>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-primary" id="save-receipt">Сохранить</button>
         </div>
       </div>
     </div>
@@ -101,6 +111,7 @@
 
       let filtered = [...data];
       let currentPage = 1;
+      let currentReceiptId = null;
 
       function getPaginated() {
         if (recPerPageSel.value === "all") return filtered;
@@ -176,31 +187,28 @@
           tr.innerHTML = `
             <td>${startIdx + i}</td>
             <td>${r.number ?? ''}</td>
-            <td>${r.date ? new Date(r.date).toLocaleDateString("ru-RU") : ''}</td>
-            <td>${r.amount ? r.amount.toLocaleString() + ' ₽' : ''}</td>
+            <td>${r.date ? new Date(r.date).toLocaleDateString('ru-RU') : ''}</td>
             <td>${r.user_tg_id}</td>
             <td>${r.status ?? ''}</td>
-            <td>
-              <button class="btn btn-sm btn-outline-secondary btn-view">Просмотр</button>
-              <button class="btn btn-sm btn-outline-danger btn-del">Удалить</button>
-            </td>`;
-          tr.querySelector(".btn-view").onclick = () => {
+            <td><button class="btn btn-sm btn-outline-danger btn-del">Удалить</button></td>`;
+          tr.onclick = () => {
             fetch(`/api/receipts/${r.id}`)
               .then(res=>res.json())
               .then(rec=>{
-                document.getElementById("receipt-img").src = rec.file_path;
-                document.getElementById("view-number").textContent = rec.number;
-                document.getElementById("view-date").textContent   = new Date(rec.date).toLocaleDateString("ru-RU");
-                document.getElementById("view-amount").textContent = rec.amount;
-                document.getElementById("view-user").textContent   = rec.user_tg_id;
-                document.getElementById("view-status").textContent = rec.status ?? '';
-                document.getElementById("go-dialog").onclick = () => {
+                document.getElementById('receipt-img').src = rec.file_path;
+                document.getElementById('view-number').textContent = rec.number;
+                document.getElementById('view-date').textContent = new Date(rec.date).toLocaleDateString('ru-RU');
+                document.getElementById('view-user').textContent = rec.user_tg_id;
+                document.getElementById('receipt-status').value = rec.status ?? '';
+                document.getElementById('go-dialog').onclick = () => {
                   window.location.href = `/participants?user=${rec.user_tg_id}`;
                 };
-                new bootstrap.Modal(document.getElementById("modal-receipt-view")).show();
+                currentReceiptId = rec.id;
+                new bootstrap.Modal(document.getElementById('modal-receipt-view')).show();
               });
           };
-          tr.querySelector(".btn-del").onclick = () => {
+          tr.querySelector('.btn-del').onclick = (ev) => {
+            ev.stopPropagation();
             if (!confirm("Удалить этот чек?")) return;
             fetch(`/api/receipts/${r.id}`, { method: "DELETE" })
               .then(()=>{ filtered = filtered.filter(x=>x.id!==r.id); render(); });
@@ -212,6 +220,20 @@
       }
 
       recPerPageSel.onchange = () => { currentPage = 1; render(); };
+      document.getElementById('save-receipt').onclick = () => {
+        if (currentReceiptId === null) return;
+        const status = document.getElementById('receipt-status').value;
+        fetch(`/api/receipts/${currentReceiptId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status })
+        }).then(() => {
+          const idx = data.findIndex(x=>x.id===currentReceiptId);
+          if (idx !== -1) data[idx].status = status;
+          filtered = [...data];
+          render();
+        });
+      };
       render();
     });
   </script>
