@@ -19,7 +19,6 @@ from pydantic import BaseModel
 # Админ-панель через SQLAdmin
 from sqladmin import Admin, ModelView
 import json
-import sql_mgt
 
 from aiogram import Bot
 from aiogram.enums import ParseMode
@@ -278,10 +277,11 @@ async def save_draw(draw: DrawIn):
 
 @app.get("/questions", response_class=HTMLResponse)
 async def questions(request: Request):
-    questions_raw = await sql_mgt.get_questions()
+    rows = await database.fetch_all(
+        questions_table.select().order_by(questions_table.c.create_dt.desc())
+    )
     questions = []
-    messages_by_q = {}
-    for q in questions_raw:
+    for q in rows:
         questions.append({
             "id": q["id"],
             "text": q["text"],
@@ -292,15 +292,17 @@ async def questions(request: Request):
                 "name": f"Пользователь {q['user_tg_id']}"
             }
         })
-        msgs = await sql_mgt.get_question_messages(q["id"])
-        messages_by_q[q["id"]] = [
-            {
-                "sender": m["sender"],
-                "text": m["text"],
-                "timestamp": m["timestamp"]
-            }
-            for m in msgs
-        ]
+    msgs = await database.fetch_all(
+        question_messages_table.select().order_by(question_messages_table.c.timestamp)
+    )
+    messages_by_q = {}
+    for m in msgs:
+        qid = m["question_id"]
+        messages_by_q.setdefault(qid, []).append({
+            "sender": m["sender"],
+            "text": m["text"],
+            "timestamp": m["timestamp"].isoformat()
+        })
     return templates.TemplateResponse(
         "questions.html",
         {
