@@ -9,7 +9,8 @@ pydantic
 pillow
 pyzbar
 opencv-python-headless
-numpy
+numpy==1.23.5
+pandas==1.5.3
 pytesseract
 python-multipart
 
