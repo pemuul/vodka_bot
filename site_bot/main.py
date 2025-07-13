@@ -584,3 +584,39 @@ async def api_send_message(user_tg_id: int, msg_in: SendMessageIn):
         "text": msg_in.text,
         "timestamp": sent.date.isoformat()
     }
+
+
+class AnswerIn(BaseModel):
+    text: str
+
+
+@app.post("/api/questions/{question_id}/answer")
+async def answer_question(question_id: int, ans: AnswerIn):
+    q = await database.fetch_one(
+        questions_table.select().where(questions_table.c.id == question_id)
+    )
+    if not q:
+        raise HTTPException(404, "Question not found")
+
+    try:
+        sent = await bot.send_message(chat_id=q["user_tg_id"], text=ans.text)
+    except Exception as e:
+        raise HTTPException(500, f"Telegram error: {e}")
+
+    await database.execute(
+        question_messages_table.insert().values(
+            question_id=question_id,
+            sender="admin",
+            text=ans.text,
+        )
+    )
+    await database.execute(
+        questions_table.update()
+        .where(questions_table.c.id == question_id)
+        .values(status="Отвечено")
+    )
+
+    return {
+        "success": True,
+        "timestamp": sent.date.isoformat()
+    }
