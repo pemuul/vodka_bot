@@ -30,7 +30,8 @@ def extract_text(opencv_image):
     rgb_image = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2RGB)
     for ocr in (ocr_ru, ocr_en):
         try:
-            results = ocr.ocr(rgb_image, cls=True)
+            # `cls` parameter is not supported by all PaddleOCR versions
+            results = ocr.ocr(rgb_image)
             for line in results:
                 if len(line) >= 2:
                     texts.append(line[1][0])
