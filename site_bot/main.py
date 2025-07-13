@@ -70,6 +70,12 @@ prize_draw_stages_table    = Table("prize_draw_stages", metadata, autoload_with=
 prize_draw_winners_table   = Table("prize_draw_winners", metadata, autoload_with=engine)
 participant_settings_table = Table("participant_settings", metadata, autoload_with=engine)
 participant_messages_table = Table("participant_messages", metadata, autoload_with=engine)
+
+# Some deployments may still use an older database schema without the
+# `is_answer` column.  Detect its presence so we can behave gracefully
+# when reading or writing data.
+HAS_PM_IS_ANSWER = 'is_answer' in participant_messages_table.c
+HAS_QM_IS_ANSWER = 'is_answer' in question_messages_table.c
 receipts_table             = Table("receipts", metadata, autoload_with=engine)
 images_table               = Table("images", metadata, autoload_with=engine)
 deleted_images_table       = Table("deleted_images", metadata, autoload_with=engine)
@@ -307,11 +313,12 @@ async def questions(request: Request):
     messages_by_q = {}
     for m in msgs:
         qid = m["question_id"]
+        is_answer = bool(m["is_answer"]) if HAS_QM_IS_ANSWER and "is_answer" in m else False
         messages_by_q.setdefault(qid, []).append({
             "sender": m["sender"],
             "text": m["text"],
-            "is_answer": bool(m["is_answer"]),
-            "timestamp": m["timestamp"].isoformat()
+            "is_answer": is_answer,
+            "timestamp": m["timestamp"].isoformat(),
         })
     return templates.TemplateResponse(
         "questions.html",
@@ -523,11 +530,12 @@ async def get_participant_messages(
         except json.JSONDecodeError:
             media = []
 
+        is_answer = bool(m["is_answer"]) if HAS_PM_IS_ANSWER and "is_answer" in m else False
         result.append({
             "id":         m["id"],
             "sender":     m["sender"],
             "text":       m["text"] or "",
-            "isAnswer":  bool(m["is_answer"]),
+            "isAnswer":   is_answer,
             "timestamp":  m["timestamp"].isoformat(),
             "is_deleted": bool(m["is_deleted"]),
             "buttons":    buttons,
@@ -581,15 +589,17 @@ async def api_send_message(user_tg_id: int, msg_in: SendMessageIn):
         raise HTTPException(500, f"Telegram error: {e}")
 
     # 2) логируем в БД
+    values = {
+        "user_tg_id": user_tg_id,
+        "sender": "admin",
+        "text": msg_in.text,
+        "buttons": None,
+        "media": None,
+    }
+    if HAS_PM_IS_ANSWER:
+        values["is_answer"] = False
     new_id = await database.execute(
-        participant_messages_table.insert().values(
-            user_tg_id=user_tg_id,
-            sender="admin",
-            text=msg_in.text,
-            is_answer=False,
-            buttons=None,
-            media=None
-        )
+        participant_messages_table.insert().values(**values)
     )
     # 3) возвращаем id и timestamp
     return {
@@ -617,23 +627,28 @@ async def answer_question(question_id: int, ans: AnswerIn):
     except Exception as e:
         raise HTTPException(500, f"Telegram error: {e}")
 
+    qmsg_values = {
+        "question_id": question_id,
+        "sender": "admin",
+        "text": ans.text,
+    }
+    if HAS_QM_IS_ANSWER:
+        qmsg_values["is_answer"] = True
     await database.execute(
-        question_messages_table.insert().values(
-            question_id=question_id,
-            sender="admin",
-            text=ans.text,
-            is_answer=True,
-        )
+        question_messages_table.insert().values(**qmsg_values)
     )
+
+    pm_values = {
+        "user_tg_id": q["user_tg_id"],
+        "sender": "admin",
+        "text": ans.text,
+        "buttons": None,
+        "media": None,
+    }
+    if HAS_PM_IS_ANSWER:
+        pm_values["is_answer"] = True
     await database.execute(
-        participant_messages_table.insert().values(
-            user_tg_id=q["user_tg_id"],
-            sender="admin",
-            text=ans.text,
-            is_answer=True,
-            buttons=None,
-            media=None,
-        )
+        participant_messages_table.insert().values(**pm_values)
     )
     await database.execute(
         questions_table.update()
