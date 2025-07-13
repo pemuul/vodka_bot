@@ -1,6 +1,6 @@
 # main.py
 
-from fastapi import FastAPI, Request, Form, HTTPException, Depends
+from fastapi import FastAPI, Request, Form, HTTPException, Depends, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -27,8 +27,12 @@ from pydantic import BaseModel
 # Админ-панель через SQLAdmin
 from sqladmin import Admin, ModelView
 import json
+import os
+import uuid
+from pathlib import Path
 
 from aiogram import Bot
+from aiogram.types import FSInputFile
 from aiogram.enums import ParseMode
 
 # ==============================
@@ -92,6 +96,8 @@ SessionLocal = sessionmaker(bind=engine)
 # ==============================
 app = FastAPI()
 app.state.static_version = str(int(datetime.datetime.utcnow().timestamp()))
+UPLOAD_DIR = Path(__file__).resolve().parent / "static" / "uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # Сначала регистрируем AuthMiddleware, затем SessionMiddleware,
 # чтобы сессия инициализировалась до проверки AuthMiddleware.
@@ -389,6 +395,26 @@ async def api_get_question_messages(question_id: int):
         })
     return {"messages": messages}
 
+# === Загрузка медиафайлов для рассылок ===
+@app.post("/api/media")
+async def upload_media(file: UploadFile = File(...)):
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in [".jpg", ".jpeg", ".png", ".gif", ".mp4", ".mov", ".avi", ".mkv"]:
+        raise HTTPException(400, "Only photo and video files are allowed")
+    fname = f"{uuid.uuid4().hex}{ext}"
+    dest = UPLOAD_DIR / fname
+    with dest.open("wb") as f:
+        f.write(await file.read())
+    return {"name": fname}
+
+
+@app.delete("/api/media/{name}")
+async def delete_media(name: str):
+    dest = UPLOAD_DIR / name
+    if dest.exists():
+        dest.unlink()
+    return {"success": True}
+
 @app.get("/scheduled-messages", response_class=HTMLResponse)
 async def scheduled_messages(request: Request):
     rows = await database.fetch_all(scheduled_messages_table.select())
@@ -422,11 +448,19 @@ class ScheduledMessageIn(BaseModel):
     content: str
     schedule: Optional[datetime.datetime] = None
     status: Optional[str] = "Новый"
-    media: Optional[List[Dict]] = None
+    media: Optional[List[Dict[str, str]]] = None
 
 @app.post("/scheduled-messages")
 async def save_scheduled_message(msg: ScheduledMessageIn):
-    media_json = json.dumps(msg.media) if msg.media else None
+    safe_media = []
+    if msg.media:
+        for m in msg.media:
+            typ = m.get("type")
+            name = m.get("file") or m.get("file_id")
+            if typ not in ("photo", "video") or not name:
+                continue
+            safe_media.append({"type": typ, "file": name})
+    media_json = json.dumps(safe_media) if safe_media else None
     if msg.id is None:
         new_id = await database.execute(
             scheduled_messages_table.insert().values(
@@ -494,25 +528,18 @@ async def test_send_scheduled_message(message_id: int):
                 await bot.send_message(uid, msg["content"])
             for m in media[:10]:
                 typ = m.get("type")
-                fid = m.get("file_id")
-                if not fid:
+                fname = m.get("file") or m.get("file_id")
+                if typ not in ("photo", "video") or not fname:
                     continue
-                if typ == "photo":
-                    await bot.send_photo(uid, fid)
-                elif typ == "video":
-                    await bot.send_video(uid, fid)
-                elif typ == "document":
-                    await bot.send_document(uid, fid)
-                elif typ == "audio":
-                    await bot.send_audio(uid, fid)
-                elif typ == "voice":
-                    await bot.send_voice(uid, fid)
-                elif typ == "animation":
-                    await bot.send_animation(uid, fid)
-                elif typ == "sticker":
-                    await bot.send_sticker(uid, fid)
+                local_path = UPLOAD_DIR / fname
+                if local_path.exists():
+                    fobj = FSInputFile(local_path)
                 else:
-                    await bot.send_document(uid, fid)
+                    fobj = fname
+                if typ == "photo":
+                    await bot.send_photo(uid, fobj)
+                else:
+                    await bot.send_video(uid, fobj)
         except Exception as e:
             print("send test error", e)
     return {"success": True}
@@ -542,25 +569,18 @@ async def send_scheduled_message(message_id: int):
                 await bot.send_message(uid, msg["content"])
             for m in media[:10]:
                 typ = m.get("type")
-                fid = m.get("file_id")
-                if not fid:
+                fname = m.get("file") or m.get("file_id")
+                if typ not in ("photo", "video") or not fname:
                     continue
-                if typ == "photo":
-                    await bot.send_photo(uid, fid)
-                elif typ == "video":
-                    await bot.send_video(uid, fid)
-                elif typ == "document":
-                    await bot.send_document(uid, fid)
-                elif typ == "audio":
-                    await bot.send_audio(uid, fid)
-                elif typ == "voice":
-                    await bot.send_voice(uid, fid)
-                elif typ == "animation":
-                    await bot.send_animation(uid, fid)
-                elif typ == "sticker":
-                    await bot.send_sticker(uid, fid)
+                local_path = UPLOAD_DIR / fname
+                if local_path.exists():
+                    fobj = FSInputFile(local_path)
                 else:
-                    await bot.send_document(uid, fid)
+                    fobj = fname
+                if typ == "photo":
+                    await bot.send_photo(uid, fobj)
+                else:
+                    await bot.send_video(uid, fobj)
         except Exception as e:
             print("send mailing error", e)
 

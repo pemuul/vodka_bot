@@ -164,7 +164,7 @@
             scheduleInput.value = msg.schedule;
             statusGroup.classList.remove("d-none");
             statusInput.value = msg.status;
-            mediaArr = msg.media || [];
+            mediaArr = msg.media ? msg.media.map(m=>({type:m.type,file:m.file||m.file_id||''})) : [];
             renderMediaFields();
             currentId = msg.id;
             copyBtn.classList.remove("d-none");
@@ -177,7 +177,7 @@
             contentInput.value = msg.content;
             scheduleInput.value = msg.schedule;
             statusGroup.classList.add("d-none");
-            mediaArr = msg.media ? JSON.parse(JSON.stringify(msg.media)) : [];
+            mediaArr = msg.media ? msg.media.map(m=>({type:m.type,file:m.file||m.file_id||''})) : [];
             renderMediaFields();
           }
         }
@@ -199,18 +199,32 @@
             <select class="form-select media-type">
               <option value="photo">photo</option>
               <option value="video">video</option>
-              <option value="document">document</option>
-              <option value="audio">audio</option>
-              <option value="voice">voice</option>
-              <option value="animation">animation</option>
-              <option value="sticker">sticker</option>
             </select>
-            <input type="text" class="form-control media-file" placeholder="file_id" />
+            <input type="file" class="form-control media-file" />
+            <span class="input-group-text filename">${m.file||''}</span>
             <button type="button" class="btn btn-outline-danger remove-media">×</button>
           `;
           grp.querySelector('.media-type').value = m.type || 'photo';
-          grp.querySelector('.media-file').value = m.file_id || '';
+          const fnameSpan = grp.querySelector('.filename');
+          grp.querySelector('.media-file').onchange = async (e) => {
+            const file = e.target.files[0];
+            if(!file) return;
+            const fd = new FormData();
+            fd.append('file', file);
+            const res = await fetch('/api/media', {method:'POST', body: fd});
+            if(res.ok){
+              const data = await res.json();
+              mediaArr[idx].file = data.name;
+              fnameSpan.textContent = data.name;
+            }else{
+              alert('Ошибка загрузки файла');
+            }
+          };
           grp.querySelector('.remove-media').onclick = () => {
+            const f = mediaArr[idx].file;
+            if(f){
+              fetch(`/api/media/${f}`, {method:'DELETE'});
+            }
             mediaArr.splice(idx,1);
             renderMediaFields();
           };
@@ -220,7 +234,7 @@
 
       addMediaBtn.onclick = () => {
         if(mediaArr.length >= 10) return;
-        mediaArr.push({type:'photo', file_id:''});
+        mediaArr.push({type:'photo', file:''});
         renderMediaFields();
       };
 
@@ -233,10 +247,7 @@
           content: contentInput.value.trim(),
           schedule: scheduleInput.value ? new Date(scheduleInput.value) : null,
           status: statusInput.value,
-          media: Array.from(mediaListElem.querySelectorAll('.input-group')).map(g=>({
-            type: g.querySelector('.media-type').value,
-            file_id: g.querySelector('.media-file').value.trim()
-          })).filter(m=>m.file_id)
+          media: mediaArr.filter(m=>m.file)
         };
         const res = await fetch("/scheduled-messages", {
           method: "POST",
