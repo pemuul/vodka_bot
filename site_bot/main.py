@@ -393,11 +393,16 @@ async def scheduled_messages(request: Request):
     rows = await database.fetch_all(scheduled_messages_table.select())
     messages = []
     for r in rows:
+        schedule_val = r["schedule_dt"]
+        if schedule_val is not None:
+            schedule_str = schedule_val.strftime("%Y-%m-%dT%H:%M")
+        else:
+            schedule_str = ""
         messages.append({
             "id": r["id"],
             "name": r["name"],
             "content": r["content"],
-            "schedule": r["schedule_dt"].strftime("%Y-%m-%dT%H:%M"),
+            "schedule": schedule_str,
             "status": r["status"],
         })
     return templates.TemplateResponse(
@@ -409,7 +414,7 @@ class ScheduledMessageIn(BaseModel):
     id: Optional[int] = None
     name: str
     content: str
-    schedule: datetime.datetime
+    schedule: Optional[datetime.datetime] = None
     status: Optional[str] = "Новый"
 
 @app.post("/scheduled-messages")
@@ -419,7 +424,7 @@ async def save_scheduled_message(msg: ScheduledMessageIn):
             scheduled_messages_table.insert().values(
                 name=msg.name,
                 content=msg.content,
-                schedule_dt=msg.schedule,
+                schedule_dt=msg.schedule or datetime.datetime.utcnow(),
                 status=msg.status
             )
         )
@@ -436,7 +441,7 @@ async def save_scheduled_message(msg: ScheduledMessageIn):
             .values(
                 name=msg.name,
                 content=msg.content,
-                schedule_dt=msg.schedule,
+                schedule_dt=msg.schedule or datetime.datetime.utcnow(),
                 status=msg.status
             )
         )
@@ -453,6 +458,51 @@ async def delete_scheduled_message(message_id: int):
         scheduled_messages_table.delete().where(scheduled_messages_table.c.id == message_id)
     )
     return JSONResponse({"success": True})
+
+
+@app.post("/scheduled-messages/{message_id}/test")
+async def test_send_scheduled_message(message_id: int):
+    msg = await database.fetch_one(
+        scheduled_messages_table.select().where(scheduled_messages_table.c.id == message_id)
+    )
+    if not msg:
+        raise HTTPException(404, "Message not found")
+
+    testers = await database.fetch_all(
+        participant_settings_table.select().where(participant_settings_table.c.tester == True)
+    )
+    ids = [r["user_tg_id"] for r in testers]
+    for uid in ids:
+        try:
+            await bot.send_message(uid, msg["content"])
+        except Exception as e:
+            print("send test error", e)
+    return {"success": True}
+
+
+@app.post("/scheduled-messages/{message_id}/send")
+async def send_scheduled_message(message_id: int):
+    msg = await database.fetch_one(
+        scheduled_messages_table.select().where(scheduled_messages_table.c.id == message_id)
+    )
+    if not msg:
+        raise HTTPException(404, "Message not found")
+
+    users = await database.fetch_all(users_table.select())
+    ids = [u["tg_id"] for u in users]
+    for uid in ids:
+        try:
+            await bot.send_message(uid, msg["content"])
+        except Exception as e:
+            print("send mailing error", e)
+
+    now = datetime.datetime.utcnow()
+    await database.execute(
+        scheduled_messages_table.update()
+        .where(scheduled_messages_table.c.id == message_id)
+        .values(schedule_dt=now, status="Отправлено")
+    )
+    return {"success": True}
 
 @app.get("/participants", response_class=HTMLResponse)
 async def participants(request: Request):
