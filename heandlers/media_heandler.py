@@ -19,6 +19,19 @@ from PIL import Image
 import pytesseract
 
 
+def extract_text(opencv_image):
+    """Improve OCR quality using preprocessing before pytesseract."""
+    gray = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.resize(gray, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    gray = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2
+    )
+    gray = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, np.ones((1, 1), np.uint8))
+    config = "--oem 3 --psm 6"
+    return pytesseract.image_to_string(gray, lang="rus+eng", config=config)
+
+
 
 router = Router()
 global_objects = None
@@ -61,9 +74,9 @@ async def set_photo(message: Message) -> None:
             else:
                 text = ''
                 try:
-                    text = pytesseract.image_to_string(opencv_image, lang='rus+eng')
+                    text = extract_text(opencv_image)
                 except Exception:
-                    pass
+                    text = ''
                 lower = text.lower()
                 if 'водк' in lower and ('фин' in lower or 'fin' in lower):
                     await message.reply('Чек принят!')
