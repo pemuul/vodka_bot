@@ -1,4 +1,5 @@
 from aiogram import Router,  F
+import asyncio
 from aiogram.types import Message
 import time
 import random
@@ -13,9 +14,6 @@ from keyboards import admin_kb
 
 import cv2
 from pyzbar.pyzbar import decode
-import numpy as np
-from io import BytesIO
-from PIL import Image
 # OCR helper based on Tesseract with Russian and English models
 from ocr import extract_text
 
@@ -35,6 +33,42 @@ def init_object(global_objects_inp):
     sql_mgt.init_object(global_objects_inp)
 
 
+def _analyze_check(path: str):
+    """Run heavy OCR logic in a separate process."""
+    img = cv2.imread(path)
+    if img is None:
+        return None, False
+
+    decoded_objects = decode(img)
+    qr_data = decoded_objects[0].data.decode("utf-8") if decoded_objects else None
+
+    text = ""
+    if qr_data is None:
+        try:
+            text = extract_text(img)
+        except Exception:
+            text = ""
+    lower = text.lower()
+    vodka = "водк" in lower and ("фин" in lower or "fin" in lower)
+    return qr_data, vodka
+
+
+async def process_receipt(dest: Path, chat_id: int):
+    loop = asyncio.get_running_loop()
+    qr_data, vodka = await loop.run_in_executor(global_objects.ocr_pool, _analyze_check, str(dest))
+    if qr_data:
+        await global_objects.bot.send_message(chat_id, f"QR-код найден! Значение: {qr_data}")
+        status = "Подтвержден"
+    elif vodka:
+        await global_objects.bot.send_message(chat_id, "Чек принят!")
+        status = "Подтвержден"
+    else:
+        await global_objects.bot.send_message(chat_id, "Пожалуйста, пришлите чек ещё раз, на фото не видно нужных данных.")
+        status = "Не подтвержден"
+
+    await sql_mgt.add_receipt(str(dest), chat_id, status)
+
+
 @router.message(F.photo)
 async def set_photo(message: Message) -> None:
     await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', 'yes')
@@ -44,36 +78,13 @@ async def set_photo(message: Message) -> None:
         photo = message.photo[-1]
         try:
             photo_file = await global_objects.bot.download(photo.file_id)
-            image = Image.open(BytesIO(photo_file.getvalue())).convert('RGB')
-            opencv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-
             fname = f"{uuid.uuid4().hex}.jpg"
             dest = UPLOAD_DIR_CHECKS / fname
             with dest.open("wb") as f:
                 f.write(photo_file.getvalue())
 
-            decoded_objects = decode(opencv_image)
-            status = 'Подтвержден'
-            if decoded_objects:
-                for obj in decoded_objects:
-                    qr_data = obj.data.decode('utf-8')
-                    await message.reply(f'QR-код найден! Значение: {qr_data}')
-                    break
-            else:
-                text = ''
-                try:
-                    text = extract_text(opencv_image)
-                except Exception:
-                    text = ''
-                lower = text.lower()
-                if 'водк' in lower and ('фин' in lower or 'fin' in lower):
-                    await message.reply('Чек принят!')
-                else:
-                    status = 'Не подтвержден'
-                    await message.reply('Пожалуйста, пришлите чек ещё раз, на фото не видно нужных данных.')
-
-            await sql_mgt.add_receipt(str(dest), message.chat.id, status)
-            await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))
+            await message.reply('Чек получен, идёт обработка...')
+            asyncio.create_task(process_receipt(dest, message.chat.id))
             return
         except Exception as e:
             await message.reply('Ошибка при обработке чека. Попробуйте ещё раз.')
