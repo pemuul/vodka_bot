@@ -76,6 +76,7 @@ participant_messages_table = Table("participant_messages", metadata, autoload_wi
 # when reading or writing data.
 HAS_PM_IS_ANSWER = 'is_answer' in participant_messages_table.c
 HAS_QM_IS_ANSWER = 'is_answer' in question_messages_table.c
+HAS_SM_MEDIA = 'media' in scheduled_messages_table.c
 receipts_table             = Table("receipts", metadata, autoload_with=engine)
 images_table               = Table("images", metadata, autoload_with=engine)
 deleted_images_table       = Table("deleted_images", metadata, autoload_with=engine)
@@ -398,12 +399,17 @@ async def scheduled_messages(request: Request):
             schedule_str = schedule_val.strftime("%Y-%m-%dT%H:%M")
         else:
             schedule_str = ""
+        try:
+            media = json.loads(r["media"]) if HAS_SM_MEDIA and r["media"] else []
+        except Exception:
+            media = []
         messages.append({
             "id": r["id"],
             "name": r["name"],
             "content": r["content"],
             "schedule": schedule_str,
             "status": r["status"],
+            "media": media,
         })
     return templates.TemplateResponse(
         "scheduled_messages.html",
@@ -416,16 +422,19 @@ class ScheduledMessageIn(BaseModel):
     content: str
     schedule: Optional[datetime.datetime] = None
     status: Optional[str] = "Новый"
+    media: Optional[List[Dict]] = None
 
 @app.post("/scheduled-messages")
 async def save_scheduled_message(msg: ScheduledMessageIn):
+    media_json = json.dumps(msg.media) if msg.media else None
     if msg.id is None:
         new_id = await database.execute(
             scheduled_messages_table.insert().values(
                 name=msg.name,
                 content=msg.content,
                 schedule_dt=msg.schedule or datetime.datetime.utcnow(),
-                status=msg.status
+                status=msg.status,
+                **({"media": media_json} if HAS_SM_MEDIA else {})
             )
         )
         return {"success": True, "id": new_id}
@@ -442,7 +451,8 @@ async def save_scheduled_message(msg: ScheduledMessageIn):
                 name=msg.name,
                 content=msg.content,
                 schedule_dt=msg.schedule or datetime.datetime.utcnow(),
-                status=msg.status
+                status=msg.status,
+                **({"media": media_json} if HAS_SM_MEDIA else {})
             )
         )
         return {"success": True, "id": msg.id}
@@ -472,9 +482,37 @@ async def test_send_scheduled_message(message_id: int):
         participant_settings_table.select().where(participant_settings_table.c.tester == True)
     )
     ids = [r["user_tg_id"] for r in testers]
+    media = []
+    if HAS_SM_MEDIA:
+        try:
+            media = json.loads(msg["media"]) if msg["media"] else []
+        except Exception:
+            media = []
     for uid in ids:
         try:
-            await bot.send_message(uid, msg["content"])
+            if msg["content"]:
+                await bot.send_message(uid, msg["content"])
+            for m in media[:10]:
+                typ = m.get("type")
+                fid = m.get("file_id")
+                if not fid:
+                    continue
+                if typ == "photo":
+                    await bot.send_photo(uid, fid)
+                elif typ == "video":
+                    await bot.send_video(uid, fid)
+                elif typ == "document":
+                    await bot.send_document(uid, fid)
+                elif typ == "audio":
+                    await bot.send_audio(uid, fid)
+                elif typ == "voice":
+                    await bot.send_voice(uid, fid)
+                elif typ == "animation":
+                    await bot.send_animation(uid, fid)
+                elif typ == "sticker":
+                    await bot.send_sticker(uid, fid)
+                else:
+                    await bot.send_document(uid, fid)
         except Exception as e:
             print("send test error", e)
     return {"success": True}
@@ -490,9 +528,39 @@ async def send_scheduled_message(message_id: int):
 
     users = await database.fetch_all(users_table.select())
     ids = [u["tg_id"] for u in users]
+
+    media = []
+    if HAS_SM_MEDIA:
+        try:
+            media = json.loads(msg["media"]) if msg["media"] else []
+        except Exception:
+            media = []
+
     for uid in ids:
         try:
-            await bot.send_message(uid, msg["content"])
+            if msg["content"]:
+                await bot.send_message(uid, msg["content"])
+            for m in media[:10]:
+                typ = m.get("type")
+                fid = m.get("file_id")
+                if not fid:
+                    continue
+                if typ == "photo":
+                    await bot.send_photo(uid, fid)
+                elif typ == "video":
+                    await bot.send_video(uid, fid)
+                elif typ == "document":
+                    await bot.send_document(uid, fid)
+                elif typ == "audio":
+                    await bot.send_audio(uid, fid)
+                elif typ == "voice":
+                    await bot.send_voice(uid, fid)
+                elif typ == "animation":
+                    await bot.send_animation(uid, fid)
+                elif typ == "sticker":
+                    await bot.send_sticker(uid, fid)
+                else:
+                    await bot.send_document(uid, fid)
         except Exception as e:
             print("send mailing error", e)
 

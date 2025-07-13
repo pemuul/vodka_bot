@@ -21,7 +21,7 @@
 
     "questions": "questions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_tg_id INTEGER NOT NULL, text TEXT NOT NULL, type TEXT NOT NULL, status TEXT NOT NULL, create_dt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
     "question_messages": "question_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, question_id INTEGER NOT NULL, sender TEXT NOT NULL, text TEXT NOT NULL, is_answer BOOLEAN DEFAULT FALSE, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
-    "scheduled_messages": "scheduled_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, content TEXT NOT NULL, schedule_dt DATETIME NOT NULL, status TEXT NOT NULL, create_dt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+    "scheduled_messages": "scheduled_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, content TEXT NOT NULL, schedule_dt DATETIME NOT NULL, status TEXT NOT NULL, media TEXT DEFAULT NULL, create_dt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
     "prize_draws": "prize_draws (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, start_date DATE NOT NULL, end_date DATE NOT NULL, status TEXT NOT NULL, create_dt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
     "prize_draw_stages": "prize_draw_stages (id INTEGER PRIMARY KEY AUTOINCREMENT, draw_id INTEGER NOT NULL, name TEXT NOT NULL, description TEXT, winners_count INTEGER DEFAULT 1, text_before TEXT, text_after TEXT, order_index INTEGER DEFAULT 0, create_dt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
     "prize_draw_winners": "prize_draw_winners (id INTEGER PRIMARY KEY AUTOINCREMENT, stage_id INTEGER NOT NULL, user_tg_id INTEGER, winner_name TEXT NOT NULL, create_dt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
