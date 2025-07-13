@@ -1,0 +1,15 @@
+aiogram
+fastapi
+uvicorn
+sqlalchemy
+databases[sqlite]
+Jinja2
+sqladmin
+pydantic
+pillow
+pyzbar
+opencv-python-headless
+numpy
+paddleocr
+python-multipart
+

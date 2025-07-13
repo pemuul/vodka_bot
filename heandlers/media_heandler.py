@@ -16,20 +16,27 @@ from pyzbar.pyzbar import decode
 import numpy as np
 from io import BytesIO
 from PIL import Image
-import pytesseract
+from paddleocr import PaddleOCR
+
+# Two OCR instances for Russian and English text
+ocr_ru = PaddleOCR(use_angle_cls=True, lang="ru")
+ocr_en = PaddleOCR(use_angle_cls=True, lang="en")
 
 
 def extract_text(opencv_image):
-    """Improve OCR quality using preprocessing before pytesseract."""
-    gray = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2GRAY)
-    gray = cv2.resize(gray, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
-    gray = cv2.GaussianBlur(gray, (5, 5), 0)
-    gray = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2
-    )
-    gray = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, np.ones((1, 1), np.uint8))
-    config = "--oem 3 --psm 6"
-    return pytesseract.image_to_string(gray, lang="rus+eng", config=config)
+    """Recognize Russian and English text using PaddleOCR."""
+    texts = []
+    # PaddleOCR expects RGB images
+    rgb_image = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2RGB)
+    for ocr in (ocr_ru, ocr_en):
+        try:
+            results = ocr.ocr(rgb_image, cls=True)
+            for line in results:
+                if len(line) >= 2:
+                    texts.append(line[1][0])
+        except Exception as e:
+            print(f"OCR error: {e}")
+    return " ".join(texts)
 
 
 
