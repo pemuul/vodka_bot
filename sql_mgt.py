@@ -988,6 +988,7 @@ async def add_participant_message(
     user_tg_id: int,
     sender: str,
     text: Optional[str] = None,
+    is_answer: bool = False,
     buttons: Optional[List[Dict[str, Any]]] = None,
     media: Optional[List[Dict[str, Any]]] = None,
     timestamp: Optional[datetime.datetime] = None,
@@ -1005,10 +1006,10 @@ async def add_participant_message(
     await cursor.execute(
         """
         INSERT INTO participant_messages
-          (user_tg_id, sender, text, buttons, media, timestamp, is_deleted)
-        VALUES (?, ?, ?, ?, ?, ?, 0)
+          (user_tg_id, sender, text, is_answer, buttons, media, timestamp, is_deleted)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
         """,
-        (user_tg_id, sender, text, buttons_json, media_json, ts),
+        (user_tg_id, sender, text, int(is_answer), buttons_json, media_json, ts),
     )
     await conn.commit()
     return cursor.lastrowid
@@ -1030,7 +1031,7 @@ async def get_participant_messages(
 ) -> List[Dict[str, Any]]:
     cursor = await conn.cursor()
     sql = """
-      SELECT id, sender, text, timestamp, is_deleted
+      SELECT id, sender, text, is_answer, timestamp, is_deleted
       FROM participant_messages
       WHERE user_tg_id = ?
     """
@@ -1047,8 +1048,9 @@ async def get_participant_messages(
             "id": r[0],
             "sender": r[1],
             "text": r[2],
-            "timestamp": r[3].isoformat(),
-            "is_deleted": bool(r[4]),
+            "is_answer": bool(r[3]),
+            "timestamp": r[4].isoformat(),
+            "is_deleted": bool(r[5]),
         }
         for r in rows
     ]
@@ -1066,11 +1068,11 @@ async def add_question(user_tg_id: int, text: str, type_: str = 'text', status: 
 
 
 @with_connection
-async def add_question_message(question_id: int, sender: str, text: str, conn=None) -> int:
+async def add_question_message(question_id: int, sender: str, text: str, is_answer: bool = False, conn=None) -> int:
     cursor = await conn.cursor()
     await cursor.execute(
-        "INSERT INTO question_messages (question_id, sender, text) VALUES (?, ?, ?)",
-        (question_id, sender, text),
+        "INSERT INTO question_messages (question_id, sender, text, is_answer) VALUES (?, ?, ?, ?)",
+        (question_id, sender, text, int(is_answer)),
     )
     await conn.commit()
     return cursor.lastrowid
@@ -1101,7 +1103,7 @@ async def get_questions(conn=None) -> List[Dict[str, Any]]:
 async def get_question_messages(question_id: int, conn=None) -> List[Dict[str, Any]]:
     cursor = await conn.cursor()
     await cursor.execute(
-        "SELECT question_id, sender, text, timestamp FROM question_messages WHERE question_id = ? ORDER BY timestamp",
+        "SELECT question_id, sender, text, is_answer, timestamp FROM question_messages WHERE question_id = ? ORDER BY timestamp",
         (question_id,),
     )
     rows = await cursor.fetchall()
@@ -1111,7 +1113,8 @@ async def get_question_messages(question_id: int, conn=None) -> List[Dict[str, A
             "question_id": r[0],
             "sender": r[1],
             "text": r[2],
-            "timestamp": r[3].isoformat() if hasattr(r[3], 'isoformat') else r[3],
+            "is_answer": bool(r[3]),
+            "timestamp": r[4].isoformat() if hasattr(r[4], 'isoformat') else r[4],
         }
         for r in rows
     ]

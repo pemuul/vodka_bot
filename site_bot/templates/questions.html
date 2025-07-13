@@ -120,8 +120,12 @@
             div.classList.add("bg-primary","text-white");
             div.style.alignSelf = "flex-end";
           }
-          div.innerHTML = `<p class="mb-1">${msg.text}</p>
-                           <small class="text-muted">${msg.timestamp}</small>`;
+          let html = `<p class="mb-1">${msg.text}</p>`;
+          if (msg.sender !== "user" && msg.is_answer) {
+            html = `<small class="d-block">Ответ</small>` + html;
+          }
+          html += `<small class="text-muted">${msg.timestamp}</small>`;
+          div.innerHTML = html;
           chatWindow.appendChild(div);
         });
         chatWindow.scrollTop = chatWindow.scrollHeight;
@@ -140,7 +144,7 @@
             if (!resp.ok) throw new Error("HTTP error");
             const data = await resp.json();
             const ts = data.timestamp;
-            const newMsg = { sender: "admin", text, timestamp: ts };
+            const newMsg = { sender: "admin", text, timestamp: ts, is_answer: true };
             history.push(newMsg);
             question.status = "Отвечено";
             renderQuestions();
@@ -148,7 +152,7 @@
             const div = document.createElement("div");
             div.classList.add("mb-2","p-2","rounded","bg-primary","text-white");
             div.style.alignSelf = "flex-end"; div.style.maxWidth = "75%";
-            div.innerHTML = `<p class="mb-1">${text}</p><small class="text-muted">${ts}</small>`;
+            div.innerHTML = `<small class="d-block">Ответ</small><p class="mb-1">${text}</p><small class="text-muted">${ts}</small>`;
             chatWindow.appendChild(div);
             chatWindow.scrollTop = chatWindow.scrollHeight;
             input.value = "";

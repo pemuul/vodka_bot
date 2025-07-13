@@ -364,10 +364,16 @@
             );
             if (!isUser) bubble.classList.add("text-white");
 
-            const textEl = document.createElement("div");
-            textEl.className = "mb-1";
-            textEl.textContent = msg.text;
-            bubble.append(textEl);
+          const textEl = document.createElement("div");
+          textEl.className = "mb-1";
+          textEl.textContent = msg.text;
+          if (!isUser && msg.isAnswer) {
+            const lbl = document.createElement("small");
+            lbl.className = "d-block text-warning";
+            lbl.textContent = "Ответ";
+            bubble.append(lbl);
+          }
+          bubble.append(textEl);
 
             if (!isUser && msg.buttons?.length) {
               const c = document.createElement("div");

@@ -310,6 +310,7 @@ async def questions(request: Request):
         messages_by_q.setdefault(qid, []).append({
             "sender": m["sender"],
             "text": m["text"],
+            "is_answer": bool(m["is_answer"]),
             "timestamp": m["timestamp"].isoformat()
         })
     return templates.TemplateResponse(
@@ -526,6 +527,7 @@ async def get_participant_messages(
             "id":         m["id"],
             "sender":     m["sender"],
             "text":       m["text"] or "",
+            "isAnswer":  bool(m["is_answer"]),
             "timestamp":  m["timestamp"].isoformat(),
             "is_deleted": bool(m["is_deleted"]),
             "buttons":    buttons,
@@ -584,6 +586,7 @@ async def api_send_message(user_tg_id: int, msg_in: SendMessageIn):
             user_tg_id=user_tg_id,
             sender="admin",
             text=msg_in.text,
+            is_answer=False,
             buttons=None,
             media=None
         )
@@ -619,6 +622,17 @@ async def answer_question(question_id: int, ans: AnswerIn):
             question_id=question_id,
             sender="admin",
             text=ans.text,
+            is_answer=True,
+        )
+    )
+    await database.execute(
+        participant_messages_table.insert().values(
+            user_tg_id=q["user_tg_id"],
+            sender="admin",
+            text=ans.text,
+            is_answer=True,
+            buttons=None,
+            media=None,
         )
     )
     await database.execute(
@@ -629,5 +643,6 @@ async def answer_question(question_id: int, ans: AnswerIn):
 
     return {
         "success": True,
-        "timestamp": sent.date.isoformat()
+        "timestamp": sent.date.isoformat(),
+        "is_answer": True
     }
