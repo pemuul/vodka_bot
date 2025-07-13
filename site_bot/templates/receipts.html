@@ -230,10 +230,14 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ status })
         }).then(() => {
-          const idx = data.findIndex(x=>x.id===currentReceiptId);
+          const idx = data.findIndex(x => x.id === currentReceiptId);
           if (idx !== -1) data[idx].status = status;
           filtered = [...data];
           render();
+          const modalEl = document.getElementById('modal-receipt-view');
+          const m = bootstrap.Modal.getInstance(modalEl);
+          if (m) m.hide();
+          currentReceiptId = null;
         });
       };
       render();
