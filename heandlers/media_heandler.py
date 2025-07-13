@@ -16,28 +16,7 @@ from pyzbar.pyzbar import decode
 import numpy as np
 from io import BytesIO
 from PIL import Image
-from paddleocr import PaddleOCR
-
-# Two OCR instances for Russian and English text
-ocr_ru = PaddleOCR(use_angle_cls=True, lang="ru")
-ocr_en = PaddleOCR(use_angle_cls=True, lang="en")
-
-
-def extract_text(opencv_image):
-    """Recognize Russian and English text using PaddleOCR."""
-    texts = []
-    # PaddleOCR expects RGB images
-    rgb_image = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2RGB)
-    for ocr in (ocr_ru, ocr_en):
-        try:
-            # `cls` parameter is not supported by all PaddleOCR versions
-            results = ocr.ocr(rgb_image)
-            for line in results:
-                if len(line) >= 2:
-                    texts.append(line[1][0])
-        except Exception as e:
-            print(f"OCR error: {e}")
-    return " ".join(texts)
+from ocr import extract_text_tesseract as extract_text
 
 
 
