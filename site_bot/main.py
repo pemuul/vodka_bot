@@ -695,7 +695,7 @@ async def receipts(request: Request):
         receipts.append({
             "id": r["id"],
             "number": r["number"],
-            "date": r["date"].isoformat(),
+            "date": r["date"].isoformat() if r["date"] else None,
             "amount": r["amount"],
             "user_tg_id": r["user_tg_id"],
             "file_path": r["file_path"],
@@ -716,7 +716,7 @@ async def get_receipt(receipt_id: int):
     return {
         "id": r["id"],
         "number": r["number"],
-        "date": r["date"].isoformat(),
+        "date": r["date"].isoformat() if r["date"] else None,
         "amount": r["amount"],
         "user_tg_id": r["user_tg_id"],
         "file_path": r["file_path"],
