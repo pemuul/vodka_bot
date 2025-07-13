@@ -203,9 +203,29 @@
             <input type="file" class="form-control media-file" accept="image/*,video/*" />
             <span class="input-group-text filename">${m.file||''}</span>
             <button type="button" class="btn btn-outline-danger remove-media">×</button>
+            <div class="ms-2 preview" style="width:100px"></div>
           `;
           grp.querySelector('.media-type').value = m.type || 'photo';
+          const typeSelect = grp.querySelector('.media-type');
           const fnameSpan = grp.querySelector('.filename');
+          const previewDiv = grp.querySelector('.preview');
+
+          function updatePreview() {
+            const f = mediaArr[idx].file;
+            const t = typeSelect.value;
+            if (f) {
+              const url = `/static/uploads/${f}`;
+              if (t === 'photo') {
+                previewDiv.innerHTML = `<img src="${url}" class="img-thumbnail" style="max-width:100px; max-height:80px">`;
+              } else {
+                previewDiv.innerHTML = `<video src="${url}" class="img-thumbnail" style="max-width:100px; max-height:80px" muted loop></video>`;
+              }
+            } else {
+              previewDiv.innerHTML = '';
+            }
+          }
+
+          typeSelect.onchange = updatePreview;
           grp.querySelector('.media-file').onchange = async (e) => {
             const file = e.target.files[0];
             if(!file) return;
@@ -216,6 +236,7 @@
               const data = await res.json();
               mediaArr[idx].file = data.name;
               fnameSpan.textContent = data.name;
+              updatePreview();
             }else{
               alert('Ошибка загрузки файла');
             }
@@ -228,6 +249,7 @@
             mediaArr.splice(idx,1);
             renderMediaFields();
           };
+          updatePreview();
           mediaListElem.appendChild(grp);
         });
       }

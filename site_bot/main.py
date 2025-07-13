@@ -32,7 +32,7 @@ import uuid
 from pathlib import Path
 
 from aiogram import Bot
-from aiogram.types import FSInputFile
+from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo
 from aiogram.enums import ParseMode
 
 # ==============================
@@ -524,22 +524,37 @@ async def test_send_scheduled_message(message_id: int):
             media = []
     for uid in ids:
         try:
-            if msg["content"]:
-                await bot.send_message(uid, msg["content"])
+            files = []
             for m in media[:10]:
                 typ = m.get("type")
                 fname = m.get("file") or m.get("file_id")
                 if typ not in ("photo", "video") or not fname:
                     continue
-                local_path = UPLOAD_DIR / fname
-                if local_path.exists():
-                    fobj = FSInputFile(local_path)
+                local = UPLOAD_DIR / fname
+                if local.exists():
+                    obj = FSInputFile(local)
                 else:
-                    fobj = fname
+                    obj = fname
+                files.append((typ, obj))
+
+            if not files:
+                if msg["content"]:
+                    await bot.send_message(uid, msg["content"])
+            elif len(files) == 1:
+                typ, fobj = files[0]
                 if typ == "photo":
-                    await bot.send_photo(uid, fobj)
+                    await bot.send_photo(uid, fobj, caption=msg["content"] or None)
                 else:
-                    await bot.send_video(uid, fobj)
+                    await bot.send_video(uid, fobj, caption=msg["content"] or None)
+            else:
+                media_group = []
+                for i, (typ, fobj) in enumerate(files):
+                    caption = msg["content"] if i == 0 else None
+                    if typ == "photo":
+                        media_group.append(InputMediaPhoto(media=fobj, caption=caption))
+                    else:
+                        media_group.append(InputMediaVideo(media=fobj, caption=caption))
+                await bot.send_media_group(uid, media_group)
         except Exception as e:
             print("send test error", e)
     return {"success": True}
@@ -565,22 +580,37 @@ async def send_scheduled_message(message_id: int):
 
     for uid in ids:
         try:
-            if msg["content"]:
-                await bot.send_message(uid, msg["content"])
+            files = []
             for m in media[:10]:
                 typ = m.get("type")
                 fname = m.get("file") or m.get("file_id")
                 if typ not in ("photo", "video") or not fname:
                     continue
-                local_path = UPLOAD_DIR / fname
-                if local_path.exists():
-                    fobj = FSInputFile(local_path)
+                local = UPLOAD_DIR / fname
+                if local.exists():
+                    obj = FSInputFile(local)
                 else:
-                    fobj = fname
+                    obj = fname
+                files.append((typ, obj))
+
+            if not files:
+                if msg["content"]:
+                    await bot.send_message(uid, msg["content"])
+            elif len(files) == 1:
+                typ, fobj = files[0]
                 if typ == "photo":
-                    await bot.send_photo(uid, fobj)
+                    await bot.send_photo(uid, fobj, caption=msg["content"] or None)
                 else:
-                    await bot.send_video(uid, fobj)
+                    await bot.send_video(uid, fobj, caption=msg["content"] or None)
+            else:
+                media_group = []
+                for i, (typ, fobj) in enumerate(files):
+                    caption = msg["content"] if i == 0 else None
+                    if typ == "photo":
+                        media_group.append(InputMediaPhoto(media=fobj, caption=caption))
+                    else:
+                        media_group.append(InputMediaVideo(media=fobj, caption=caption))
+                await bot.send_media_group(uid, media_group)
         except Exception as e:
             print("send mailing error", e)
 
