@@ -16,7 +16,7 @@ from pyzbar.pyzbar import decode
 import numpy as np
 from io import BytesIO
 from PIL import Image
-# Use EasyOCR-based helper for better recognition of Russian and English text
+# OCR helper based on Tesseract with Russian and English models
 from ocr import extract_text
 
 
