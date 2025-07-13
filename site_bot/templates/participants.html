@@ -234,6 +234,9 @@
       const nameField            = document.getElementById("part-name-field");
       const phoneField           = document.getElementById("part-phone-field");
 
+      const urlParams = new URLSearchParams(location.search);
+      const openId = urlParams.get("open");
+
       // состояние
       let filtered        = [...participants];
       let currentPage     = 1;
@@ -517,6 +520,10 @@
 
       // запуск
       renderList();
+      if (openId) {
+        const p = participants.find(x => String(x.id) === openId);
+        if (p) openParticipant(p);
+      }
     });
   </script>
 {% endblock %}

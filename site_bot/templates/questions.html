@@ -12,17 +12,25 @@
       </ol>
     </nav>
     <div class="d-flex justify-content-between align-items-center mb-4">
-      <h1 class="h3">Вопросы</h1>
-      <button id="refresh-questions" class="btn btn-outline-primary">Обновить</button>
+      <h1 class="h3 mb-0">Вопросы</h1>
+      <div class="d-flex align-items-center gap-2">
+        <select id="status-filter" class="form-select form-select-sm">
+          <option value="all">Все</option>
+          <option value="Новый">Новые</option>
+          <option value="Отвечено">Отвеченные</option>
+        </select>
+        <button id="refresh-questions" class="btn btn-outline-primary">Обновить</button>
+      </div>
     </div>
 
     <div class="card">
       <div class="card-body">
-        <table class="table table-hover" id="questions-table">
+        <table class="table table-hover mb-0" id="questions-table">
           <thead>
             <tr>
               <th>#</th>
               <th>Текст вопроса</th>
+              <th>Пользователь</th>
               <th>Тип</th>
               <th>Статус</th>
               <th>Действия</th>
@@ -30,6 +38,24 @@
           </thead>
           <tbody></tbody>
         </table>
+      </div>
+      <div class="card-footer d-flex justify-content-between align-items-center">
+        <div class="text-muted">
+          Показано с <span id="page-start">0</span> по <span id="page-end">0</span> из <span id="page-total">0</span>
+        </div>
+        <div class="d-flex align-items-center">
+          <label for="records-per-page" class="me-2 mb-0">на страницу:</label>
+          <select id="records-per-page" class="form-select form-select-sm">
+            <option value="5">5</option>
+            <option value="10" selected>10</option>
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="all">Все</option>
+          </select>
+        </div>
+        <nav aria-label="Пагинация">
+          <ul class="pagination mb-0" id="pagination-ul"></ul>
+        </nav>
       </div>
     </div>
   </div>
@@ -40,7 +66,7 @@
       <div class="d-flex align-items-center mb-3">
         <div class="me-3"><i class="bi bi-person-circle fs-2"></i></div>
         <div>
-          <h5 id="conv-username" class="mb-0"></h5>
+          <h5 class="mb-0"><a id="conv-username" class="text-decoration-none" href="#"></a></h5>
           <small id="conv-userid" class="text-muted"></small>
         </div>
       </div>
@@ -66,23 +92,68 @@
 
   <script>
     // данные из бэка
-    const questionsData = {{ questions_data | default([]) | tojson }};
-    const messagesData = {{ messages_data | default({}) | tojson }};
+    let questionsData = {{ questions_data | default([]) | tojson }};
+    let messagesData  = {{ messages_data | default({}) | tojson }};
 
     document.addEventListener("DOMContentLoaded", () => {
-      const listContainer = document.getElementById("questions-list");
-      const convContainer = document.getElementById("conversation-view");
-      const tableBody    = document.querySelector("#questions-table tbody");
-      const refreshBtn   = document.getElementById("refresh-questions");
-      const backBtn      = document.getElementById("back-to-list");
+      const listContainer        = document.getElementById("questions-list");
+      const convContainer        = document.getElementById("conversation-view");
+      const tableBody            = document.querySelector("#questions-table tbody");
+      const refreshBtn           = document.getElementById("refresh-questions");
+      const backBtn              = document.getElementById("back-to-list");
+      const statusFilter         = document.getElementById("status-filter");
+      const recordsPerPageSelect = document.getElementById("records-per-page");
+      const pageStartElem        = document.getElementById("page-start");
+      const pageEndElem          = document.getElementById("page-end");
+      const pageTotalElem        = document.getElementById("page-total");
+      const paginationUl         = document.getElementById("pagination-ul");
+
+      let filtered    = [...questionsData];
+      let currentPage = 1;
+
+      function getPaginated() {
+        const per = recordsPerPageSelect.value === "all"
+          ? filtered.length
+          : +recordsPerPageSelect.value;
+        return per === filtered.length
+          ? filtered
+          : filtered.slice((currentPage - 1) * per, (currentPage - 1) * per + per);
+      }
+
+      function updatePagination() {
+        const per   = recordsPerPageSelect.value === "all"
+                      ? filtered.length
+                      : +recordsPerPageSelect.value;
+        const total = filtered.length;
+        pageStartElem.textContent = total ? ((currentPage - 1) * per + 1) : 0;
+        pageEndElem.textContent   = per ? Math.min(currentPage * per, total) : total;
+        pageTotalElem.textContent = total;
+
+        const totalPages = per ? Math.ceil(total / per) : 1;
+        paginationUl.innerHTML = "";
+        for (let p = 1; p <= totalPages; p++) {
+          const li = document.createElement("li");
+          li.className = "page-item" + (p === currentPage ? " active" : "");
+          const a = document.createElement("a");
+          a.className = "page-link";
+          a.href = "#";
+          a.textContent = p;
+          a.onclick = e => { e.preventDefault(); currentPage = p; renderQuestions(); };
+          li.append(a);
+          paginationUl.append(li);
+        }
+      }
 
       function renderQuestions() {
         tableBody.innerHTML = "";
-        questionsData.forEach((q, i) => {
+        const rows = getPaginated();
+        const per  = recordsPerPageSelect.value === "all" ? rows.length : +recordsPerPageSelect.value;
+        rows.forEach((q, i) => {
           const tr = document.createElement("tr");
           tr.innerHTML = `
-            <td>${i+1}</td>
+            <td>${(currentPage - 1) * per + i + 1}</td>
             <td>${q.text.length>50 ? q.text.slice(0,47)+"…" : q.text}</td>
+            <td><a href="/participants?open=${q.user.id}" class="text-decoration-none">${q.user.name}</a></td>
             <td>${q.type}</td>
             <td>
               <span class="badge ${q.status==='Новый'?'bg-primary':'bg-success'}">
@@ -95,20 +166,32 @@
           tr.querySelector("button").onclick = () => openConversation(q);
           tableBody.appendChild(tr);
         });
+        updatePagination();
       }
 
-      function openConversation(question) {
+      async function openConversation(question) {
         listContainer.classList.add("d-none");
         convContainer.classList.remove("d-none");
 
-        document.getElementById("conv-username").textContent = question.user.name;
+        const usernameLink = document.getElementById("conv-username");
+        usernameLink.textContent = question.user.name;
+        usernameLink.href = `/participants?open=${question.user.id}`;
         document.getElementById("conv-userid").textContent   = `ID: ${question.user.id}`;
         document.getElementById("original-question").textContent = question.text;
 
         const chatWindow = document.getElementById("chat-window");
         chatWindow.innerHTML = "";
-
-        const history = messagesData[question.id] || [];
+        let history = messagesData[question.id];
+        if (!history) {
+          const r = await fetch(`/api/questions/${question.id}/messages`);
+          if (r.ok) {
+            const data = await r.json();
+            history = data.messages;
+            messagesData[question.id] = history;
+          } else {
+            history = [];
+          }
+        }
         history.forEach(msg => {
           const div = document.createElement("div");
           div.classList.add("mb-2","p-2","rounded");
@@ -169,7 +252,35 @@
         document.getElementById("chat-window").innerHTML = "";
       };
 
-      refreshBtn.onclick = renderQuestions;
+      refreshBtn.onclick = async () => {
+        const params = new URLSearchParams();
+        const st = statusFilter.value;
+        if (st !== "all") params.set("status", st);
+        const resp = await fetch(`/api/questions?${params}`);
+        if (resp.ok) {
+          const data = await resp.json();
+          questionsData = data.questions;
+          filtered = [...questionsData];
+          if (st !== "all") filtered = filtered.filter(q => q.status === st);
+          currentPage = 1;
+          messagesData = {};
+          renderQuestions();
+        } else {
+          alert("Ошибка обновления");
+        }
+      };
+
+      statusFilter.onchange = () => {
+        const st = statusFilter.value;
+        filtered = st === "all" ? [...questionsData] : questionsData.filter(q => q.status === st);
+        currentPage = 1;
+        renderQuestions();
+      };
+
+      recordsPerPageSelect.onchange = () => {
+        currentPage = 1;
+        renderQuestions();
+      };
 
       // старт
       renderQuestions();

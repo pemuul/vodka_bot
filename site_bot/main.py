@@ -295,6 +295,14 @@ async def questions(request: Request):
     rows = await database.fetch_all(
         questions_table.select().order_by(questions_table.c.create_dt.desc())
     )
+    user_ids = {r["user_tg_id"] for r in rows}
+    user_map = {}
+    if user_ids:
+        user_rows = await database.fetch_all(
+            users_table.select().where(users_table.c.tg_id.in_(user_ids))
+        )
+        user_map = {u["tg_id"]: u["name"] for u in user_rows}
+
     questions = []
     for q in rows:
         questions.append({
@@ -304,7 +312,7 @@ async def questions(request: Request):
             "status": q["status"],
             "user": {
                 "id": q["user_tg_id"],
-                "name": f"Пользователь {q['user_tg_id']}"
+                "name": user_map.get(q["user_tg_id"], f"Пользователь {q['user_tg_id']}")
             }
         })
     msgs = await database.fetch_all(
@@ -330,6 +338,55 @@ async def questions(request: Request):
             "version": app.state.static_version,
         },
     )
+
+
+@app.get("/api/questions")
+async def api_get_questions(status: Optional[str] = None):
+    query = questions_table.select()
+    if status:
+        query = query.where(questions_table.c.status == status)
+    query = query.order_by(questions_table.c.create_dt.desc())
+    rows = await database.fetch_all(query)
+    user_ids = {r["user_tg_id"] for r in rows}
+    user_map = {}
+    if user_ids:
+        user_rows = await database.fetch_all(
+            users_table.select().where(users_table.c.tg_id.in_(user_ids))
+        )
+        user_map = {u["tg_id"]: u["name"] for u in user_rows}
+
+    questions = []
+    for q in rows:
+        questions.append({
+            "id": q["id"],
+            "text": q["text"],
+            "type": q["type"],
+            "status": q["status"],
+            "user": {
+                "id": q["user_tg_id"],
+                "name": user_map.get(q["user_tg_id"], f"Пользователь {q['user_tg_id']}")
+            }
+        })
+    return {"questions": questions}
+
+
+@app.get("/api/questions/{question_id}/messages")
+async def api_get_question_messages(question_id: int):
+    rows = await database.fetch_all(
+        question_messages_table.select()
+        .where(question_messages_table.c.question_id == question_id)
+        .order_by(question_messages_table.c.timestamp)
+    )
+    messages = []
+    for m in rows:
+        is_answer = bool(m["is_answer"]) if HAS_QM_IS_ANSWER and "is_answer" in m else False
+        messages.append({
+            "sender": m["sender"],
+            "text": m["text"],
+            "is_answer": is_answer,
+            "timestamp": m["timestamp"].isoformat(),
+        })
+    return {"messages": messages}
 
 @app.get("/scheduled-messages", response_class=HTMLResponse)
 async def scheduled_messages(request: Request):
