@@ -10,6 +10,7 @@ pillow
 pyzbar
 opencv-python-headless
 numpy
+paddlepaddle
 paddleocr
 python-multipart
 
