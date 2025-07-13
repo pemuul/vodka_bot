@@ -1130,3 +1130,14 @@ async def add_receipt(file_path: str, user_tg_id: int, status: str = "не по�
     )
     await conn.commit()
     return cursor.lastrowid
+
+
+@with_connection
+async def update_receipt_status(receipt_id: int, status: str, conn=None) -> None:
+    """Update status field for a receipt."""
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "UPDATE receipts SET status = ? WHERE id = ?",
+        (status, receipt_id),
+    )
+    await conn.commit()

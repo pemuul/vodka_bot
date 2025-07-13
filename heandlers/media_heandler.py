@@ -53,20 +53,19 @@ def _analyze_check(path: str):
     return qr_data, vodka
 
 
-async def process_receipt(dest: Path, chat_id: int):
+async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int):
     loop = asyncio.get_running_loop()
     qr_data, vodka = await loop.run_in_executor(global_objects.ocr_pool, _analyze_check, str(dest))
     if qr_data:
         await global_objects.bot.send_message(chat_id, f"QR-код найден! Значение: {qr_data}")
-        status = "Подтвержден"
+        status = "Распознан"
     elif vodka:
-        await global_objects.bot.send_message(chat_id, "Чек принят!")
-        status = "Подтвержден"
+        await global_objects.bot.send_message(chat_id, "Чек принят!", reply_to_message_id=msg_id)
+        status = "Распознан"
     else:
-        await global_objects.bot.send_message(chat_id, "Пожалуйста, пришлите чек ещё раз, на фото не видно нужных данных.")
-        status = "Не подтвержден"
+        status = "Не распознан"
 
-    await sql_mgt.add_receipt(str(dest), chat_id, status)
+    await sql_mgt.update_receipt_status(receipt_id, status)
 
 
 @router.message(F.photo)
@@ -83,8 +82,9 @@ async def set_photo(message: Message) -> None:
             with dest.open("wb") as f:
                 f.write(photo_file.getvalue())
 
+            receipt_id = await sql_mgt.add_receipt(str(dest), message.chat.id, "В авто обработке")
             await message.reply('Чек получен, идёт обработка...')
-            asyncio.create_task(process_receipt(dest, message.chat.id))
+            asyncio.create_task(process_receipt(dest, message.chat.id, message.message_id, receipt_id))
             return
         except Exception as e:
             await message.reply('Ошибка при обработке чека. Попробуйте ещё раз.')
