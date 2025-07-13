@@ -765,8 +765,8 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
         .where(receipts_table.c.id == receipt_id)
         .values(status=upd.status)
     )
-    if old_row and old_row.get("status") != upd.status and HAS_RECEIPT_MSG_ID:
-        if old_row.get("message_id") and old_row.get("user_tg_id"):
+    if old_row and HAS_RECEIPT_STATUS and old_row["status"] != upd.status and HAS_RECEIPT_MSG_ID:
+        if old_row["message_id"] and old_row["user_tg_id"]:
             text = None
             if upd.status == "Распознан":
                 text = "Чек принят!"
