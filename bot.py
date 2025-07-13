@@ -11,6 +11,7 @@ import os
 
 from aiogram import Bot, Dispatcher, Router, types, F, BaseMiddleware
 from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 from aiogram.methods import TelegramMethod, Response, GetUpdates, SendMessage
 from aiogram.client.session.middlewares.base import (
     BaseRequestMiddleware,
@@ -513,7 +514,7 @@ def run_bot(telegram_bot_token:str, admin_id_list:list, command_dict:dict, setti
     # подгружаем основной файл, если его ещё нету
     copy_or_rename_file('', './load_files', 'tree_data.json', 'data_tree.json')
 
-    bot = Bot(telegram_bot_token, parse_mode=ParseMode.HTML)
+    bot = Bot(telegram_bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
     admin_list = admin_id_list
     tree_data = Tree_data(MAIN_JSON_FILE)

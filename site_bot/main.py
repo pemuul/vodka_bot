@@ -34,6 +34,7 @@ from pathlib import Path
 from aiogram import Bot
 from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo
 from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 
 # ==============================
 # Настройка БД
@@ -781,8 +782,8 @@ async def api_delete_message(message_id: int):
     await mark_message_deleted(message_id)
     return {"success": True}
 
-telegram_bot_token = '7349498734:AAHJb2K6KuLCMqLpkh3Fo_hFJhtV1WkN8tc' # !!!! надо поменять на глобальную 
-bot: Bot = Bot(telegram_bot_token, parse_mode=ParseMode.HTML) 
+telegram_bot_token = '7349498734:AAHJb2K6KuLCMqLpkh3Fo_hFJhtV1WkN8tc' # !!!! надо поменять на глобальную
+bot: Bot = Bot(telegram_bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 
 @app.get("/api/file/{file_id}")
