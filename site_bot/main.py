@@ -83,11 +83,17 @@ HAS_PM_IS_ANSWER = 'is_answer' in participant_messages_table.c
 HAS_QM_IS_ANSWER = 'is_answer' in question_messages_table.c
 HAS_SM_MEDIA = 'media' in scheduled_messages_table.c
 receipts_table             = Table("receipts", metadata, autoload_with=engine)
-HAS_RECEIPT_STATUS = 'status' in receipts_table.c
-HAS_RECEIPT_MSG_ID = 'message_id' in receipts_table.c
 images_table               = Table("images", metadata, autoload_with=engine)
 deleted_images_table       = Table("deleted_images", metadata, autoload_with=engine)
 notifications_table        = Table("notifications", metadata, autoload_with=engine)
+
+def has_receipt_status() -> bool:
+    """Return True if the receipts table has a 'status' column."""
+    return 'status' in receipts_table.c
+
+def has_receipt_msg_id() -> bool:
+    """Return True if the receipts table has a 'message_id' column."""
+    return 'message_id' in receipts_table.c
 
 # Подготовка automap для ORM-классов
 Base = automap_base(metadata=metadata)
@@ -713,7 +719,7 @@ async def receipts(request: Request):
             "user_tg_id": r["user_tg_id"],
             "user_name": r["user_name"],
             "file_path": file_path,
-            "status": r["status"] if HAS_RECEIPT_STATUS and "status" in r else None,
+            "status": r["status"] if has_receipt_status() and "status" in r else None,
         })
     return templates.TemplateResponse(
         "receipts.html",
@@ -748,8 +754,8 @@ async def get_receipt(receipt_id: int):
         "user_tg_id": r["user_tg_id"],
         "user_name": r["user_name"],
         "file_path": file_path,
-        "status": r["status"] if HAS_RECEIPT_STATUS and "status" in r else None,
-        "message_id": r["message_id"] if HAS_RECEIPT_MSG_ID and "message_id" in r else None,
+        "status": r["status"] if has_receipt_status() and "status" in r else None,
+        "message_id": r["message_id"] if has_receipt_msg_id() and "message_id" in r else None,
     }
 
 class ReceiptUpdate(BaseModel):
@@ -765,7 +771,7 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
         .where(receipts_table.c.id == receipt_id)
         .values(status=upd.status)
     )
-    if old_row and HAS_RECEIPT_STATUS and old_row["status"] != upd.status and HAS_RECEIPT_MSG_ID:
+    if old_row and has_receipt_status() and old_row["status"] != upd.status and has_receipt_msg_id():
         if old_row["message_id"] and old_row["user_tg_id"]:
             text = None
             if upd.status == "Распознан":

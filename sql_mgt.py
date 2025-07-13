@@ -1124,7 +1124,8 @@ async def get_question_messages(question_id: int, conn=None) -> List[Dict[str, A
 async def add_receipt(file_path: str, user_tg_id: int, status: str = "не подтвержден", number: str = None, date: str = None, amount: float = None, message_id: int | None = None, conn=None) -> int:
     """Сохранить чек пользователя."""
     cursor = await conn.cursor()
-    if 'message_id' in receipts_table.c:
+    schema = await get_table_info(conn, "receipts")
+    if "message_id" in schema:
         await cursor.execute(
             "INSERT INTO receipts (number, date, amount, user_tg_id, message_id, file_path, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (number, date, amount, user_tg_id, message_id, file_path, status),
