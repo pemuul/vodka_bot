@@ -4,6 +4,14 @@ from fastapi import FastAPI, Request, Form, HTTPException, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+
+
+class NoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 200:
+            response.headers["Cache-Control"] = "no-store"
+        return response
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -76,6 +84,7 @@ SessionLocal = sessionmaker(bind=engine)
 # FastAPI-приложение и middleware
 # ==============================
 app = FastAPI()
+app.state.static_version = str(int(datetime.datetime.utcnow().timestamp()))
 
 # Сначала регистрируем AuthMiddleware, затем SessionMiddleware,
 # чтобы сессия инициализировалась до проверки AuthMiddleware.
@@ -90,7 +99,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 app.add_middleware(AuthMiddleware)
 app.add_middleware(SessionMiddleware, secret_key="YOUR_SECRET_KEY_HERE")
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", NoCacheStaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 # ==============================
@@ -122,7 +131,7 @@ async def on_shutdown():
 async def login_get(request: Request):
     next_url = request.query_params.get("next", "/")
     return templates.TemplateResponse(
-        "login.html", {"request": request, "next": next_url}
+        "login.html", {"request": request, "next": next_url, "version": app.state.static_version}
     )
 
 @app.post("/login")
@@ -138,7 +147,7 @@ async def login_post(
         return RedirectResponse(next, status_code=302)
     return templates.TemplateResponse(
         "login.html",
-        {"request": request, "error": "Неверные имя пользователя или пароль", "next": next},
+        {"request": request, "error": "Неверные имя пользователя или пароль", "next": next, "version": app.state.static_version},
         status_code=401
     )
 
@@ -153,7 +162,7 @@ async def logout(request: Request):
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     return templates.TemplateResponse(
-        "prize_draws.html", {"request": request, "active_page": "prize_draws"}
+        "prize_draws.html", {"request": request, "active_page": "prize_draws", "version": app.state.static_version}
     )
 
 @app.get("/prize-draws", response_class=HTMLResponse)
@@ -193,7 +202,7 @@ async def prize_draws(request: Request):
         })
     return templates.TemplateResponse(
         "prize_draws.html",
-        {"request": request, "active_page": "prize_draws", "draws_data": draws},
+        {"request": request, "active_page": "prize_draws", "draws_data": draws, "version": app.state.static_version},
     )
 
 class StageIn(BaseModel):
@@ -309,7 +318,8 @@ async def questions(request: Request):
             "request": request,
             "active_page": "questions",
             "questions_data": questions,
-            "messages_data": messages_by_q
+            "messages_data": messages_by_q,
+            "version": app.state.static_version,
         },
     )
 
@@ -327,7 +337,7 @@ async def scheduled_messages(request: Request):
         })
     return templates.TemplateResponse(
         "scheduled_messages.html",
-        {"request": request, "active_page": "scheduled_messages", "scheduled_data": messages}
+        {"request": request, "active_page": "scheduled_messages", "scheduled_data": messages, "version": app.state.static_version}
     )
 
 class ScheduledMessageIn(BaseModel):
@@ -405,7 +415,8 @@ async def participants(request: Request):
         {
             "request": request,
             "active_page": "participants",
-            "participants_data": participants
+            "participants_data": participants,
+            "version": app.state.static_version,
         },
     )
 
@@ -456,7 +467,7 @@ async def receipts(request: Request):
         })
     return templates.TemplateResponse(
         "receipts.html",
-        {"request": request, "active_page": "receipts", "receipts_data": receipts}
+        {"request": request, "active_page": "receipts", "receipts_data": receipts, "version": app.state.static_version}
     )
 
 @app.get("/api/receipts/{receipt_id}")
