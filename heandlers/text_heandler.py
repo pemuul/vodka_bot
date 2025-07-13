@@ -29,7 +29,6 @@ async def set_text(message: Message) -> None:
     if is_get_help == str(True):
         question_id = await sql_mgt.add_question(message.chat.id, message.text)
         await sql_mgt.add_question_message(question_id, 'user', message.text)
-        await sql_mgt.set_param(message.chat.id, 'GET_HELP', str(False))
         await message.answer('Ваш вопрос сохранён. Мы постараемся ответить в ближайшее время.')
         await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', 'yes')
         return
@@ -39,4 +38,4 @@ async def set_text(message: Message) -> None:
 
     await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', 'yes')
 
-    print(message.html_text)
+    # debug logging removed
