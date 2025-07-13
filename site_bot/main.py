@@ -688,9 +688,19 @@ async def update_participant(tg_id: int, data: ParticipantUpdate):
 
 @app.get("/receipts", response_class=HTMLResponse)
 async def receipts(request: Request):
-    rows = await database.fetch_all(
-        receipts_table.select().order_by(receipts_table.c.id.desc())
+    query = (
+        sqlalchemy.select(
+            receipts_table,
+            users_table.c.name.label("user_name"),
+        )
+        .select_from(
+            receipts_table.outerjoin(
+                users_table, receipts_table.c.user_tg_id == users_table.c.tg_id
+            )
+        )
+        .order_by(receipts_table.c.id.desc())
     )
+    rows = await database.fetch_all(query)
     receipts = []
     for r in rows:
         file_path = r["file_path"]
@@ -699,8 +709,9 @@ async def receipts(request: Request):
         receipts.append({
             "id": r["id"],
             "number": r["number"],
-            "date": r["date"].isoformat() if r["date"] else None,
+            "created_at": r["create_dt"].isoformat() if r["create_dt"] else None,
             "user_tg_id": r["user_tg_id"],
+            "user_name": r["user_name"],
             "file_path": file_path,
             "status": r["status"] if HAS_RECEIPT_STATUS and "status" in r else None,
         })
@@ -711,9 +722,19 @@ async def receipts(request: Request):
 
 @app.get("/api/receipts/{receipt_id}")
 async def get_receipt(receipt_id: int):
-    r = await database.fetch_one(
-        receipts_table.select().where(receipts_table.c.id == receipt_id)
+    query = (
+        sqlalchemy.select(
+            receipts_table,
+            users_table.c.name.label("user_name"),
+        )
+        .select_from(
+            receipts_table.outerjoin(
+                users_table, receipts_table.c.user_tg_id == users_table.c.tg_id
+            )
+        )
+        .where(receipts_table.c.id == receipt_id)
     )
+    r = await database.fetch_one(query)
     if not r:
         raise HTTPException(404, "Receipt not found")
     file_path = r["file_path"]
@@ -722,9 +743,10 @@ async def get_receipt(receipt_id: int):
     return {
         "id": r["id"],
         "number": r["number"],
-        "date": r["date"].isoformat() if r["date"] else None,
+        "created_at": r["create_dt"].isoformat() if r["create_dt"] else None,
         "amount": r["amount"],
         "user_tg_id": r["user_tg_id"],
+        "user_name": r["user_name"],
         "file_path": file_path,
         "status": r["status"] if HAS_RECEIPT_STATUS and "status" in r else None,
         "message_id": r["message_id"] if HAS_RECEIPT_MSG_ID and "message_id" in r else None,
@@ -735,28 +757,30 @@ class ReceiptUpdate(BaseModel):
 
 @app.post("/api/receipts/{receipt_id}")
 async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
-    values = {"status": upd.status}
-    await database.execute(
-        receipts_table.update().where(receipts_table.c.id == receipt_id).values(**values)
+    old_row = await database.fetch_one(
+        receipts_table.select().where(receipts_table.c.id == receipt_id)
     )
-    # fetch row for messaging
-    if HAS_RECEIPT_MSG_ID or HAS_RECEIPT_STATUS:
-        r = await database.fetch_one(
-            receipts_table.select().where(receipts_table.c.id == receipt_id)
-        )
-    else:
-        r = None
-    if r and HAS_RECEIPT_MSG_ID and r.get("message_id") and r.get("user_tg_id"):
-        text = None
-        if upd.status == "Распознан":
-            text = "Чек принят!"
-        elif upd.status == "Отменён":
-            text = "Чек отклонён"
-        if text:
-            try:
-                await bot.send_message(r["user_tg_id"], text, reply_to_message_id=r["message_id"])
-            except Exception as e:
-                print(f"Failed to send receipt status message: {e}")
+    await database.execute(
+        receipts_table.update()
+        .where(receipts_table.c.id == receipt_id)
+        .values(status=upd.status)
+    )
+    if old_row and old_row.get("status") != upd.status and HAS_RECEIPT_MSG_ID:
+        if old_row.get("message_id") and old_row.get("user_tg_id"):
+            text = None
+            if upd.status == "Распознан":
+                text = "Чек принят!"
+            elif upd.status == "Отменён":
+                text = "Чек отклонён"
+            if text:
+                try:
+                    await bot.send_message(
+                        old_row["user_tg_id"],
+                        text,
+                        reply_to_message_id=old_row["message_id"],
+                    )
+                except Exception as e:
+                    print(f"Failed to send receipt status message: {e}")
     return {"success": True}
 
 @app.delete("/api/receipts/{receipt_id}")

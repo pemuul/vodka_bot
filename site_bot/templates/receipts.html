@@ -27,7 +27,7 @@
             <tr>
               <th>#</th>
               <th>Номер</th>
-              <th>Дата</th>
+              <th>Загружен</th>
               <th>Пользователь</th>
               <th>Статус</th>
               <th>Действия</th>
@@ -73,12 +73,11 @@
           <img id="receipt-img" src="" alt="Чек" class="img-fluid mb-3"/>
           <ul class="list-group">
             <li class="list-group-item"><strong>Номер:</strong> <span id="view-number"></span></li>
-            <li class="list-group-item"><strong>Дата:</strong> <span id="view-date"></span></li>
+            <li class="list-group-item"><strong>Загружен:</strong> <span id="view-date"></span></li>
             <li class="list-group-item">
-              <strong>Пользователь TG ID:</strong> <span id="view-user"></span>
-              <a href="#" id="go-dialog" class="btn btn-sm btn-outline-primary float-end">
-                Перейти в диалог
-              </a>
+              <strong>Пользователь:</strong>
+              <a href="#" id="view-user" class="text-decoration-none"></a>
+              <a href="#" id="go-dialog" class="btn btn-sm btn-outline-primary float-end">Перейти в диалог</a>
             </li>
             <li class="list-group-item">
               <strong>Статус:</strong>
@@ -184,11 +183,12 @@
 
         list.forEach((r,i)=>{
           const tr = document.createElement("tr");
+          const userLink = `<a href="/participants?open=${r.user_tg_id}" class="text-decoration-none">${r.user_name??r.user_tg_id}</a>`;
           tr.innerHTML = `
             <td>${startIdx + i}</td>
             <td>${r.number ?? ''}</td>
-            <td>${r.date ? new Date(r.date).toLocaleDateString('ru-RU') : ''}</td>
-            <td>${r.user_tg_id}</td>
+            <td>${r.created_at ? new Date(r.created_at).toLocaleDateString('ru-RU') : ''}</td>
+            <td>${userLink}</td>
             <td>${r.status ?? ''}</td>
             <td><button class="btn btn-sm btn-outline-danger btn-del">Удалить</button></td>`;
           tr.onclick = () => {
@@ -197,11 +197,13 @@
               .then(rec=>{
                 document.getElementById('receipt-img').src = rec.file_path;
                 document.getElementById('view-number').textContent = rec.number;
-                document.getElementById('view-date').textContent = new Date(rec.date).toLocaleDateString('ru-RU');
-                document.getElementById('view-user').textContent = rec.user_tg_id;
+                document.getElementById('view-date').textContent = new Date(rec.created_at).toLocaleDateString('ru-RU');
+                const userLinkEl = document.getElementById('view-user');
+                userLinkEl.textContent = rec.user_name ?? rec.user_tg_id;
+                userLinkEl.href = `/participants?open=${rec.user_tg_id}`;
                 document.getElementById('receipt-status').value = rec.status ?? '';
                 document.getElementById('go-dialog').onclick = () => {
-                  window.location.href = `/participants?user=${rec.user_tg_id}`;
+                  window.location.href = `/participants?open=${rec.user_tg_id}`;
                 };
                 currentReceiptId = rec.id;
                 new bootstrap.Modal(document.getElementById('modal-receipt-view')).show();
