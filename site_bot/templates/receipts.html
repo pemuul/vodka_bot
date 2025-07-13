@@ -30,6 +30,7 @@
               <th>Дата</th>
               <th>Сумма</th>
               <th>Пользователь</th>
+              <th>Статус</th>
               <th>Действия</th>
             </tr>
           </thead>
@@ -81,6 +82,7 @@
                 Перейти в диалог
               </a>
             </li>
+            <li class="list-group-item"><strong>Статус:</strong> <span id="view-status"></span></li>
           </ul>
         </div>
       </div>
@@ -173,10 +175,11 @@
           const tr = document.createElement("tr");
           tr.innerHTML = `
             <td>${startIdx + i}</td>
-            <td>${r.number}</td>
-            <td>${new Date(r.date).toLocaleDateString("ru-RU")}</td>
-            <td>${r.amount.toLocaleString()} ₽</td>
+            <td>${r.number ?? ''}</td>
+            <td>${r.date ? new Date(r.date).toLocaleDateString("ru-RU") : ''}</td>
+            <td>${r.amount ? r.amount.toLocaleString() + ' ₽' : ''}</td>
             <td>${r.user_tg_id}</td>
+            <td>${r.status ?? ''}</td>
             <td>
               <button class="btn btn-sm btn-outline-secondary btn-view">Просмотр</button>
               <button class="btn btn-sm btn-outline-danger btn-del">Удалить</button>
@@ -190,6 +193,7 @@
                 document.getElementById("view-date").textContent   = new Date(rec.date).toLocaleDateString("ru-RU");
                 document.getElementById("view-amount").textContent = rec.amount;
                 document.getElementById("view-user").textContent   = rec.user_tg_id;
+                document.getElementById("view-status").textContent = rec.status ?? '';
                 document.getElementById("go-dialog").onclick = () => {
                   window.location.href = `/participants?user=${rec.user_tg_id}`;
                 };

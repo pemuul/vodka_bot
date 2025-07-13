@@ -82,6 +82,7 @@ HAS_PM_IS_ANSWER = 'is_answer' in participant_messages_table.c
 HAS_QM_IS_ANSWER = 'is_answer' in question_messages_table.c
 HAS_SM_MEDIA = 'media' in scheduled_messages_table.c
 receipts_table             = Table("receipts", metadata, autoload_with=engine)
+HAS_RECEIPT_STATUS = 'status' in receipts_table.c
 images_table               = Table("images", metadata, autoload_with=engine)
 deleted_images_table       = Table("deleted_images", metadata, autoload_with=engine)
 notifications_table        = Table("notifications", metadata, autoload_with=engine)
@@ -696,7 +697,8 @@ async def receipts(request: Request):
             "date": r["date"].isoformat(),
             "amount": r["amount"],
             "user_tg_id": r["user_tg_id"],
-            "file_path": r["file_path"]
+            "file_path": r["file_path"],
+            "status": r["status"] if HAS_RECEIPT_STATUS and "status" in r else None,
         })
     return templates.TemplateResponse(
         "receipts.html",
@@ -716,7 +718,8 @@ async def get_receipt(receipt_id: int):
         "date": r["date"].isoformat(),
         "amount": r["amount"],
         "user_tg_id": r["user_tg_id"],
-        "file_path": r["file_path"]
+        "file_path": r["file_path"],
+        "status": r["status"] if HAS_RECEIPT_STATUS and "status" in r else None,
     }
 
 @app.delete("/api/receipts/{receipt_id}")

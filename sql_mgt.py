@@ -1118,3 +1118,15 @@ async def get_question_messages(question_id: int, conn=None) -> List[Dict[str, A
         }
         for r in rows
     ]
+
+
+@with_connection
+async def add_receipt(file_path: str, user_tg_id: int, status: str = "не подтвержден", number: str = None, date: str = None, amount: float = None, conn=None) -> int:
+    """Сохранить чек пользователя."""
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "INSERT INTO receipts (number, date, amount, user_tg_id, file_path, status) VALUES (?, ?, ?, ?, ?, ?)",
+        (number, date, amount, user_tg_id, file_path, status),
+    )
+    await conn.commit()
+    return cursor.lastrowid

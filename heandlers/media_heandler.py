@@ -2,6 +2,8 @@ from aiogram import Router,  F
 from aiogram.types import Message
 import time
 import random
+import uuid
+from pathlib import Path
 
 #from sql_mgt import sql_mgt.get_param, sql_mgt.set_param, sql_mgt.append_param_get_old
 import sql_mgt
@@ -14,11 +16,14 @@ from pyzbar.pyzbar import decode
 import numpy as np
 from io import BytesIO
 from PIL import Image
+import pytesseract
 
 
 
 router = Router()
 global_objects = None
+UPLOAD_DIR_CHECKS = Path(__file__).resolve().parent.parent / "site_bot" / "static" / "uploads"
+UPLOAD_DIR_CHECKS.mkdir(parents=True, exist_ok=True)
 
 def init_object(global_objects_inp):
     global global_objects
@@ -34,33 +39,43 @@ async def set_photo(message: Message) -> None:
     await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', 'yes')
 
     is_get_check = await sql_mgt.get_param(message.chat.id, 'GET_CHECK')
-    print(is_get_check)
     if is_get_check == str(True):
         photo = message.photo[-1]
         try:
-            # Скачиваем фото
             photo_file = await global_objects.bot.download(photo.file_id)
-
-            # Преобразуем фото в PIL Image
             image = Image.open(BytesIO(photo_file.getvalue())).convert('RGB')
-            
-            # Конвертируем изображение в OpenCV формат
             opencv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
-            # Ищем QR-код
-            decoded_objects = decode(opencv_image)
+            fname = f"{uuid.uuid4().hex}.jpg"
+            dest = UPLOAD_DIR_CHECKS / fname
+            with dest.open("wb") as f:
+                f.write(photo_file.getvalue())
 
+            decoded_objects = decode(opencv_image)
+            status = 'Подтвержден'
             if decoded_objects:
                 for obj in decoded_objects:
                     qr_data = obj.data.decode('utf-8')
                     await message.reply(f'QR-код найден! Значение: {qr_data}')
-                    await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))
+                    break
             else:
-                await message.reply('QR-код не найден на изображении.')
+                text = ''
+                try:
+                    text = pytesseract.image_to_string(opencv_image, lang='rus+eng')
+                except Exception:
+                    pass
+                lower = text.lower()
+                if 'водк' in lower and ('фин' in lower or 'fin' in lower):
+                    await message.reply('Чек принят!')
+                else:
+                    status = 'Не подтвержден'
+                    await message.reply('Пожалуйста, пришлите чек ещё раз, на фото не видно нужных данных.')
 
+            await sql_mgt.add_receipt(str(dest), message.chat.id, status)
+            await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))
             return
         except Exception as e:
-            await message.reply(f'Отпавлте QR код ещё раз.')
+            await message.reply('Ошибка при обработке чека. Попробуйте ещё раз.')
             print(f'Ошибка при обработке фото: {e}')
             return
     
