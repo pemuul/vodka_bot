@@ -10,6 +10,6 @@ pillow
 pyzbar
 opencv-python-headless
 numpy
-pytesseract
+easyocr
 python-multipart
 
