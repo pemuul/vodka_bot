@@ -377,7 +377,7 @@ class GlobalObjects:
     command_dict:dict
     settings_bot:dict
     pyment_bot_settings:dict
-    ocr_pool: concurrent.futures.ProcessPoolExecutor | None = None
+    ocr_pool: concurrent.futures.Executor | None = None
 
     def __init__(self, tree_data, bot, admin_list, dp, command_dict, settings_bot) -> None:
         self.tree_data = tree_data
@@ -521,7 +521,8 @@ def run_bot(telegram_bot_token:str, admin_id_list:list, command_dict:dict, setti
     tree_data = Tree_data(MAIN_JSON_FILE)
 
     global_objects = GlobalObjects(tree_data, bot, admin_list, dp, command_dict, settings_bot)
-    global_objects.ocr_pool = concurrent.futures.ProcessPoolExecutor()
+    # Use a thread pool for OCR to avoid heavy process management issues
+    global_objects.ocr_pool = concurrent.futures.ThreadPoolExecutor()
 
     sql_mgt.init_object(global_objects)
 
