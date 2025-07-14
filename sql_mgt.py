@@ -1227,7 +1227,7 @@ async def get_user_receipts(
         "WHERE user_tg_id = ?"
     )
     params: list[Any] = [user_tg_id]
-    if draw_id is not None and await has_receipt_draw_id(conn):
+    if draw_id is not None and await has_receipt_draw_id(conn=conn):
         query += " AND draw_id = ?"
         params.append(draw_id)
     query += " ORDER BY create_dt DESC"
