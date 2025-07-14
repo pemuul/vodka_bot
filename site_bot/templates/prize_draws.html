@@ -54,10 +54,12 @@
               <div class="col-md-2">
                 <label for="edit-draw-start" class="form-label">Дата начала</label>
                 <input type="date" id="edit-draw-start" class="form-control" />
+                <div class="invalid-feedback">Дата начала должна быть раньше даты окончания</div>
               </div>
               <div class="col-md-2">
                 <label for="edit-draw-end" class="form-label">Дата окончания</label>
                 <input type="date" id="edit-draw-end" class="form-control" />
+                <div class="invalid-feedback">Дата окончания должна быть позже даты начала</div>
               </div>
               <div class="col-md-3">
                 <label for="main-draw-status" class="form-label">Статус</label>
@@ -165,6 +167,8 @@
         document.getElementById("edit-draw-start").value = currentDraw.start;
         document.getElementById("edit-draw-end").value = currentDraw.end;
         document.getElementById("main-draw-status").value = currentDraw.status;
+        document.getElementById("edit-draw-start").classList.remove("is-invalid");
+        document.getElementById("edit-draw-end").classList.remove("is-invalid");
         // чистим старые вкладки
         document.getElementById("drawStagesTabs").innerHTML = "";
         document.getElementById("drawStagesTabsContent").innerHTML = "";
@@ -260,6 +264,8 @@
         document.getElementById("edit-draw-title").value = "";
         document.getElementById("edit-draw-start").value = "";
         document.getElementById("edit-draw-end").value = "";
+        document.getElementById("edit-draw-start").classList.remove("is-invalid");
+        document.getElementById("edit-draw-end").classList.remove("is-invalid");
         document.getElementById("main-draw-status").value = "upcoming";
         document.getElementById("drawStagesTabs").innerHTML = "";
         document.getElementById("drawStagesTabsContent").innerHTML = "";
@@ -298,10 +304,21 @@
 
       // кнопка «Сохранить изменения»
       document.getElementById("btn-save-draw").onclick = async () => {
+        const startInput = document.getElementById("edit-draw-start");
+        const endInput = document.getElementById("edit-draw-end");
+        startInput.classList.remove("is-invalid");
+        endInput.classList.remove("is-invalid");
+
+        if (startInput.value >= endInput.value) {
+          startInput.classList.add("is-invalid");
+          endInput.classList.add("is-invalid");
+          return;
+        }
+
         // складываем все поля обратно в currentDraw
         currentDraw.title = document.getElementById("edit-draw-title").value;
-        currentDraw.start = document.getElementById("edit-draw-start").value;
-        currentDraw.end = document.getElementById("edit-draw-end").value;
+        currentDraw.start = startInput.value;
+        currentDraw.end = endInput.value;
         currentDraw.status = document.getElementById("main-draw-status").value;
         currentDraw.stages.forEach(sd => {
           const pane = document.getElementById(`${sd.__id}-content`);
@@ -319,7 +336,12 @@
         if (res.ok) {
           location.reload();
         } else {
-          alert("Ошибка сохранения");
+          let msg = "Ошибка сохранения";
+          try {
+            const data = await res.json();
+            if (data.detail) msg = data.detail;
+          } catch (e) {}
+          alert(msg);
         }
       };
     });
