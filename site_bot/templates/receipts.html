@@ -19,7 +19,8 @@
   <!-- Модал полноразмерного изображения -->
   <div class="modal fade" id="modal-image-full" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-xl">
-      <div class="modal-content bg-transparent border-0">
+      <div class="modal-content bg-transparent border-0 position-relative">
+        <button type="button" class="btn-close position-absolute top-0 end-0 m-3" data-bs-dismiss="modal" aria-label="Close"></button>
         <img id="receipt-img-full" src="" class="img-fluid" alt="Чек">
       </div>
     </div>
@@ -119,7 +120,13 @@
       const receiptImg = document.getElementById("receipt-img");
 
       receiptImg.onclick = () => {
-        new bootstrap.Modal(document.getElementById('modal-image-full')).show();
+        const fullEl = document.getElementById('modal-image-full');
+        const viewEl = document.getElementById('modal-receipt-view');
+        const viewModal = bootstrap.Modal.getInstance(viewEl);
+        if (viewModal) viewModal.hide();
+        const fullModal = new bootstrap.Modal(fullEl);
+        fullEl.addEventListener('hidden.bs.modal', () => viewModal && viewModal.show(), { once: true });
+        fullModal.show();
       };
 
       let filtered = [...data];
