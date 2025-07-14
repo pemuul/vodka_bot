@@ -34,7 +34,9 @@ async def set_text(message: Message) -> None:
         return
 
     if message.text:
-        await message.answer("Пока я не умею понимать ваши сообщения, возможно у меня это получиться позже")
+        await message.answer(
+            "Если вы хотите задать вопрос или что-то уточнить, перейдите в раздел \"Вопросы\""
+        )
 
     await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', 'yes')
 

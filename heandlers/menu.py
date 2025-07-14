@@ -167,7 +167,14 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
     # для определённых id выполняем действия
     if tree_item.item_id:
         if tree_item.item_id == 'check':
-            await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(True))
+            active_draw_id = await sql_mgt.get_active_draw_id()
+            if active_draw_id is None:
+                await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))
+                await message.answer(
+                    "На данный момент активных розыгрышей нету.\nМы сообщим вам, когда можно будет принять участие в новом!"
+                )
+            else:
+                await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(True))
         elif tree_item.item_id == 'help':
             await sql_mgt.set_param(message.chat.id, 'GET_HELP', str(True))
     else:
