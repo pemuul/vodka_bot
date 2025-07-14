@@ -551,6 +551,44 @@ async def api_draw_stage_test_mailing(stage_id: int):
     return {"success": True}
 
 
+@app.get("/api/notifications")
+async def api_notifications():
+    """Return receipts with status 'Не распознан' and unanswered questions."""
+    notifications = []
+
+    if has_receipt_status():
+        rec_rows = await database.fetch_all(
+            sqlalchemy.select(
+                receipts_table.c.id,
+                receipts_table.c.number,
+            ).where(receipts_table.c.status == "Не распознан")
+        )
+        for r in rec_rows:
+            text = f"Чек {r['number'] or r['id']} не распознан"
+            notifications.append({
+                "type": "receipt",
+                "id": r["id"],
+                "text": text,
+            })
+
+    q_rows = await database.fetch_all(
+        sqlalchemy.select(
+            questions_table.c.id,
+            questions_table.c.text,
+        ).where(questions_table.c.status == "Новый")
+    )
+    for q in q_rows:
+        short = q["text"][:30] + ("…" if len(q["text"]) > 30 else "")
+        text = f"Вопрос: {short}"
+        notifications.append({
+            "type": "question",
+            "id": q["id"],
+            "text": text,
+        })
+
+    return {"notifications": notifications}
+
+
 @app.post("/api/draw-stages/{stage_id}/mailing")
 async def api_draw_stage_mailing(stage_id: int):
     stage = await database.fetch_one(

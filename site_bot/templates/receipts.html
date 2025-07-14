@@ -305,6 +305,33 @@
       };
       applyFilter();
       render();
+      const params = new URLSearchParams(location.search);
+      const openId = params.get('open');
+      if (openId) {
+        const rec = data.find(r => String(r.id) === openId);
+        if (rec) {
+          fetch(`/api/receipts/${rec.id}`)
+            .then(res => res.json())
+            .then(recData => {
+              document.getElementById('receipt-img').src = recData.file_path;
+              document.getElementById('receipt-img-full').src = recData.file_path;
+              document.getElementById('view-number').textContent = recData.number;
+              document.getElementById('view-date').textContent = new Date(recData.created_at).toLocaleDateString('ru-RU');
+              const userLinkEl = document.getElementById('view-user');
+              userLinkEl.textContent = recData.user_name ?? recData.user_tg_id;
+              userLinkEl.href = `/participants?open=${recData.user_tg_id}`;
+              document.getElementById('receipt-status').value = recData.status ?? '';
+              const drawSel = document.getElementById('receipt-draw');
+              drawSel.innerHTML = '<option value="">---</option>' + draws.map(d => `<option value="${d.id}">${d.title}</option>`).join('');
+              drawSel.value = recData.draw_id ?? '';
+              document.getElementById('go-dialog').onclick = () => {
+                window.location.href = `/participants?open=${recData.user_tg_id}`;
+              };
+              currentReceiptId = recData.id;
+              new bootstrap.Modal(document.getElementById('modal-receipt-view')).show();
+            });
+        }
+      }
     });
   </script>
 {% endblock %}

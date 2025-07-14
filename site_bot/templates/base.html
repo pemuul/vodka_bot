@@ -123,9 +123,10 @@
               <ul
                 class="dropdown-menu dropdown-menu-end"
                 aria-labelledby="notificationsDropdown"
+                id="notificationsMenu"
               >
                 <li><h6 class="dropdown-header">Уведомления</h6></li>
-                <li>
+                <li id="notifications-empty">
                   <span class="dropdown-item-text text-muted">Нет новых уведомлений</span>
                 </li>
               </ul>
@@ -202,10 +203,62 @@
     <!-- === Конец основного контейнера === -->
 
     <!-- Bootstrap JS Bundle -->
-    <script
+  <script
       src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.6/dist/js/bootstrap.bundle.min.js?v={{ version }}"
       integrity="sha384-j1CDi7MgGQ12Z7Qab0qlWQ/Qqz24Gc6BM0thvEMVjHnfYGF0rmFCozFSxQBxwHKO"
       crossorigin="anonymous"
     ></script>
+    <script>
+      document.addEventListener('DOMContentLoaded', () => {
+        const menu  = document.getElementById('notificationsMenu');
+        const badge = document.querySelector('#notificationsDropdown .badge');
+        fetch('/api/notifications')
+          .then(r => r.json())
+          .then(data => {
+            const list = data.notifications || [];
+            badge.textContent = list.length;
+            if (list.length === 0) return;
+            const empty = document.getElementById('notifications-empty');
+            if (empty) empty.remove();
+
+            const receipts = list.filter(n => n.type === 'receipt');
+            const questions = list.filter(n => n.type === 'question');
+
+            const createItem = (href, iconCls, text) => {
+              const li = document.createElement('li');
+              const a = document.createElement('a');
+              a.className = 'dropdown-item d-flex align-items-center gap-2';
+              a.href = href;
+              a.innerHTML = `<i class="bi ${iconCls}"></i> <span>${text}</span>`;
+              li.appendChild(a);
+              return li;
+            };
+
+            if (receipts.length) {
+              const header = document.createElement('li');
+              header.innerHTML = '<h6 class="dropdown-header">Нераспознанные чеки</h6>';
+              menu.appendChild(header);
+              receipts.forEach(r => menu.appendChild(
+                createItem(`/receipts?open=${r.id}`, 'bi-receipt text-danger', r.text)
+              ));
+            }
+
+            if (receipts.length && questions.length) {
+              const div = document.createElement('li');
+              div.innerHTML = '<hr class="dropdown-divider">';
+              menu.appendChild(div);
+            }
+
+            if (questions.length) {
+              const header = document.createElement('li');
+              header.innerHTML = '<h6 class="dropdown-header">Вопросы без ответа</h6>';
+              menu.appendChild(header);
+              questions.forEach(q => menu.appendChild(
+                createItem(`/questions?open=${q.id}`, 'bi-question-circle text-warning', q.text)
+              ));
+            }
+          });
+      });
+    </script>
   </body>
 </html>
