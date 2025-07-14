@@ -20,7 +20,7 @@ import sqlalchemy
 from sqlalchemy import MetaData, Table, create_engine
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import sessionmaker
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 import datetime
 from pydantic import BaseModel
 
@@ -537,7 +537,7 @@ async def api_draw_stage_test_mailing(stage_id: int):
     ids = [t["user_tg_id"] for t in testers]
     for uid in ids:
         try:
-            await bot.send_message(uid, msg_text)
+            await send_and_log_message(uid, msg_text)
         except Exception as e:
             print("draw test send error", e)
     return {"success": True}
@@ -557,7 +557,7 @@ async def api_draw_stage_mailing(stage_id: int):
     ids = [u["tg_id"] for u in users]
     for uid in ids:
         try:
-            await bot.send_message(uid, msg_text)
+            await send_and_log_message(uid, msg_text)
         except Exception as e:
             print("draw mailing send error", e)
     return {"success": True}
@@ -838,30 +838,10 @@ async def test_send_scheduled_message(message_id: int):
                 if typ not in ("photo", "video") or not fname:
                     continue
                 local = UPLOAD_DIR / fname
-                if local.exists():
-                    obj = FSInputFile(local)
-                else:
-                    obj = fname
+                obj = FSInputFile(local) if local.exists() else fname
                 files.append((typ, obj))
 
-            if not files:
-                if msg["content"]:
-                    await bot.send_message(uid, msg["content"])
-            elif len(files) == 1:
-                typ, fobj = files[0]
-                if typ == "photo":
-                    await bot.send_photo(uid, fobj, caption=msg["content"] or None)
-                else:
-                    await bot.send_video(uid, fobj, caption=msg["content"] or None)
-            else:
-                media_group = []
-                for i, (typ, fobj) in enumerate(files):
-                    caption = msg["content"] if i == 0 else None
-                    if typ == "photo":
-                        media_group.append(InputMediaPhoto(media=fobj, caption=caption))
-                    else:
-                        media_group.append(InputMediaVideo(media=fobj, caption=caption))
-                await bot.send_media_group(uid, media_group)
+            await send_and_log_message(uid, msg["content"], files if files else None)
         except Exception as e:
             print("send test error", e)
     return {"success": True}
@@ -894,30 +874,10 @@ async def send_scheduled_message(message_id: int):
                 if typ not in ("photo", "video") or not fname:
                     continue
                 local = UPLOAD_DIR / fname
-                if local.exists():
-                    obj = FSInputFile(local)
-                else:
-                    obj = fname
+                obj = FSInputFile(local) if local.exists() else fname
                 files.append((typ, obj))
 
-            if not files:
-                if msg["content"]:
-                    await bot.send_message(uid, msg["content"])
-            elif len(files) == 1:
-                typ, fobj = files[0]
-                if typ == "photo":
-                    await bot.send_photo(uid, fobj, caption=msg["content"] or None)
-                else:
-                    await bot.send_video(uid, fobj, caption=msg["content"] or None)
-            else:
-                media_group = []
-                for i, (typ, fobj) in enumerate(files):
-                    caption = msg["content"] if i == 0 else None
-                    if typ == "photo":
-                        media_group.append(InputMediaPhoto(media=fobj, caption=caption))
-                    else:
-                        media_group.append(InputMediaVideo(media=fobj, caption=caption))
-                await bot.send_media_group(uid, media_group)
+            await send_and_log_message(uid, msg["content"], files if files else None)
         except Exception as e:
             print("send mailing error", e)
 
@@ -1174,6 +1134,60 @@ telegram_bot_token = '7349498734:AAHJb2K6KuLCMqLpkh3Fo_hFJhtV1WkN8tc' # !!!! н�
 bot: Bot = Bot(telegram_bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 
+async def send_and_log_message(
+    user_id: int,
+    text: Optional[str] = None,
+    media: Optional[List[Tuple[str, object]]] = None,
+):
+    """Send a message via the bot and log it to participant_messages."""
+    sent_messages = []
+    files_info: List[Dict[str, Any]] = []
+    if not media:
+        if text:
+            msg = await bot.send_message(user_id, text)
+            sent_messages.append(msg)
+        else:
+            return
+    elif len(media) == 1:
+        typ, fobj = media[0]
+        if typ == "photo":
+            msg = await bot.send_photo(user_id, fobj, caption=text or None)
+            files_info.append({"type": "photo", "file_id": msg.photo[-1].file_id})
+        else:
+            msg = await bot.send_video(user_id, fobj, caption=text or None)
+            files_info.append({"type": "video", "file_id": msg.video.file_id})
+        sent_messages.append(msg)
+    else:
+        media_group = []
+        for i, (typ, fobj) in enumerate(media):
+            caption = text if i == 0 else None
+            if typ == "photo":
+                media_group.append(InputMediaPhoto(media=fobj, caption=caption))
+            else:
+                media_group.append(InputMediaVideo(media=fobj, caption=caption))
+        msgs = await bot.send_media_group(user_id, media_group)
+        sent_messages.extend(msgs)
+        for m in msgs:
+            if m.photo:
+                files_info.append({"type": "photo", "file_id": m.photo[-1].file_id})
+            elif m.video:
+                files_info.append({"type": "video", "file_id": m.video.file_id})
+
+    values = {
+        "user_tg_id": user_id,
+        "sender": "admin",
+        "text": text or "",
+        "buttons": None,
+        "media": json.dumps(files_info) if files_info else None,
+    }
+    if HAS_PM_IS_ANSWER:
+        values["is_answer"] = False
+    new_id = await database.execute(
+        participant_messages_table.insert().values(**values)
+    )
+    return sent_messages, new_id
+
+
 @app.get("/api/file/{file_id}")
 async def proxy_file(file_id: str):
     """
@@ -1200,31 +1214,19 @@ class SendMessageIn(BaseModel):
 
 @app.post("/api/participants/{user_tg_id}/messages")
 async def api_send_message(user_tg_id: int, msg_in: SendMessageIn):
-    # 1) отправляем сообщение через бота
     try:
-        sent = await bot.send_message(chat_id=user_tg_id, text=msg_in.text)
+        sent, new_id = await send_and_log_message(user_tg_id, msg_in.text)
     except Exception as e:
         raise HTTPException(500, f"Telegram error: {e}")
 
-    # 2) логируем в БД
-    values = {
-        "user_tg_id": user_tg_id,
-        "sender": "admin",
-        "text": msg_in.text,
-        "buttons": None,
-        "media": None,
-    }
-    if HAS_PM_IS_ANSWER:
-        values["is_answer"] = bool(msg_in.is_answer)
-    new_id = await database.execute(
-        participant_messages_table.insert().values(**values)
-    )
-    # 3) возвращаем id и timestamp
+    msg_obj = sent[0] if sent else None
+    ts = msg_obj.date.isoformat() if msg_obj else datetime.datetime.utcnow().isoformat()
+
     return {
         "success": True,
         "id": new_id,
         "text": msg_in.text,
-        "timestamp": sent.date.isoformat()
+        "timestamp": ts
     }
 
 
@@ -1241,9 +1243,10 @@ async def answer_question(question_id: int, ans: AnswerIn):
         raise HTTPException(404, "Question not found")
 
     try:
-        sent = await bot.send_message(chat_id=q["user_tg_id"], text=ans.text)
+        sent_list, _ = await send_and_log_message(q["user_tg_id"], ans.text)
     except Exception as e:
         raise HTTPException(500, f"Telegram error: {e}")
+    sent = sent_list[0] if sent_list else None
 
     qmsg_values = {
         "question_id": question_id,
@@ -1256,26 +1259,15 @@ async def answer_question(question_id: int, ans: AnswerIn):
         question_messages_table.insert().values(**qmsg_values)
     )
 
-    pm_values = {
-        "user_tg_id": q["user_tg_id"],
-        "sender": "admin",
-        "text": ans.text,
-        "buttons": None,
-        "media": None,
-    }
-    if HAS_PM_IS_ANSWER:
-        pm_values["is_answer"] = True
-    await database.execute(
-        participant_messages_table.insert().values(**pm_values)
-    )
     await database.execute(
         questions_table.update()
         .where(questions_table.c.id == question_id)
         .values(status="Отвечено")
     )
 
+    ts = sent.date.isoformat() if sent else datetime.datetime.utcnow().isoformat()
     return {
         "success": True,
-        "timestamp": sent.date.isoformat(),
+        "timestamp": ts,
         "is_answer": True
     }
