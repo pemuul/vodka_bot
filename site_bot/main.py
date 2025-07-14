@@ -891,6 +891,7 @@ async def proxy_file(file_id: str):
 
 class SendMessageIn(BaseModel):
     text: str
+    is_answer: bool | None = None
 
 @app.post("/api/participants/{user_tg_id}/messages")
 async def api_send_message(user_tg_id: int, msg_in: SendMessageIn):
@@ -909,7 +910,7 @@ async def api_send_message(user_tg_id: int, msg_in: SendMessageIn):
         "media": None,
     }
     if HAS_PM_IS_ANSWER:
-        values["is_answer"] = False
+        values["is_answer"] = bool(msg_in.is_answer)
     new_id = await database.execute(
         participant_messages_table.insert().values(**values)
     )
