@@ -82,6 +82,17 @@
       <div class="border rounded p-3 bg-white" id="original-question"></div>
     </div>
 
+    <div class="px-3 mb-2 d-flex align-items-end gap-2">
+      <div class="flex-grow-1">
+        <label for="question-status" class="form-label">Статус</label>
+        <select id="question-status" class="form-select">
+          <option value="Новый">Новый</option>
+          <option value="Отвечено">Отвечено</option>
+        </select>
+      </div>
+      <button id="save-status" class="btn btn-outline-primary mt-4">Сохранить</button>
+    </div>
+
     <div class="px-3 pb-3 mb-2">
       <div class="d-flex">
         <textarea id="answer-input" class="form-control me-2" rows="2" placeholder="Ваш ответ..."></textarea>
@@ -107,6 +118,8 @@
       const pageEndElem          = document.getElementById("page-end");
       const pageTotalElem        = document.getElementById("page-total");
       const paginationUl         = document.getElementById("pagination-ul");
+      const statusSelect         = document.getElementById("question-status");
+      const saveStatusBtn        = document.getElementById("save-status");
 
       let filtered    = [...questionsData];
       let currentPage = 1;
@@ -178,6 +191,22 @@
         usernameLink.href = `/participants?open=${question.user.id}`;
         document.getElementById("conv-userid").textContent   = `ID: ${question.user.id}`;
         document.getElementById("original-question").textContent = question.text;
+        statusSelect.value = question.status;
+        saveStatusBtn.onclick = async () => {
+          const newStatus = statusSelect.value;
+          try {
+            const resp = await fetch(`/api/questions/${question.id}`, {
+              method: "POST",
+              headers: {"Content-Type": "application/json"},
+              body: JSON.stringify({status: newStatus})
+            });
+            if (!resp.ok) throw new Error("HTTP error");
+            question.status = newStatus;
+            renderQuestions();
+          } catch(err) {
+            alert("Ошибка сохранения статуса");
+          }
+        };
 
         const chatWindow = document.getElementById("chat-window");
         chatWindow.innerHTML = "";
@@ -250,6 +279,7 @@
         listContainer.classList.remove("d-none");
         document.getElementById("answer-input").value = "";
         document.getElementById("chat-window").innerHTML = "";
+        statusSelect.value = "Новый";
       };
 
       refreshBtn.onclick = async () => {

@@ -1241,6 +1241,9 @@ async def api_send_message(user_tg_id: int, msg_in: SendMessageIn):
 class AnswerIn(BaseModel):
     text: str
 
+class QuestionUpdate(BaseModel):
+    status: str
+
 
 @app.post("/api/questions/{question_id}/answer")
 async def answer_question(question_id: int, ans: AnswerIn):
@@ -1279,3 +1282,18 @@ async def answer_question(question_id: int, ans: AnswerIn):
         "timestamp": ts,
         "is_answer": True
     }
+
+
+@app.post("/api/questions/{question_id}")
+async def update_question(question_id: int, upd: QuestionUpdate):
+    q = await database.fetch_one(
+        questions_table.select().where(questions_table.c.id == question_id)
+    )
+    if not q:
+        raise HTTPException(404, "Question not found")
+    await database.execute(
+        questions_table.update()
+        .where(questions_table.c.id == question_id)
+        .values(status=upd.status)
+    )
+    return {"success": True}
