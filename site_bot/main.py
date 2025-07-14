@@ -95,6 +95,10 @@ def has_receipt_msg_id() -> bool:
     """Return True if the receipts table has a 'message_id' column."""
     return 'message_id' in receipts_table.c
 
+def has_receipt_draw_id() -> bool:
+    """Return True if the receipts table has a 'draw_id' column."""
+    return 'draw_id' in receipts_table.c
+
 # Подготовка automap для ORM-классов
 Base = automap_base(metadata=metadata)
 Base.prepare()
@@ -711,16 +715,14 @@ async def update_participant(tg_id: int, data: ParticipantUpdate):
 
 @app.get("/receipts", response_class=HTMLResponse)
 async def receipts(request: Request):
+    sel_columns = [receipts_table, users_table.c.name.label("user_name")]
+    join_clause = receipts_table.outerjoin(users_table, receipts_table.c.user_tg_id == users_table.c.tg_id)
+    if has_receipt_draw_id():
+        sel_columns.append(prize_draws_table.c.title.label("draw_title"))
+        join_clause = join_clause.outerjoin(prize_draws_table, receipts_table.c.draw_id == prize_draws_table.c.id)
     query = (
-        sqlalchemy.select(
-            receipts_table,
-            users_table.c.name.label("user_name"),
-        )
-        .select_from(
-            receipts_table.outerjoin(
-                users_table, receipts_table.c.user_tg_id == users_table.c.tg_id
-            )
-        )
+        sqlalchemy.select(*sel_columns)
+        .select_from(join_clause)
         .order_by(receipts_table.c.id.desc())
     )
     rows = await database.fetch_all(query)
@@ -737,24 +739,32 @@ async def receipts(request: Request):
             "user_name": r["user_name"],
             "file_path": file_path,
             "status": r["status"] if has_receipt_status() and "status" in r else None,
+            "draw_id": r["draw_id"] if has_receipt_draw_id() and "draw_id" in r else None,
+            "draw_title": r.get("draw_title"),
         })
+    draws_rows = await database.fetch_all(prize_draws_table.select())
+    draws = [{"id": d["id"], "title": d["title"]} for d in draws_rows]
     return templates.TemplateResponse(
         "receipts.html",
-        {"request": request, "active_page": "receipts", "receipts_data": receipts, "version": app.state.static_version}
+        {
+            "request": request,
+            "active_page": "receipts",
+            "receipts_data": receipts,
+            "draws_data": draws,
+            "version": app.state.static_version,
+        }
     )
 
 @app.get("/api/receipts/{receipt_id}")
 async def get_receipt(receipt_id: int):
+    sel_cols = [receipts_table, users_table.c.name.label("user_name")]
+    join_clause = receipts_table.outerjoin(users_table, receipts_table.c.user_tg_id == users_table.c.tg_id)
+    if has_receipt_draw_id():
+        sel_cols.append(prize_draws_table.c.title.label("draw_title"))
+        join_clause = join_clause.outerjoin(prize_draws_table, receipts_table.c.draw_id == prize_draws_table.c.id)
     query = (
-        sqlalchemy.select(
-            receipts_table,
-            users_table.c.name.label("user_name"),
-        )
-        .select_from(
-            receipts_table.outerjoin(
-                users_table, receipts_table.c.user_tg_id == users_table.c.tg_id
-            )
-        )
+        sqlalchemy.select(*sel_cols)
+        .select_from(join_clause)
         .where(receipts_table.c.id == receipt_id)
     )
     r = await database.fetch_one(query)
@@ -773,20 +783,26 @@ async def get_receipt(receipt_id: int):
         "file_path": file_path,
         "status": r["status"] if has_receipt_status() and "status" in r else None,
         "message_id": r["message_id"] if has_receipt_msg_id() and "message_id" in r else None,
+        "draw_id": r["draw_id"] if has_receipt_draw_id() and "draw_id" in r else None,
+        "draw_title": r.get("draw_title"),
     }
 
 class ReceiptUpdate(BaseModel):
     status: str
+    draw_id: Optional[int] = None
 
 @app.post("/api/receipts/{receipt_id}")
 async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
     old_row = await database.fetch_one(
         receipts_table.select().where(receipts_table.c.id == receipt_id)
     )
+    update_values = {"status": upd.status}
+    if has_receipt_draw_id():
+        update_values["draw_id"] = upd.draw_id
     await database.execute(
         receipts_table.update()
         .where(receipts_table.c.id == receipt_id)
-        .values(status=upd.status)
+        .values(**update_values)
     )
     if old_row and has_receipt_status() and old_row["status"] != upd.status and has_receipt_msg_id():
         if old_row["message_id"] and old_row["user_tg_id"]:

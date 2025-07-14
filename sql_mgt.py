@@ -1121,23 +1121,50 @@ async def get_question_messages(question_id: int, conn=None) -> List[Dict[str, A
 
 
 @with_connection
-async def add_receipt(file_path: str, user_tg_id: int, status: str = "не подтвержден", number: str = None, date: str = None, amount: float = None, message_id: int | None = None, conn=None) -> int:
+async def get_active_draw_id(date: datetime.date | None = None, conn=None) -> int | None:
+    """Return id of active prize draw for given date, if any."""
+    date = date or datetime.date.today()
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT id FROM prize_draws WHERE status = 'active' AND start_date <= ? AND end_date >= ? ORDER BY id LIMIT 1",
+        (date, date),
+    )
+    row = await cursor.fetchone()
+    await conn.commit()
+    return row[0] if row else None
+
+@with_connection
+async def add_receipt(
+    file_path: str,
+    user_tg_id: int,
+    status: str = "не подтвержден",
+    number: str | None = None,
+    date: str | None = None,
+    amount: float | None = None,
+    message_id: int | None = None,
+    draw_id: int | None = None,
+    conn=None,
+) -> int:
     """Сохранить чек пользователя."""
     cursor = await conn.cursor()
     schema = await get_table_info(conn, "receipts")
+    fields = ["number", "date", "amount", "user_tg_id"]
+    values = [number, date, amount, user_tg_id]
+    if "draw_id" in schema:
+        fields.append("draw_id")
+        values.append(draw_id)
     if "message_id" in schema:
-        await cursor.execute(
-            "INSERT INTO receipts (number, date, amount, user_tg_id, message_id, file_path, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (number, date, amount, user_tg_id, message_id, file_path, status),
-        )
-    else:
-        await cursor.execute(
-            "INSERT INTO receipts (number, date, amount, user_tg_id, file_path, status) VALUES (?, ?, ?, ?, ?, ?)",
-            (number, date, amount, user_tg_id, file_path, status),
-        )
+        fields.append("message_id")
+        values.append(message_id)
+    fields.extend(["file_path", "status"])
+    values.extend([file_path, status])
+    placeholders = ", ".join(["?"] * len(values))
+    await cursor.execute(
+        f"INSERT INTO receipts ({', '.join(fields)}) VALUES ({placeholders})",
+        tuple(values),
+    )
     await conn.commit()
     return cursor.lastrowid
-
 
 @with_connection
 async def update_receipt_status(receipt_id: int, status: str, conn=None) -> str | None:

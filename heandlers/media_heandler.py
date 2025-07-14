@@ -83,7 +83,14 @@ async def set_photo(message: Message) -> None:
                 f.write(photo_file.getvalue())
 
             web_path = f"/static/uploads/{fname}"
-            receipt_id = await sql_mgt.add_receipt(web_path, message.chat.id, "В авто обработке", message_id=message.message_id)
+            draw_id = await sql_mgt.get_active_draw_id()
+            receipt_id = await sql_mgt.add_receipt(
+                web_path,
+                message.chat.id,
+                "В авто обработке",
+                message_id=message.message_id,
+                draw_id=draw_id,
+            )
             await message.reply('Чек получен, идёт обработка...')
             asyncio.create_task(process_receipt(dest, message.chat.id, message.message_id, receipt_id))
             return

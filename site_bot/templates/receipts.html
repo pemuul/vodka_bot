@@ -40,6 +40,7 @@
               <th>Загружен</th>
               <th>Пользователь</th>
               <th>Статус</th>
+              <th>Розыгрыш</th>
               <th>Действия</th>
             </tr>
           </thead>
@@ -99,6 +100,10 @@
                 <option value="не подтвержден">не подтвержден</option>
               </select>
             </li>
+            <li class="list-group-item">
+              <strong>Розыгрыш:</strong>
+              <select id="receipt-draw" class="form-select form-select-sm d-inline-block w-auto ms-2"></select>
+            </li>
           </ul>
         </div>
         <div class="modal-footer">
@@ -111,6 +116,7 @@
   <script>
     document.addEventListener("DOMContentLoaded", () => {
       const data = {{ receipts_data | default([]) | tojson }};
+      const draws = {{ draws_data | default([]) | tojson }};
       const tableBody = document.getElementById("receipts-table-body");
       const pageStart = document.getElementById("page-start");
       const pageEnd   = document.getElementById("page-end");
@@ -211,6 +217,7 @@
             <td>${r.created_at ? new Date(r.created_at).toLocaleDateString('ru-RU') : ''}</td>
             <td>${userLink}</td>
             <td>${r.status ?? ''}</td>
+            <td>${r.draw_title ?? ''}</td>
             <td><button class="btn btn-sm btn-outline-danger btn-del">Удалить</button></td>`;
           tr.onclick = () => {
             fetch(`/api/receipts/${r.id}`)
@@ -224,6 +231,9 @@
                 userLinkEl.textContent = rec.user_name ?? rec.user_tg_id;
                 userLinkEl.href = `/participants?open=${rec.user_tg_id}`;
                 document.getElementById('receipt-status').value = rec.status ?? '';
+                const drawSel = document.getElementById('receipt-draw');
+                drawSel.innerHTML = '<option value="">---</option>' + draws.map(d=>`<option value="${d.id}">${d.title}</option>`).join('');
+                drawSel.value = rec.draw_id ?? '';
                 document.getElementById('go-dialog').onclick = () => {
                   window.location.href = `/participants?open=${rec.user_tg_id}`;
                 };
@@ -247,13 +257,19 @@
       document.getElementById('save-receipt').onclick = () => {
         if (currentReceiptId === null) return;
         const status = document.getElementById('receipt-status').value;
+        const drawId = document.getElementById('receipt-draw').value || null;
         fetch(`/api/receipts/${currentReceiptId}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status })
+          body: JSON.stringify({ status, draw_id: drawId })
         }).then(() => {
           const idx = data.findIndex(x => x.id === currentReceiptId);
-          if (idx !== -1) data[idx].status = status;
+          if (idx !== -1) {
+            data[idx].status = status;
+            data[idx].draw_id = drawId ? parseInt(drawId) : null;
+            const draw = draws.find(d => String(d.id) === drawId);
+            data[idx].draw_title = draw ? draw.title : '';
+          }
           filtered = [...data];
           render();
           const modalEl = document.getElementById('modal-receipt-view');
