@@ -134,17 +134,25 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
     on_off_admin_panel = await sql_mgt.get_param(message.chat.id, 'ADMIN_MENU')
     extra_buttons = None
     if tree_item.item_id == 'check':
-        receipts = await sql_mgt.get_user_receipts(message.chat.id, limit=5)
-        btn_map = {}
-        extra_buttons = []
-        for r in receipts:
-            ts = r['create_dt']
-            if hasattr(ts, 'isoformat'):
-                ts = ts.isoformat()
-            label = f"\U0001F9FE {ts.replace('T', ' ')[:16]}"
-            extra_buttons.append(label)
-            btn_map[label] = r['id']
-        await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', json.dumps(btn_map, ensure_ascii=False))
+        receipts = await sql_mgt.get_user_receipts(message.chat.id, limit=None)
+        await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', '')
+        if receipts:
+            me = await global_objects.bot.get_me()
+            text_message += "\n\nВаши чеки:\n"
+            for r in receipts:
+                ts = r["create_dt"]
+                if hasattr(ts, "isoformat"):
+                    ts = ts.isoformat()
+                dt = ts.replace("T", " ")[:16]
+                link = f"https://t.me/{me.username}?start=receipt_{r['id']}"
+                status = (r.get('status') or '').lower()
+                if status == 'распознан':
+                    mark = '✅'
+                elif status == 'отменён':
+                    mark = '❌'
+                else:
+                    mark = '⏳'
+                text_message += f'<a href="{link}">{dt}</a> {mark}\n'
     else:
         await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', '')
 

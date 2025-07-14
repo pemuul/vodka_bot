@@ -1,7 +1,5 @@
 from aiogram import Router,  F
-from aiogram.types import Message, FSInputFile
-from pathlib import Path
-import json
+from aiogram.types import Message
 
 #from sql_mgt import sql_mgt.get_param, sql_mgt.set_param
 import sql_mgt
@@ -35,32 +33,6 @@ async def set_text(message: Message) -> None:
         await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', 'yes')
         return
 
-    map_str = await sql_mgt.get_param(message.chat.id, 'CHECK_BUTTON_MAP')
-    if map_str:
-        try:
-            btn_map = json.loads(map_str)
-        except Exception:
-            btn_map = {}
-        rid = btn_map.get(message.text)
-        if rid:
-            rec = await sql_mgt.get_receipt(int(rid))
-            if rec and rec.get('file_path'):
-                local = (
-                    Path(__file__).resolve().parent.parent
-                    / 'site_bot'
-                    / rec['file_path'].lstrip('/')
-                )
-                if local.exists():
-                    # send the receipt photo with the same label as the button
-                    await message.answer_photo(
-                        FSInputFile(local), caption=message.text
-                    )
-                else:
-                    await message.answer('Файл не найден.')
-            else:
-                await message.answer('Чек не найден.')
-            await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', 'yes')
-            return
 
     if message.text:
         await message.answer(

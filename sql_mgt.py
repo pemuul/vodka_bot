@@ -1210,21 +1210,28 @@ async def get_receipt(receipt_id: int, conn=None) -> dict | None:
 
 
 @with_connection
-async def get_user_receipts(user_tg_id: int, limit: int = 5, conn=None) -> List[Dict[str, Any]]:
-    """Return recent receipts uploaded by the user."""
+async def get_user_receipts(
+    user_tg_id: int, limit: int | None = 5, conn=None
+) -> List[Dict[str, Any]]:
+    """Return user's receipts sorted by newest."""
     cursor = await conn.cursor()
-    await cursor.execute(
-        "SELECT id, file_path, create_dt FROM receipts "
-        "WHERE user_tg_id = ? ORDER BY create_dt DESC LIMIT ?",
-        (user_tg_id, limit),
+    query = (
+        "SELECT id, file_path, status, create_dt FROM receipts "
+        "WHERE user_tg_id = ? ORDER BY create_dt DESC"
     )
+    params: list[Any] = [user_tg_id]
+    if limit:
+        query += " LIMIT ?"
+        params.append(limit)
+    await cursor.execute(query, tuple(params))
     rows = await cursor.fetchall()
     await conn.commit()
     return [
         {
             "id": r[0],
             "file_path": r[1],
-            "create_dt": r[2].isoformat() if hasattr(r[2], "isoformat") else r[2],
+            "status": r[2],
+            "create_dt": r[3].isoformat() if hasattr(r[3], "isoformat") else r[3],
         }
         for r in rows
     ]

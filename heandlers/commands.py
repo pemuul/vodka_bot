@@ -2,6 +2,7 @@ from aiogram import Router, F, Bot
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, BotCommand, BotCommandScopeDefault, FSInputFile
 from aiogram.enums import ParseMode
+from pathlib import Path
 import os
 import sys
 
@@ -68,6 +69,30 @@ async def command_start_handler(message: Message) -> None:
             await web_market.send_item_message(int(params[1]), message)
             await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', 'yes')
             #return
+        elif params[0] == 'receipt':
+            rid = int(params[1]) if len(params) > 1 and params[1].isdigit() else None
+            if rid:
+                rec = await sql_mgt.get_receipt(rid)
+                if rec and rec.get('file_path'):
+                    local = (
+                        Path(__file__).resolve().parent.parent
+                        / 'site_bot'
+                        / rec['file_path'].lstrip('/')
+                    )
+                    if local.exists():
+                        ts = rec.get('create_dt')
+                        if hasattr(ts, 'isoformat'):
+                            ts = ts.isoformat()
+                        caption = ts.replace('T', ' ')[:16] if ts else ''
+                        await message.answer_photo(FSInputFile(local), caption=caption)
+                    else:
+                        await message.answer('Файл не найден.')
+                else:
+                    await message.answer('Чек не найден.')
+            await menu.get_message(message)
+            await sql_mgt.insert_user(message)
+            await set_commands()
+            return
         else:
             if not await add_admin_from_key(message.chat.id, atter[1]):
                 answer_message = await message.answer("Не вышло:(\nЛибо время ссылки истекло, либо ею уже кто-то воспользовался\n\nЗапросите новую ссылку")
