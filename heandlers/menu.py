@@ -1,4 +1,5 @@
 from aiogram.types import Message, FSInputFile
+from pathlib import Path
 from aiogram.utils.media_group import MediaGroupBuilder
 from aiogram.enums import ParseMode
 import time
@@ -187,6 +188,13 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
             )
             last_message_id_new = last_message.message_id
             await sql_mgt.set_param(message.chat.id, 'LAST_MESSAGE_ID', str(last_message_id_new))
+            # send rules pdf if available
+            if tree_item.item_id == 'rule':
+                pdf_path = await sql_mgt.get_param(0, 'RULE_PDF')
+                if pdf_path:
+                    local = Path(__file__).resolve().parent.parent / 'site_bot' / pdf_path.lstrip('/')
+                    if local.exists():
+                        await message.answer_document(FSInputFile(local))
     else:
         if replace:
             await message.edit_text(text_message, reply_markup=reply_kb, parse_mode=ParseMode.HTML)
@@ -199,6 +207,12 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
             )
             last_message_id_new = last_message.message_id
             await sql_mgt.set_param(message.chat.id, 'LAST_MESSAGE_ID', str(last_message_id_new))
+            if tree_item.item_id == 'rule':
+                pdf_path = await sql_mgt.get_param(0, 'RULE_PDF')
+                if pdf_path:
+                    local = Path(__file__).resolve().parent.parent / 'site_bot' / pdf_path.lstrip('/')
+                    if local.exists():
+                        await message.answer_document(FSInputFile(local))
 
     # для определённых id выполняем действия
     if tree_item.item_id:
