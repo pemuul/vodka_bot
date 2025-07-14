@@ -1,7 +1,7 @@
 # main.py
 
 from fastapi import FastAPI, Request, Form, HTTPException, Depends, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -31,6 +31,8 @@ import os
 import uuid
 from pathlib import Path
 import random
+import csv
+import io
 
 from aiogram import Bot
 from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo
@@ -559,6 +561,48 @@ async def api_draw_stage_mailing(stage_id: int):
         except Exception as e:
             print("draw mailing send error", e)
     return {"success": True}
+
+
+@app.get("/api/draw-stages/{stage_id}/export")
+async def api_draw_stage_export(stage_id: int):
+    stage = await database.fetch_one(
+        prize_draw_stages_table.select().where(prize_draw_stages_table.c.id == stage_id)
+    )
+    if not stage:
+        raise HTTPException(status_code=404, detail="Stage not found")
+
+    query = (
+        sqlalchemy.select(
+            prize_draw_winners_table.c.winner_name,
+            prize_draw_winners_table.c.user_tg_id,
+            users_table.c.name.label("user_name"),
+            users_table.c.phone,
+        )
+        .select_from(
+            prize_draw_winners_table.outerjoin(
+                users_table,
+                users_table.c.tg_id == prize_draw_winners_table.c.user_tg_id,
+            )
+        )
+        .where(prize_draw_winners_table.c.stage_id == stage_id)
+    )
+    rows = await database.fetch_all(query)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Имя", "Telegram ID", "Телефон", "Ссылка на чат"])
+    for r in rows:
+        name = r["user_name"] or r["winner_name"]
+        tg_id = r["user_tg_id"] or ""
+        phone = r["phone"] or ""
+        link = f"tg://user?id={tg_id}" if tg_id else ""
+        writer.writerow([name, tg_id, phone, link])
+    csv_data = output.getvalue()
+    output.close()
+    headers = {
+        "Content-Disposition": f"attachment; filename=winners_stage_{stage_id}.csv"
+    }
+    return Response(csv_data, media_type="text/csv", headers=headers)
 
 @app.get("/questions", response_class=HTMLResponse)
 async def questions(request: Request):

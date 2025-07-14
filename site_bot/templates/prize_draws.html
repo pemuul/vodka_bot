@@ -234,7 +234,13 @@
             if(idx!==-1) currentDraw.stages.splice(idx,1);
           }
         };
-        pane.querySelector(".btn-export-winners").onclick = ()=>alert("Экспорт (заглушка)");
+        pane.querySelector(".btn-export-winners").onclick = ()=>{
+          if(!stageData.id){
+            alert("Сначала сохраните розыгрыш");
+            return;
+          }
+          window.location = `/api/draw-stages/${stageData.id}/export`;
+        };
         pane.querySelector(".btn-test-send").onclick = async ()=>{
           if(!stageData.id){
             alert("Сначала сохраните розыгрыш");
