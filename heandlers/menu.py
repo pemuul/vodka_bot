@@ -134,7 +134,12 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
     on_off_admin_panel = await sql_mgt.get_param(message.chat.id, 'ADMIN_MENU')
     extra_buttons = None
     if tree_item.item_id == 'check':
-        receipts = await sql_mgt.get_user_receipts(message.chat.id, limit=None)
+        active_draw_id = await sql_mgt.get_active_draw_id()
+        receipts = []
+        if active_draw_id is not None:
+            receipts = await sql_mgt.get_user_receipts(
+                message.chat.id, limit=None, draw_id=active_draw_id
+            )
         await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', '')
         if receipts:
             me = await global_objects.bot.get_me()

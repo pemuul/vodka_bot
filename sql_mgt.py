@@ -1210,16 +1210,27 @@ async def get_receipt(receipt_id: int, conn=None) -> dict | None:
 
 
 @with_connection
+async def has_receipt_draw_id(conn=None) -> bool:
+    """Return True if the receipts table has a draw_id column."""
+    schema = await get_table_info(conn, "receipts")
+    return "draw_id" in schema
+
+
+@with_connection
 async def get_user_receipts(
-    user_tg_id: int, limit: int | None = 5, conn=None
+    user_tg_id: int, limit: int | None = 5, draw_id: int | None = None, conn=None
 ) -> List[Dict[str, Any]]:
     """Return user's receipts sorted by newest."""
     cursor = await conn.cursor()
     query = (
         "SELECT id, file_path, status, create_dt FROM receipts "
-        "WHERE user_tg_id = ? ORDER BY create_dt DESC"
+        "WHERE user_tg_id = ?"
     )
     params: list[Any] = [user_tg_id]
+    if draw_id is not None and await has_receipt_draw_id(conn):
+        query += " AND draw_id = ?"
+        params.append(draw_id)
+    query += " ORDER BY create_dt DESC"
     if limit:
         query += " LIMIT ?"
         params.append(limit)
