@@ -194,7 +194,13 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                 if pdf_path:
                     local = Path(__file__).resolve().parent.parent / 'site_bot' / pdf_path.lstrip('/')
                     if local.exists():
-                        await message.answer_document(FSInputFile(local))
+                        doc = await message.answer_document(
+                            FSInputFile(local, filename="Правила.pdf")
+                        )
+                        await sql_mgt.append_param_get_old(
+                            message.chat.id, 'LAST_MEDIA_LIST', str(doc.message_id)
+                        )
+                        replace_last_messages = False
     else:
         if replace:
             await message.edit_text(text_message, reply_markup=reply_kb, parse_mode=ParseMode.HTML)
@@ -212,7 +218,13 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                 if pdf_path:
                     local = Path(__file__).resolve().parent.parent / 'site_bot' / pdf_path.lstrip('/')
                     if local.exists():
-                        await message.answer_document(FSInputFile(local))
+                        doc = await message.answer_document(
+                            FSInputFile(local, filename="Правила.pdf")
+                        )
+                        await sql_mgt.append_param_get_old(
+                            message.chat.id, 'LAST_MEDIA_LIST', str(doc.message_id)
+                        )
+                        replace_last_messages = False
 
     # для определённых id выполняем действия
     if tree_item.item_id:
