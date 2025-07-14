@@ -57,7 +57,7 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
     if tree_item.path == SPLITTER_STR and await sql_mgt.is_user_blocked(message.chat.id):
         blocked_note = (
             "Вы заблокированы!\n"
-            "Задайте для разблокировки уточните причину на вкладке Вопрос.\n\n"
+            "Для разблокировки уточните причину на вкладке Вопрос.\n\n"
         )
         text_message = blocked_note + text_message
     if tree_item_text:
