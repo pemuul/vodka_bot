@@ -147,7 +147,13 @@ async def fill_amount_wallet_msg(message: Message):
 
 @router.callback_query(F.data.startswith("admin_help"))
 async def callback_admin_help(callback: CallbackQuery):
-    await global_objects.bot.edit_message_text(admin_help_text, callback.message.chat.id, callback.message.message_id, reply_markup=admin_kb.admin_buttons(), parse_mode=ParseMode.HTML)
+    await global_objects.bot.edit_message_text(
+        text=admin_help_text,
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        reply_markup=admin_kb.admin_buttons(),
+        parse_mode=ParseMode.HTML,
+    )
 
 
 @router.callback_query(F.data.startswith("defolt_data"))
@@ -164,9 +170,13 @@ async def return_data(callback: CallbackQuery):
 async def admin_wallet(callback: CallbackQuery):
     message_data = await get_message_admin_wallet(callback.message)
 
-    await global_objects.bot.edit_message_text(message_data[0], callback.message.chat.id, callback.message.message_id, 
-                                               reply_markup=message_data[1], 
-                                               parse_mode=ParseMode.HTML)
+    await global_objects.bot.edit_message_text(
+        text=message_data[0],
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        reply_markup=message_data[1],
+        parse_mode=ParseMode.HTML,
+    )
 
 
 async def get_message_admin_wallet(message: Message):
@@ -182,9 +192,13 @@ async def get_message_admin_wallet(message: Message):
 @router.callback_query(F.data.startswith("fill_wallet"))
 async def fill_wallet(callback: CallbackQuery):
     message_text = 'Выберите сумму пополнения'
-    await global_objects.bot.edit_message_text(message_text, callback.message.chat.id, callback.message.message_id, 
-                                               reply_markup=admin_kb.fill_wallet_kb(), 
-                                               parse_mode=ParseMode.HTML)
+    await global_objects.bot.edit_message_text(
+        text=message_text,
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        reply_markup=admin_kb.fill_wallet_kb(),
+        parse_mode=ParseMode.HTML,
+    )
 
 
 @router.callback_query(AdminFillWallet.filter())
@@ -359,7 +373,13 @@ async def callbacks_num_change_fab(callback: CallbackQuery, callback_data: Admin
         )
 
     elif callback_data.button == 'OTHER':
-        await global_objects.bot.edit_message_text(await get_text_message(callback_data.path_id), callback.message.chat.id, callback.message.message_id, reply_markup=admin_kb.other_item_edit_kb(callback_data.path_id), parse_mode=ParseMode.HTML)
+        await global_objects.bot.edit_message_text(
+            text=await get_text_message(callback_data.path_id),
+            chat_id=callback.message.chat.id,
+            message_id=callback.message.message_id,
+            reply_markup=admin_kb.other_item_edit_kb(callback_data.path_id),
+            parse_mode=ParseMode.HTML,
+        )
     elif callback_data.button == 'RETURN':
         await menu.get_message(
             callback.message,
@@ -403,7 +423,13 @@ async def callbacks_num_change_fab(callback: CallbackQuery, callback_data: Admin
         )
         await edit_message(callback.message.chat.id, callback.message.message_id, callback_data.path_id)
     elif callback_data.button == 'MAILINGS':
-        await global_objects.bot.edit_message_text(await get_text_message(callback_data.path_id), callback.message.chat.id, callback.message.message_id, reply_markup=admin_kb.mailing_kb(callback_data.path_id), parse_mode=ParseMode.HTML)
+        await global_objects.bot.edit_message_text(
+            text=await get_text_message(callback_data.path_id),
+            chat_id=callback.message.chat.id,
+            message_id=callback.message.message_id,
+            reply_markup=admin_kb.mailing_kb(callback_data.path_id),
+            parse_mode=ParseMode.HTML,
+        )
     elif callback_data.button == 'SEND_MAILING':
         await mailing.mailing_to_all_subscribers(int(callback_data.path_id))
         
@@ -421,7 +447,13 @@ async def edit_message(chat_id, message_id, path_id):
     await sql_mgt.set_param(chat_id, 'IMPORT_MEDIA', '')
     await sql_mgt.set_param(chat_id, 'NEW_MEDIA_LIST', '')
 
-    await global_objects.bot.edit_message_text(await get_text_message(path_id), chat_id, message_id, reply_markup=admin_kb.item_edit_kb(path_id), parse_mode=ParseMode.HTML)
+    await global_objects.bot.edit_message_text(
+        text=await get_text_message(path_id),
+        chat_id=chat_id,
+        message_id=message_id,
+        reply_markup=admin_kb.item_edit_kb(path_id),
+        parse_mode=ParseMode.HTML,
+    )
 
 
 async def get_text_message(path_id):

@@ -141,7 +141,12 @@ async def add_admin_media(message: Message, type_file:str = 'image'):
     message_text = f'Отправте фото или видео, которые будут добавлены!\nЗагружено медиа: {len(new_media_list)}'
 
     try:
-        await global_objects.bot.edit_message_text(message_text, message.chat.id, int(last_message_id), reply_markup=admin_kb.import_media_kb(last_path_id))
+        await global_objects.bot.edit_message_text(
+            text=message_text,
+            chat_id=message.chat.id,
+            message_id=int(last_message_id),
+            reply_markup=admin_kb.import_media_kb(last_path_id),
+        )
     except Exception as e:
         print(e)
     #await callback.message.edit_text(f'Отправте фото, которые будут добавлены!\nЗагружено фото: {}', reply_markup=admin_kb.import_media_kb(callback_data.path_id), parse_mode=ParseMode.HTML)
