@@ -314,6 +314,12 @@
 
       // старт
       renderQuestions();
+      const params = new URLSearchParams(location.search);
+      const openId = params.get('open');
+      if (openId) {
+        const q = questionsData.find(x => String(x.id) === openId);
+        if (q) openConversation(q);
+      }
     });
   </script>
 {% endblock %}

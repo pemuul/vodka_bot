@@ -123,9 +123,10 @@
               <ul
                 class="dropdown-menu dropdown-menu-end"
                 aria-labelledby="notificationsDropdown"
+                id="notificationsMenu"
               >
                 <li><h6 class="dropdown-header">Уведомления</h6></li>
-                <li>
+                <li id="notifications-empty">
                   <span class="dropdown-item-text text-muted">Нет новых уведомлений</span>
                 </li>
               </ul>
@@ -202,10 +203,40 @@
     <!-- === Конец основного контейнера === -->
 
     <!-- Bootstrap JS Bundle -->
-    <script
+  <script
       src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.6/dist/js/bootstrap.bundle.min.js?v={{ version }}"
       integrity="sha384-j1CDi7MgGQ12Z7Qab0qlWQ/Qqz24Gc6BM0thvEMVjHnfYGF0rmFCozFSxQBxwHKO"
       crossorigin="anonymous"
     ></script>
+    <script>
+      document.addEventListener('DOMContentLoaded', () => {
+        const menu  = document.getElementById('notificationsMenu');
+        const badge = document.querySelector('#notificationsDropdown .badge');
+        fetch('/api/notifications')
+          .then(r => r.json())
+          .then(data => {
+            const list = data.notifications || [];
+            badge.textContent = list.length;
+            if (list.length === 0) return;
+            const empty = document.getElementById('notifications-empty');
+            if (empty) empty.remove();
+            list.forEach(n => {
+              const li = document.createElement('li');
+              const a  = document.createElement('a');
+              a.className = 'dropdown-item';
+              if (n.type === 'receipt') {
+                a.href = `/receipts?open=${n.id}`;
+              } else if (n.type === 'question') {
+                a.href = `/questions?open=${n.id}`;
+              } else {
+                a.href = '#';
+              }
+              a.textContent = n.text;
+              li.appendChild(a);
+              menu.appendChild(li);
+            });
+          });
+      });
+    </script>
   </body>
 </html>
