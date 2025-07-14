@@ -30,6 +30,7 @@ import json
 import os
 import uuid
 from pathlib import Path
+import random
 
 from aiogram import Bot
 from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo
@@ -204,20 +205,54 @@ async def prize_draws(request: Request):
         )
         for idx, s in enumerate(stages_rows):
             winners_rows = await database.fetch_all(
-                prize_draw_winners_table.select().where(
-                    prize_draw_winners_table.c.stage_id == s["id"]
+                sqlalchemy.select(
+                    prize_draw_winners_table.c.winner_name,
+                    prize_draw_winners_table.c.user_tg_id,
+                    receipts_table.c.file_path,
+                    users_table.c.name.label("user_name"),
                 )
+                .select_from(
+                    prize_draw_winners_table
+                    .outerjoin(
+                        receipts_table,
+                        sqlalchemy.and_(
+                            receipts_table.c.user_tg_id
+                            == prize_draw_winners_table.c.user_tg_id,
+                            receipts_table.c.draw_id == d["id"],
+                        ),
+                    )
+                    .outerjoin(
+                        users_table,
+                        users_table.c.tg_id
+                        == prize_draw_winners_table.c.user_tg_id,
+                    )
+                )
+                .where(prize_draw_winners_table.c.stage_id == s["id"])
             )
-            winners = [w["winner_name"] for w in winners_rows]
-            stages.append({
-                "__id": f"stage-{s['id']}",
-                "name": s["name"],
-                "description": s["description"],
-                "winnersCount": s["winners_count"],
-                "textBefore": s["text_before"],
-                "textAfter": s["text_after"],
-                "winners": winners
-            })
+            winners = []
+            for w in winners_rows:
+                file_path = w["file_path"]
+                if file_path and not file_path.startswith("/static"):
+                    file_path = f"/static/uploads/{Path(file_path).name}"
+                winners.append(
+                    {
+                        "name": w["user_name"] or w["winner_name"],
+                        "user_id": w["user_tg_id"],
+                        "file": file_path,
+                    }
+                )
+            stages.append(
+                {
+                    "__id": f"stage-{s['id']}",
+                    "id": s["id"],
+                    "name": s["name"],
+                    "description": s["description"],
+                    "winnersCount": s["winners_count"],
+                    "textBefore": s["text_before"],
+                    "textAfter": s["text_after"],
+                    "winners": winners,
+                }
+            )
         draws.append({
             "id": d["id"],
             "title": d["title"],
@@ -326,6 +361,68 @@ async def save_draw(draw: DrawIn):
             )
 
     return {"success": True, "id": new_id}
+
+
+class DetermineReq(BaseModel):
+    winners_count: int
+
+
+@app.post("/api/draw-stages/{stage_id}/determine")
+async def api_determine_winners(stage_id: int, req: DetermineReq):
+    stage_row = await database.fetch_one(
+        prize_draw_stages_table.select().where(prize_draw_stages_table.c.id == stage_id)
+    )
+    if not stage_row:
+        raise HTTPException(status_code=404, detail="Stage not found")
+
+    receipts_rows = await database.fetch_all(
+        sqlalchemy.select(
+            receipts_table.c.id,
+            receipts_table.c.user_tg_id,
+            receipts_table.c.file_path,
+            users_table.c.name.label("user_name"),
+        )
+        .select_from(
+            receipts_table.join(
+                users_table, receipts_table.c.user_tg_id == users_table.c.tg_id
+            )
+        )
+        .where(receipts_table.c.draw_id == stage_row["draw_id"])
+    )
+    if not receipts_rows:
+        raise HTTPException(status_code=400, detail="Нет чеков для розыгрыша")
+
+    sample = list(receipts_rows)
+    random.shuffle(sample)
+    sample = sample[: max(1, req.winners_count)]
+
+    await database.execute(
+        prize_draw_winners_table.delete().where(
+            prize_draw_winners_table.c.stage_id == stage_id
+        )
+    )
+
+    winners_resp = []
+    for r in sample:
+        await database.execute(
+            prize_draw_winners_table.insert().values(
+                stage_id=stage_id,
+                user_tg_id=r["user_tg_id"],
+                winner_name=r["user_name"],
+            )
+        )
+        fpath = r["file_path"]
+        if fpath and not fpath.startswith("/static"):
+            fpath = f"/static/uploads/{Path(fpath).name}"
+        winners_resp.append(
+            {
+                "name": r["user_name"],
+                "user_id": r["user_tg_id"],
+                "file": fpath,
+            }
+        )
+
+    return {"winners": winners_resp}
 
 @app.get("/questions", response_class=HTMLResponse)
 async def questions(request: Request):
