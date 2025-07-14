@@ -802,6 +802,18 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
                         text,
                         reply_to_message_id=old_row["message_id"],
                     )
+                    log_values = {
+                        "user_tg_id": old_row["user_tg_id"],
+                        "sender": "admin",
+                        "text": text,
+                        "buttons": None,
+                        "media": None,
+                    }
+                    if HAS_PM_IS_ANSWER:
+                        log_values["is_answer"] = True
+                    await database.execute(
+                        participant_messages_table.insert().values(**log_values)
+                    )
                 except Exception as e:
                     print(f"Failed to send receipt status message: {e}")
     return {"success": True}
