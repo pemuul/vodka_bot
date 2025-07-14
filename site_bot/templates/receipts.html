@@ -16,6 +16,15 @@
     <!-- кнопка "Добавить чек" убрана -->
   </div>
 
+  <!-- Модал полноразмерного изображения -->
+  <div class="modal fade" id="modal-image-full" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-xl">
+      <div class="modal-content bg-transparent border-0">
+        <img id="receipt-img-full" src="" class="img-fluid" alt="Чек">
+      </div>
+    </div>
+  </div>
+
   <!-- Карточка со списком чеков -->
   <div class="card mb-3">
     <!-- тело карточки -->
@@ -70,7 +79,7 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
         </div>
         <div class="modal-body">
-          <img id="receipt-img" src="" alt="Чек" class="img-fluid mb-3"/>
+          <img id="receipt-img" src="" alt="Чек" class="img-thumbnail mb-3" style="max-width: 200px; cursor: pointer;"/>
           <ul class="list-group">
             <li class="list-group-item"><strong>Номер:</strong> <span id="view-number"></span></li>
             <li class="list-group-item"><strong>Загружен:</strong> <span id="view-date"></span></li>
@@ -107,6 +116,11 @@
       const pageTotal = document.getElementById("page-total");
       const recPerPageSel = document.getElementById("records-per-page");
       const paginationUl = document.getElementById("pagination-ul");
+      const receiptImg = document.getElementById("receipt-img");
+
+      receiptImg.onclick = () => {
+        new bootstrap.Modal(document.getElementById('modal-image-full')).show();
+      };
 
       let filtered = [...data];
       let currentPage = 1;
@@ -196,6 +210,7 @@
               .then(res=>res.json())
               .then(rec=>{
                 document.getElementById('receipt-img').src = rec.file_path;
+                document.getElementById('receipt-img-full').src = rec.file_path;
                 document.getElementById('view-number').textContent = rec.number;
                 document.getElementById('view-date').textContent = new Date(rec.created_at).toLocaleDateString('ru-RU');
                 const userLinkEl = document.getElementById('view-user');
