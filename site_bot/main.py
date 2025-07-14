@@ -375,7 +375,7 @@ async def api_determine_winners(stage_id: int, req: DetermineReq):
     if not stage_row:
         raise HTTPException(status_code=404, detail="Stage not found")
 
-    receipts_rows = await database.fetch_all(
+    query = (
         sqlalchemy.select(
             receipts_table.c.id,
             receipts_table.c.user_tg_id,
@@ -389,6 +389,10 @@ async def api_determine_winners(stage_id: int, req: DetermineReq):
         )
         .where(receipts_table.c.draw_id == stage_row["draw_id"])
     )
+    if has_receipt_status():
+        query = query.where(receipts_table.c.status == "Распознан")
+
+    receipts_rows = await database.fetch_all(query)
     if not receipts_rows:
         raise HTTPException(status_code=400, detail="Нет чеков для розыгрыша")
 
