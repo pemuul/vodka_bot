@@ -45,9 +45,16 @@ async def set_text(message: Message) -> None:
         if rid:
             rec = await sql_mgt.get_receipt(int(rid))
             if rec and rec.get('file_path'):
-                local = Path(__file__).resolve().parent.parent / 'site_bot' / rec['file_path'].lstrip('/')
+                local = (
+                    Path(__file__).resolve().parent.parent
+                    / 'site_bot'
+                    / rec['file_path'].lstrip('/')
+                )
                 if local.exists():
-                    await message.answer_photo(FSInputFile(local), caption='Чек')
+                    # send the receipt photo with the same label as the button
+                    await message.answer_photo(
+                        FSInputFile(local), caption=message.text
+                    )
                 else:
                     await message.answer('Файл не найден.')
             else:
