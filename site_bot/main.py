@@ -20,7 +20,7 @@ import sqlalchemy
 from sqlalchemy import MetaData, Table, create_engine
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import sessionmaker
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 import datetime
 from pydantic import BaseModel
 
@@ -83,6 +83,7 @@ participant_messages_table = Table("participant_messages", metadata, autoload_wi
 HAS_PM_IS_ANSWER = 'is_answer' in participant_messages_table.c
 HAS_QM_IS_ANSWER = 'is_answer' in question_messages_table.c
 HAS_SM_MEDIA = 'media' in scheduled_messages_table.c
+HAS_PDW_RECEIPT_ID = 'receipt_id' in prize_draw_winners_table.c
 receipts_table             = Table("receipts", metadata, autoload_with=engine)
 images_table               = Table("images", metadata, autoload_with=engine)
 deleted_images_table       = Table("deleted_images", metadata, autoload_with=engine)
@@ -204,43 +205,69 @@ async def prize_draws(request: Request):
             )
         )
         for idx, s in enumerate(stages_rows):
-            winners_rows = await database.fetch_all(
-                sqlalchemy.select(
-                    prize_draw_winners_table.c.winner_name,
-                    prize_draw_winners_table.c.user_tg_id,
-                    receipts_table.c.file_path,
-                    users_table.c.name.label("user_name"),
-                )
-                .select_from(
-                    prize_draw_winners_table
-                    .outerjoin(
-                        receipts_table,
-                        sqlalchemy.and_(
-                            receipts_table.c.user_tg_id
+            if HAS_PDW_RECEIPT_ID:
+                winners_rows = await database.fetch_all(
+                    sqlalchemy.select(
+                        prize_draw_winners_table.c.winner_name,
+                        prize_draw_winners_table.c.user_tg_id,
+                        prize_draw_winners_table.c.receipt_id,
+                        receipts_table.c.file_path,
+                        users_table.c.name.label("user_name"),
+                    )
+                    .select_from(
+                        prize_draw_winners_table
+                        .outerjoin(
+                            receipts_table,
+                            receipts_table.c.id
+                            == prize_draw_winners_table.c.receipt_id,
+                        )
+                        .outerjoin(
+                            users_table,
+                            users_table.c.tg_id
                             == prize_draw_winners_table.c.user_tg_id,
-                            receipts_table.c.draw_id == d["id"],
-                        ),
+                        )
                     )
-                    .outerjoin(
-                        users_table,
-                        users_table.c.tg_id
-                        == prize_draw_winners_table.c.user_tg_id,
-                    )
+                    .where(prize_draw_winners_table.c.stage_id == s["id"])
                 )
-                .where(prize_draw_winners_table.c.stage_id == s["id"])
-            )
+            else:
+                winners_rows = await database.fetch_all(
+                    sqlalchemy.select(
+                        prize_draw_winners_table.c.winner_name,
+                        prize_draw_winners_table.c.user_tg_id,
+                        receipts_table.c.file_path,
+                        users_table.c.name.label("user_name"),
+                    )
+                    .select_from(
+                        prize_draw_winners_table
+                        .outerjoin(
+                            receipts_table,
+                            sqlalchemy.and_(
+                                receipts_table.c.user_tg_id
+                                == prize_draw_winners_table.c.user_tg_id,
+                                receipts_table.c.draw_id == d["id"],
+                            ),
+                        )
+                        .outerjoin(
+                            users_table,
+                            users_table.c.tg_id
+                            == prize_draw_winners_table.c.user_tg_id,
+                        )
+                    )
+                    .where(prize_draw_winners_table.c.stage_id == s["id"])
+                )
             winners = []
             for w in winners_rows:
                 file_path = w["file_path"]
                 if file_path and not file_path.startswith("/static"):
                     file_path = f"/static/uploads/{Path(file_path).name}"
-                winners.append(
-                    {
-                        "name": w["user_name"] or w["winner_name"],
-                        "user_id": w["user_tg_id"],
-                        "file": file_path,
-                    }
-                )
+                winner_obj = {
+                    "name": w["user_name"] or w["winner_name"],
+                    "user_id": w["user_tg_id"],
+                    "file": file_path,
+                }
+                if HAS_PDW_RECEIPT_ID and "receipt_id" in w:
+                    winner_obj["receipt_id"] = w["receipt_id"]
+                winners.append(winner_obj)
             stages.append(
                 {
                     "__id": f"stage-{s['id']}",
@@ -273,7 +300,7 @@ class StageIn(BaseModel):
     winnersCount: int
     textBefore: Optional[str] = None
     textAfter: Optional[str] = None
-    winners: List[str] = []
+    winners: List[Any] = []
 
 class DrawIn(BaseModel):
     id: Optional[int] = None
@@ -353,11 +380,24 @@ async def save_draw(draw: DrawIn):
             )
         )
         for winner in stage.winners:
+            if isinstance(winner, dict):
+                winner_name = winner.get("name")
+                user_id = winner.get("user_id")
+                r_id = winner.get("receipt_id")
+            else:
+                winner_name = str(winner)
+                user_id = None
+                r_id = None
+            insert_values = {
+                "stage_id": stage_id,
+                "winner_name": winner_name,
+            }
+            if user_id is not None:
+                insert_values["user_tg_id"] = user_id
+            if HAS_PDW_RECEIPT_ID and r_id is not None:
+                insert_values["receipt_id"] = r_id
             await database.execute(
-                prize_draw_winners_table.insert().values(
-                    stage_id=stage_id,
-                    winner_name=winner
-                )
+                prize_draw_winners_table.insert().values(**insert_values)
             )
 
     return {"success": True, "id": new_id}
@@ -408,12 +448,15 @@ async def api_determine_winners(stage_id: int, req: DetermineReq):
 
     winners_resp = []
     for r in sample:
+        insert_values = {
+            "stage_id": stage_id,
+            "user_tg_id": r["user_tg_id"],
+            "winner_name": r["user_name"],
+        }
+        if HAS_PDW_RECEIPT_ID:
+            insert_values["receipt_id"] = r["id"]
         await database.execute(
-            prize_draw_winners_table.insert().values(
-                stage_id=stage_id,
-                user_tg_id=r["user_tg_id"],
-                winner_name=r["user_name"],
-            )
+            prize_draw_winners_table.insert().values(**insert_values)
         )
         fpath = r["file_path"]
         if fpath and not fpath.startswith("/static"):
@@ -423,6 +466,7 @@ async def api_determine_winners(stage_id: int, req: DetermineReq):
                 "name": r["user_name"],
                 "user_id": r["user_tg_id"],
                 "file": fpath,
+                **({"receipt_id": r["id"]} if HAS_PDW_RECEIPT_ID else {}),
             }
         )
 

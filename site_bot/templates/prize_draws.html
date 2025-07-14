@@ -367,7 +367,10 @@
           sd.winnersCount = +pane.querySelector(".stage-winners-count").value || 1;
           sd.textBefore = pane.querySelector(".stage-text-before").value;
           sd.textAfter = pane.querySelector(".stage-text-after").value;
-          sd.winners = (sd.winners||[]).map(w => typeof w === 'string' ? w : w.name);
+          sd.winners = (sd.winners||[]).map(w => {
+            if (typeof w === 'string') return w;
+            return {name: w.name, user_id: w.user_id, receipt_id: w.receipt_id};
+          });
         });
 
         const res = await fetch("/prize-draws", {
