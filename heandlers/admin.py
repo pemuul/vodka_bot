@@ -42,7 +42,12 @@ async def except_message(message: Message, except_message_name: str):
     if except_message_name == 'RENAME':
         if SPLITTER_STR in message.html_text:
             #await message.edit_text('Введите новое название!\nНельзя вводить использовать / !', reply_markup=message.reply_markup)
-            await global_objects.bot.edit_message_text(f'{tree_item.key}\n\nВведите новое название!\nНельзя в тексте использовать {SPLITTER_STR} !', message.chat.id, int(last_message_id), reply_markup=admin_kb.cancel_kb(last_path_id))
+            await global_objects.bot.edit_message_text(
+                text=f'{tree_item.key}\n\nВведите новое название!\nНельзя в тексте использовать {SPLITTER_STR} !',
+                chat_id=message.chat.id,
+                message_id=int(last_message_id),
+                reply_markup=admin_kb.cancel_kb(last_path_id),
+            )
             return
 
         if tree_item.key != message.html_text:
@@ -93,14 +98,26 @@ async def except_message(message: Message, except_message_name: str):
         try:
             new_admin_id = int(message.html_text)
         except:
-            await global_objects.bot.edit_message_text('Вам нужно ввести только число!', message.chat.id, last_message_id, reply_markup=tu_menu('ОТМЕНА'), parse_mode=ParseMode.HTML)
+            await global_objects.bot.edit_message_text(
+                text='Вам нужно ввести только число!',
+                chat_id=message.chat.id,
+                message_id=last_message_id,
+                reply_markup=tu_menu('ОТМЕНА'),
+                parse_mode=ParseMode.HTML,
+            )
             await delete_message(message.chat.id, message.message_id)
             return 
 
         await sql_mgt.add_admin(new_admin_id, message.chat.id)
         global_objects.admin_list.append(new_admin_id)
 
-        await global_objects.bot.edit_message_text('Администратор добавлен!', message.chat.id, last_message_id, reply_markup=tu_menu('В МЕНЮ'), parse_mode=ParseMode.HTML)
+        await global_objects.bot.edit_message_text(
+            text='Администратор добавлен!',
+            chat_id=message.chat.id,
+            message_id=last_message_id,
+            reply_markup=tu_menu('В МЕНЮ'),
+            parse_mode=ParseMode.HTML,
+        )
         await delete_message(message.chat.id, message.message_id)
         return
 

@@ -54,10 +54,12 @@
               <div class="col-md-2">
                 <label for="edit-draw-start" class="form-label">Дата начала</label>
                 <input type="date" id="edit-draw-start" class="form-control" />
+                <div class="invalid-feedback">Дата начала должна быть раньше даты окончания</div>
               </div>
               <div class="col-md-2">
                 <label for="edit-draw-end" class="form-label">Дата окончания</label>
                 <input type="date" id="edit-draw-end" class="form-control" />
+                <div class="invalid-feedback">Дата окончания должна быть позже даты начала</div>
               </div>
               <div class="col-md-3">
                 <label for="main-draw-status" class="form-label">Статус</label>
@@ -165,6 +167,8 @@
         document.getElementById("edit-draw-start").value = currentDraw.start;
         document.getElementById("edit-draw-end").value = currentDraw.end;
         document.getElementById("main-draw-status").value = currentDraw.status;
+        document.getElementById("edit-draw-start").classList.remove("is-invalid");
+        document.getElementById("edit-draw-end").classList.remove("is-invalid");
         // чистим старые вкладки
         document.getElementById("drawStagesTabs").innerHTML = "";
         document.getElementById("drawStagesTabsContent").innerHTML = "";
@@ -197,8 +201,19 @@
         winnersListEl.innerHTML = "";
         (stageData.winners||[]).forEach(w=>{
           const liw = document.createElement("li");
-          liw.className="list-group-item"; liw.style.cursor="pointer"; liw.textContent=w;
-          liw.onclick = ()=>alert(`Нажатие на победителя: ${w}`);
+          liw.className="list-group-item d-flex align-items-center gap-2";
+          if(w.file){
+            const img = document.createElement("img");
+            img.src = w.file;
+            img.style.height = "40px";
+            img.className = "winner-thumb";
+            liw.appendChild(img);
+          }
+          const a = document.createElement("a");
+          a.href = `/participants?open=${w.user_id}`;
+          a.target = "_blank";
+          a.textContent = w.name;
+          liw.appendChild(a);
           winnersListEl.append(liw);
         });
 
@@ -219,21 +234,73 @@
             if(idx!==-1) currentDraw.stages.splice(idx,1);
           }
         };
-        pane.querySelector(".btn-export-winners").onclick = ()=>alert("Экспорт (заглушка)");
-        pane.querySelector(".btn-test-send").onclick = ()=>alert("Тестовая рассылка");
-        pane.querySelector(".btn-send").onclick = ()=>{
-          if(confirm("Отправить рассылку?")) alert("Рассылка отправлена");
+        pane.querySelector(".btn-export-winners").onclick = ()=>{
+          if(!stageData.id){
+            alert("Сначала сохраните розыгрыш");
+            return;
+          }
+          window.location = `/api/draw-stages/${stageData.id}/export`;
         };
-        pane.querySelector(".btn-determine-winner").onclick = ()=>{
+        pane.querySelector(".btn-test-send").onclick = async ()=>{
+          if(!stageData.id){
+            alert("Сначала сохраните розыгрыш");
+            return;
+          }
+          const resp = await fetch(`/api/draw-stages/${stageData.id}/test-mailing`, {method:'POST'});
+          if(resp.ok) alert('Тестовая рассылка отправлена');
+          else{
+            const data = await resp.json().catch(()=>({detail:'Ошибка'}));
+            alert(data.detail||'Ошибка');
+          }
+        };
+        pane.querySelector(".btn-send").onclick = async ()=>{
+          if(!stageData.id){
+            alert("Сначала сохраните розыгрыш");
+            return;
+          }
+          if(!confirm("Отправить рассылку?")) return;
+          const resp = await fetch(`/api/draw-stages/${stageData.id}/mailing`, {method:'POST'});
+          if(resp.ok) alert('Рассылка отправлена');
+          else{
+            const data = await resp.json().catch(()=>({detail:'Ошибка'}));
+            alert(data.detail||'Ошибка');
+          }
+        };
+        pane.querySelector(".btn-determine-winner").onclick = async ()=>{
+          if(!stageData.id){
+            alert("Сначала сохраните розыгрыш");
+            return;
+          }
           if(stageData.winners && stageData.winners.length && !confirm("Перевыбрать?")) return;
           const cnt = +pane.querySelector(".stage-winners-count").value || 1;
-          stageData.winners = [];
-          for(let i=1;i<=cnt;i++) stageData.winners.push(`Победитель ${i}`);
-          winnersListEl.innerHTML="";
+          const resp = await fetch(`/api/draw-stages/${stageData.id}/determine`, {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({winners_count: cnt})
+          });
+          if(!resp.ok){
+            const data = await resp.json().catch(()=>({detail:'Ошибка'}));
+            alert(data.detail||'Ошибка');
+            return;
+          }
+          const data = await resp.json();
+          stageData.winners = data.winners;
+          winnersListEl.innerHTML = '';
           stageData.winners.forEach(w=>{
-            const liw = document.createElement("li");
-            liw.className="list-group-item"; liw.style.cursor="pointer"; liw.textContent=w;
-            winnersListEl.append(liw);
+            const liw = document.createElement('li');
+            liw.className = 'list-group-item d-flex align-items-center gap-2';
+            if(w.file){
+              const img = document.createElement('img');
+              img.src = w.file;
+              img.style.height = '40px';
+              liw.appendChild(img);
+            }
+            const a = document.createElement('a');
+            a.href = `/participants?open=${w.user_id}`;
+            a.target = '_blank';
+            a.textContent = w.name;
+            liw.appendChild(a);
+            winnersListEl.appendChild(liw);
           });
         };
 
@@ -248,8 +315,13 @@
         if (!name) return;
         const newStage = {
           __id: `stage-${++stageCount}`,
-          name, description: "", winnersCount: 1,
-          textBefore: "", textAfter: "", winners: []
+          id: null,
+          name,
+          description: "",
+          winnersCount: 1,
+          textBefore: "",
+          textAfter: "",
+          winners: []
         };
         currentDraw.stages.push(newStage);
         createStageTab(newStage);
@@ -260,6 +332,8 @@
         document.getElementById("edit-draw-title").value = "";
         document.getElementById("edit-draw-start").value = "";
         document.getElementById("edit-draw-end").value = "";
+        document.getElementById("edit-draw-start").classList.remove("is-invalid");
+        document.getElementById("edit-draw-end").classList.remove("is-invalid");
         document.getElementById("main-draw-status").value = "upcoming";
         document.getElementById("drawStagesTabs").innerHTML = "";
         document.getElementById("drawStagesTabsContent").innerHTML = "";
@@ -298,10 +372,21 @@
 
       // кнопка «Сохранить изменения»
       document.getElementById("btn-save-draw").onclick = async () => {
+        const startInput = document.getElementById("edit-draw-start");
+        const endInput = document.getElementById("edit-draw-end");
+        startInput.classList.remove("is-invalid");
+        endInput.classList.remove("is-invalid");
+
+        if (startInput.value >= endInput.value) {
+          startInput.classList.add("is-invalid");
+          endInput.classList.add("is-invalid");
+          return;
+        }
+
         // складываем все поля обратно в currentDraw
         currentDraw.title = document.getElementById("edit-draw-title").value;
-        currentDraw.start = document.getElementById("edit-draw-start").value;
-        currentDraw.end = document.getElementById("edit-draw-end").value;
+        currentDraw.start = startInput.value;
+        currentDraw.end = endInput.value;
         currentDraw.status = document.getElementById("main-draw-status").value;
         currentDraw.stages.forEach(sd => {
           const pane = document.getElementById(`${sd.__id}-content`);
@@ -309,6 +394,10 @@
           sd.winnersCount = +pane.querySelector(".stage-winners-count").value || 1;
           sd.textBefore = pane.querySelector(".stage-text-before").value;
           sd.textAfter = pane.querySelector(".stage-text-after").value;
+          sd.winners = (sd.winners||[]).map(w => {
+            if (typeof w === 'string') return w;
+            return {name: w.name, user_id: w.user_id, receipt_id: w.receipt_id};
+          });
         });
 
         const res = await fetch("/prize-draws", {
@@ -319,7 +408,12 @@
         if (res.ok) {
           location.reload();
         } else {
-          alert("Ошибка сохранения");
+          let msg = "Ошибка сохранения";
+          try {
+            const data = await res.json();
+            if (data.detail) msg = data.detail;
+          } catch (e) {}
+          alert(msg);
         }
       };
     });

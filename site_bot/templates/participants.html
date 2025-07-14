@@ -234,6 +234,9 @@
       const nameField            = document.getElementById("part-name-field");
       const phoneField           = document.getElementById("part-phone-field");
 
+      const urlParams = new URLSearchParams(location.search);
+      const openId = urlParams.get("open");
+
       // состояние
       let filtered        = [...participants];
       let currentPage     = 1;
@@ -364,10 +367,16 @@
             );
             if (!isUser) bubble.classList.add("text-white");
 
-            const textEl = document.createElement("div");
-            textEl.className = "mb-1";
-            textEl.textContent = msg.text;
-            bubble.append(textEl);
+          const textEl = document.createElement("div");
+          textEl.className = "mb-1";
+          textEl.textContent = msg.text;
+          if (!isUser && msg.isAnswer) {
+            const lbl = document.createElement("small");
+            lbl.className = "d-block text-warning";
+            lbl.textContent = "Ответ";
+            bubble.append(lbl);
+          }
+          bubble.append(textEl);
 
             if (!isUser && msg.buttons?.length) {
               const c = document.createElement("div");
@@ -511,6 +520,10 @@
 
       // запуск
       renderList();
+      if (openId) {
+        const p = participants.find(x => String(x.id) === openId);
+        if (p) openParticipant(p);
+      }
     });
   </script>
 {% endblock %}

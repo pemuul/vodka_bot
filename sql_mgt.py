@@ -988,6 +988,7 @@ async def add_participant_message(
     user_tg_id: int,
     sender: str,
     text: Optional[str] = None,
+    is_answer: bool = False,
     buttons: Optional[List[Dict[str, Any]]] = None,
     media: Optional[List[Dict[str, Any]]] = None,
     timestamp: Optional[datetime.datetime] = None,
@@ -1005,10 +1006,10 @@ async def add_participant_message(
     await cursor.execute(
         """
         INSERT INTO participant_messages
-          (user_tg_id, sender, text, buttons, media, timestamp, is_deleted)
-        VALUES (?, ?, ?, ?, ?, ?, 0)
+          (user_tg_id, sender, text, is_answer, buttons, media, timestamp, is_deleted)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
         """,
-        (user_tg_id, sender, text, buttons_json, media_json, ts),
+        (user_tg_id, sender, text, int(is_answer), buttons_json, media_json, ts),
     )
     await conn.commit()
     return cursor.lastrowid
@@ -1030,7 +1031,7 @@ async def get_participant_messages(
 ) -> List[Dict[str, Any]]:
     cursor = await conn.cursor()
     sql = """
-      SELECT id, sender, text, timestamp, is_deleted
+      SELECT id, sender, text, is_answer, timestamp, is_deleted
       FROM participant_messages
       WHERE user_tg_id = ?
     """
@@ -1047,8 +1048,201 @@ async def get_participant_messages(
             "id": r[0],
             "sender": r[1],
             "text": r[2],
-            "timestamp": r[3].isoformat(),
-            "is_deleted": bool(r[4]),
+            "is_answer": bool(r[3]),
+            "timestamp": r[4].isoformat(),
+            "is_deleted": bool(r[5]),
+        }
+        for r in rows
+    ]
+
+
+@with_connection
+async def add_question(user_tg_id: int, text: str, type_: str = 'text', status: str = 'Новый', conn=None) -> int:
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "INSERT INTO questions (user_tg_id, text, type, status) VALUES (?, ?, ?, ?)",
+        (user_tg_id, text, type_, status),
+    )
+    await conn.commit()
+    return cursor.lastrowid
+
+
+@with_connection
+async def add_question_message(question_id: int, sender: str, text: str, is_answer: bool = False, conn=None) -> int:
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "INSERT INTO question_messages (question_id, sender, text, is_answer) VALUES (?, ?, ?, ?)",
+        (question_id, sender, text, int(is_answer)),
+    )
+    await conn.commit()
+    return cursor.lastrowid
+
+
+@with_connection
+async def is_user_blocked(user_tg_id: int, conn=None) -> bool:
+    """Return True if participant is marked as blocked."""
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT blocked FROM participant_settings WHERE user_tg_id = ?",
+        (user_tg_id,),
+    )
+    row = await cursor.fetchone()
+    await conn.commit()
+    return bool(row[0]) if row else False
+
+
+@with_connection
+async def get_questions(conn=None) -> List[Dict[str, Any]]:
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT id, user_tg_id, text, type, status, create_dt FROM questions ORDER BY create_dt DESC"
+    )
+    rows = await cursor.fetchall()
+    await conn.commit()
+    return [
+        {
+            "id": r[0],
+            "user_tg_id": r[1],
+            "text": r[2],
+            "type": r[3],
+            "status": r[4],
+            "create_dt": r[5].isoformat() if hasattr(r[5], 'isoformat') else r[5],
+        }
+        for r in rows
+    ]
+
+
+@with_connection
+async def get_question_messages(question_id: int, conn=None) -> List[Dict[str, Any]]:
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT question_id, sender, text, is_answer, timestamp FROM question_messages WHERE question_id = ? ORDER BY timestamp",
+        (question_id,),
+    )
+    rows = await cursor.fetchall()
+    await conn.commit()
+    return [
+        {
+            "question_id": r[0],
+            "sender": r[1],
+            "text": r[2],
+            "is_answer": bool(r[3]),
+            "timestamp": r[4].isoformat() if hasattr(r[4], 'isoformat') else r[4],
+        }
+        for r in rows
+    ]
+
+
+@with_connection
+async def get_active_draw_id(date: datetime.date | None = None, conn=None) -> int | None:
+    """Return id of active prize draw for given date, if any."""
+    date = date or datetime.date.today()
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT id FROM prize_draws WHERE status = 'active' AND start_date <= ? AND end_date >= ? ORDER BY id LIMIT 1",
+        (date, date),
+    )
+    row = await cursor.fetchone()
+    await conn.commit()
+    return row[0] if row else None
+
+@with_connection
+async def add_receipt(
+    file_path: str,
+    user_tg_id: int,
+    status: str = "не подтвержден",
+    number: str | None = None,
+    date: str | None = None,
+    amount: float | None = None,
+    message_id: int | None = None,
+    draw_id: int | None = None,
+    conn=None,
+) -> int:
+    """Сохранить чек пользователя."""
+    cursor = await conn.cursor()
+    schema = await get_table_info(conn, "receipts")
+    fields = ["number", "date", "amount", "user_tg_id"]
+    values = [number, date, amount, user_tg_id]
+    if "draw_id" in schema:
+        fields.append("draw_id")
+        values.append(draw_id)
+    if "message_id" in schema:
+        fields.append("message_id")
+        values.append(message_id)
+    fields.extend(["file_path", "status"])
+    values.extend([file_path, status])
+    placeholders = ", ".join(["?"] * len(values))
+    await cursor.execute(
+        f"INSERT INTO receipts ({', '.join(fields)}) VALUES ({placeholders})",
+        tuple(values),
+    )
+    await conn.commit()
+    return cursor.lastrowid
+
+@with_connection
+async def update_receipt_status(receipt_id: int, status: str, conn=None) -> str | None:
+    """Update status field for a receipt. Returns previous status."""
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT status FROM receipts WHERE id = ?",
+        (receipt_id,)
+    )
+    row = await cursor.fetchone()
+    old_status = row[0] if row else None
+    await cursor.execute(
+        "UPDATE receipts SET status = ? WHERE id = ?",
+        (status, receipt_id),
+    )
+    await conn.commit()
+    return old_status
+
+
+@with_connection
+async def get_receipt(receipt_id: int, conn=None) -> dict | None:
+    """Return a receipt row as dict or None."""
+    cursor = await conn.cursor()
+    await cursor.execute("SELECT * FROM receipts WHERE id = ?", (receipt_id,))
+    row = await cursor.fetchone()
+    if not row:
+        return None
+    columns = [col[0] for col in cursor.description]
+    return dict(zip(columns, row))
+
+
+@with_connection
+async def has_receipt_draw_id(conn=None) -> bool:
+    """Return True if the receipts table has a draw_id column."""
+    schema = await get_table_info(conn, "receipts")
+    return "draw_id" in schema
+
+
+@with_connection
+async def get_user_receipts(
+    user_tg_id: int, limit: int | None = 5, draw_id: int | None = None, conn=None
+) -> List[Dict[str, Any]]:
+    """Return user's receipts sorted by newest."""
+    cursor = await conn.cursor()
+    query = (
+        "SELECT id, file_path, status, create_dt FROM receipts "
+        "WHERE user_tg_id = ?"
+    )
+    params: list[Any] = [user_tg_id]
+    if draw_id is not None and await has_receipt_draw_id(conn=conn):
+        query += " AND draw_id = ?"
+        params.append(draw_id)
+    query += " ORDER BY create_dt DESC"
+    if limit:
+        query += " LIMIT ?"
+        params.append(limit)
+    await cursor.execute(query, tuple(params))
+    rows = await cursor.fetchall()
+    await conn.commit()
+    return [
+        {
+            "id": r[0],
+            "file_path": r[1],
+            "status": r[2],
+            "create_dt": r[3].isoformat() if hasattr(r[3], "isoformat") else r[3],
         }
         for r in rows
     ]

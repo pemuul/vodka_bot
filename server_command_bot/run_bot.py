@@ -4,6 +4,7 @@ from aiogram.filters import Command
 from aiogram.filters.callback_data import CallbackData
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 import asyncio
 import logging
 import subprocess
@@ -22,7 +23,7 @@ logging.basicConfig(level=logging.INFO)
 
 # Инициализация бота и диспетчера
 API_TOKEN = '7419016302:AAGHDIsBmFr5dMf6BuVeK3QgaH2VHaZR2vw'  # Замените на токен вашего бота
-bot = Bot(token=API_TOKEN, parse_mode=ParseMode.HTML)
+bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 create_new_bot = False
 create_new_bot_name = ''

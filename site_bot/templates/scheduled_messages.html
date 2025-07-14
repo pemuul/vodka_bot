@@ -25,19 +25,24 @@
               <th>#</th>
               <th>Название рассылки</th>
               <th>Время отправки</th>
-              <th>Статус</th>
-              <th>Действия</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
+          <th>Статус</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
         </table>
       </div>
     </div>
   </div>
 
   <div id="message-form-view" class="d-none d-flex flex-column h-100">
-    <div class="px-3 pt-2 mb-3">
+    <div class="px-3 pt-2 mb-3 d-flex justify-content-between align-items-center">
       <button id="back-to-messages" class="btn btn-link p-0">← Вернуться к списку рассылок</button>
+      <div class="btn-group" id="top-action-buttons">
+        <button type="button" class="btn btn-outline-secondary" id="copy-btn">Сделать копию</button>
+        <button type="button" class="btn btn-outline-danger" id="delete-btn">Удалить</button>
+        <button type="button" class="btn btn-outline-info" id="test-send-btn">Тестовая рассылка</button>
+        <button type="button" class="btn btn-success" id="send-btn">Сделать рассылку</button>
+      </div>
     </div>
     <div class="px-3 mb-4"><h2 id="form-title">Новая рассылка</h2></div>
     <div class="flex-grow-1 overflow-auto px-3">
@@ -55,7 +60,12 @@
             </div>
             <div class="mb-3">
               <label for="message-schedule" class="form-label">Время отправки</label>
-              <input type="datetime-local" id="message-schedule" class="form-control" required />
+              <input type="datetime-local" id="message-schedule" class="form-control" />
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Медиафайлы</label>
+              <div id="media-list"></div>
+              <button type="button" class="btn btn-outline-secondary btn-sm mt-1" id="add-media-btn">Добавить медиа</button>
             </div>
             <div class="mb-3 d-none" id="status-group">
               <label for="message-status" class="form-label">Статус</label>
@@ -93,6 +103,16 @@
       const scheduleInput = document.getElementById("message-schedule");
       const statusGroup = document.getElementById("status-group");
       const statusInput = document.getElementById("message-status");
+      const copyBtn = document.getElementById("copy-btn");
+      const deleteBtn = document.getElementById("delete-btn");
+      const testBtn = document.getElementById("test-send-btn");
+      const sendBtn = document.getElementById("send-btn");
+      const mediaListElem = document.getElementById("media-list");
+      const addMediaBtn = document.getElementById("add-media-btn");
+      let mediaArr = [];
+      let currentId = null;
+
+      renderMediaFields();
 
       function renderMessages() {
         tableBody.innerHTML = "";
@@ -110,12 +130,10 @@
                 msg.status==="Новый"?"bg-primary":
                 msg.status==="Ожидает отправки"?"bg-warning":"bg-success"
               }">${msg.status}</span>
-            </td>
-            <td>
-              <button class="btn btn-sm btn-outline-secondary me-1" data-action="edit" data-id="${msg.id}">Редактировать</button>
-              <button class="btn btn-sm btn-outline-info me-1" data-action="copy" data-id="${msg.id}">Сделать копию</button>
-              <button class="btn btn-sm btn-outline-danger" data-action="delete" data-id="${msg.id}">Удалить</button>
             </td>`;
+          tr.dataset.id = msg.id;
+          tr.style.cursor = "pointer";
+          tr.onclick = () => openForm("edit", msg.id);
           tableBody.appendChild(tr);
         });
       }
@@ -126,6 +144,13 @@
         form.reset();
         statusGroup.classList.add("d-none");
         idInput.value = "";
+        mediaArr = [];
+        renderMediaFields();
+        currentId = null;
+        copyBtn.classList.add("d-none");
+        deleteBtn.classList.add("d-none");
+        testBtn.classList.add("d-none");
+        sendBtn.classList.add("d-none");
         if (mode==="create") {
           formTitle.textContent = "Новая рассылка";
         } else {
@@ -139,12 +164,21 @@
             scheduleInput.value = msg.schedule;
             statusGroup.classList.remove("d-none");
             statusInput.value = msg.status;
+            mediaArr = msg.media ? msg.media.map(m=>({type:m.type,file:m.file||m.file_id||''})) : [];
+            renderMediaFields();
+            currentId = msg.id;
+            copyBtn.classList.remove("d-none");
+            deleteBtn.classList.remove("d-none");
+            testBtn.classList.remove("d-none");
+            sendBtn.classList.remove("d-none");
           } else if (mode==="copy") {
             formTitle.textContent = "Копия рассылки";
             nameInput.value = msg.name + " (копия)";
             contentInput.value = msg.content;
             scheduleInput.value = msg.schedule;
             statusGroup.classList.add("d-none");
+            mediaArr = msg.media ? msg.media.map(m=>({type:m.type,file:m.file||m.file_id||''})) : [];
+            renderMediaFields();
           }
         }
       }
@@ -152,22 +186,80 @@
       function closeForm() {
         formContainer.classList.add("d-none");
         listContainer.classList.remove("d-none");
+        mediaArr = [];
+        renderMediaFields();
       }
 
-      tableBody.addEventListener("click", async e => {
-        const btn = e.target.closest("button");
-        if (!btn) return;
-        const id = parseInt(btn.dataset.id);
-        const action = btn.dataset.action;
-        if (action==="edit"||action==="copy") {
-          openForm(action, id);
-        } else if (action==="delete") {
-          if (!confirm("Удалить рассылку?")) return;
-          const res = await fetch(`/scheduled-messages/${id}`, { method:"DELETE" });
-          if (res.ok) location.reload();
-          else alert("Ошибка при удалении");
-        }
-      });
+      function renderMediaFields() {
+        mediaListElem.innerHTML = "";
+        mediaArr.forEach((m, idx) => {
+          const grp = document.createElement("div");
+          grp.className = "input-group mb-2";
+          grp.innerHTML = `
+            <select class="form-select media-type">
+              <option value="photo">photo</option>
+              <option value="video">video</option>
+            </select>
+            <input type="file" class="form-control media-file" accept="image/*,video/*" />
+            <span class="input-group-text filename">${m.file||''}</span>
+            <button type="button" class="btn btn-outline-danger remove-media">×</button>
+            <div class="ms-2 preview" style="width:100px"></div>
+          `;
+          grp.querySelector('.media-type').value = m.type || 'photo';
+          const typeSelect = grp.querySelector('.media-type');
+          const fnameSpan = grp.querySelector('.filename');
+          const previewDiv = grp.querySelector('.preview');
+
+          function updatePreview() {
+            const f = mediaArr[idx].file;
+            const t = typeSelect.value;
+            if (f) {
+              const url = `/static/uploads/${f}`;
+              if (t === 'photo') {
+                previewDiv.innerHTML = `<img src="${url}" class="img-thumbnail" style="max-width:100px; max-height:80px">`;
+              } else {
+                previewDiv.innerHTML = `<video src="${url}" class="img-thumbnail" style="max-width:100px; max-height:80px" muted loop></video>`;
+              }
+            } else {
+              previewDiv.innerHTML = '';
+            }
+          }
+
+          typeSelect.onchange = updatePreview;
+          grp.querySelector('.media-file').onchange = async (e) => {
+            const file = e.target.files[0];
+            if(!file) return;
+            const fd = new FormData();
+            fd.append('file', file);
+            const res = await fetch('/api/media', {method:'POST', body: fd});
+            if(res.ok){
+              const data = await res.json();
+              mediaArr[idx].file = data.name;
+              fnameSpan.textContent = data.name;
+              updatePreview();
+            }else{
+              alert('Ошибка загрузки файла');
+            }
+          };
+          grp.querySelector('.remove-media').onclick = () => {
+            const f = mediaArr[idx].file;
+            if(f){
+              fetch(`/api/media/${f}`, {method:'DELETE'});
+            }
+            mediaArr.splice(idx,1);
+            renderMediaFields();
+          };
+          updatePreview();
+          mediaListElem.appendChild(grp);
+        });
+      }
+
+      addMediaBtn.onclick = () => {
+        if(mediaArr.length >= 10) return;
+        mediaArr.push({type:'photo', file:''});
+        renderMediaFields();
+      };
+
 
       form.addEventListener("submit", async e => {
         e.preventDefault();
@@ -175,8 +267,9 @@
           id: idInput.value ? parseInt(idInput.value) : null,
           name: nameInput.value.trim(),
           content: contentInput.value.trim(),
-          schedule: new Date(scheduleInput.value),
-          status: statusInput.value
+          schedule: scheduleInput.value ? new Date(scheduleInput.value) : null,
+          status: statusInput.value,
+          media: mediaArr.filter(m=>m.file)
         };
         const res = await fetch("/scheduled-messages", {
           method: "POST",
@@ -193,6 +286,28 @@
       createBtn.addEventListener("click", ()=>openForm("create"));
       backBtn.addEventListener("click", closeForm);
       cancelBtn.addEventListener("click", closeForm);
+
+      copyBtn.onclick = () => { if(currentId) openForm("copy", currentId); };
+      deleteBtn.onclick = async () => {
+        if(!currentId) return;
+        if(!confirm("Удалить рассылку?")) return;
+        const res = await fetch(`/scheduled-messages/${currentId}`, {method:"DELETE"});
+        if(res.ok) location.reload();
+        else alert("Ошибка при удалении");
+      };
+      testBtn.onclick = async () => {
+        if(!currentId) return;
+        const res = await fetch(`/scheduled-messages/${currentId}/test`, {method:"POST"});
+        if(res.ok) alert("Тестовая рассылка отправлена");
+        else alert("Ошибка отправки");
+      };
+      sendBtn.onclick = async () => {
+        if(!currentId) return;
+        if(!confirm("Отправить рассылку всем пользователям?")) return;
+        const res = await fetch(`/scheduled-messages/${currentId}/send`, {method:"POST"});
+        if(res.ok) location.reload();
+        else alert("Ошибка отправки");
+      };
 
       renderMessages();
     });

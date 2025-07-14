@@ -1,7 +1,7 @@
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 
-from heandlers import menu, commands, admin
+from heandlers import menu, commands, admin, text_heandler
 #from sql_mgt import sql_mgt.set_param
 import sql_mgt
 from keys import SPLITTER_STR
@@ -106,6 +106,10 @@ async def menu_text_handler(message: Message):
 
         await menu.get_message(message, path=path, replace=False)
         await commands.delete_this_message(message)
+        return
+
+    # If message wasn't recognized as a menu command, delegate to generic text handler
+    await text_heandler.set_text(message)
 
 @router.callback_query(F.data.startswith("b_"))
 async def menu_callback_handler(callback: CallbackQuery):

@@ -1,7 +1,9 @@
 from aiogram.types import Message, FSInputFile
+from pathlib import Path
 from aiogram.utils.media_group import MediaGroupBuilder
 from aiogram.enums import ParseMode
 import time
+import json
 
 #from sql_mgt import sql_mgt.add_visit, sql_mgt.insert_user, sql_mgt.get_param, sql_mgt.set_param
 import sql_mgt
@@ -54,6 +56,12 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
         text_message = f'"{tree_name}"' 
     
     tree_item_text = tree_item.text
+    if tree_item.path == SPLITTER_STR and await sql_mgt.is_user_blocked(message.chat.id):
+        blocked_note = (
+            "Вы заблокированы!\n"
+            "Для разблокировки уточните причину на вкладке Вопрос.\n\n"
+        )
+        text_message = blocked_note + text_message
     if tree_item_text:
         text_message += '\n\n'
         text_message += tree_item_text
@@ -125,11 +133,45 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
     
     # получаем нужную клавиатуру
     on_off_admin_panel = await sql_mgt.get_param(message.chat.id, 'ADMIN_MENU')
+    extra_buttons = None
+    if tree_item.item_id == 'check':
+        active_draw_id = await sql_mgt.get_active_draw_id()
+        receipts = []
+        await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', '')
+        if active_draw_id is None:
+            text_message = (
+                "На данный момент активных розыгрышей нету.\n"
+                "Мы сообщим вам, когда можно будет принять участие в новом!"
+            )
+        else:
+            receipts = await sql_mgt.get_user_receipts(
+                message.chat.id, limit=None, draw_id=active_draw_id
+            )
+            if receipts:
+                me = await global_objects.bot.get_me()
+                text_message += "\n\nВаши чеки:\n"
+                for r in receipts:
+                    ts = r["create_dt"]
+                    if hasattr(ts, "isoformat"):
+                        ts = ts.isoformat()
+                    dt = ts.replace("T", " ")[:16]
+                    link = f"https://t.me/{me.username}?start=receipt_{r['id']}"
+                    status = (r.get('status') or '').lower()
+                    if status == 'распознан':
+                        mark = '✅'
+                    elif status == 'отменён':
+                        mark = '❌'
+                    else:
+                        mark = '⏳'
+                    text_message += f'<a href="{link}">{dt}</a> {mark}\n'
+    else:
+        await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', '')
+
     if on_off_admin_panel == 'on':
         inline_kb = edit_menu_kb(message, path)
-        reply_kb = get_menu_kb(message, path)
+        reply_kb = get_menu_kb(message, path, extra_buttons)
     else:
-        reply_kb = get_menu_kb(message, path)
+        reply_kb = get_menu_kb(message, path, extra_buttons)
         inline_kb = None
 
     if on_off_admin_panel == 'on':
@@ -151,6 +193,19 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
             )
             last_message_id_new = last_message.message_id
             await sql_mgt.set_param(message.chat.id, 'LAST_MESSAGE_ID', str(last_message_id_new))
+            # send rules pdf if available
+            if tree_item.item_id == 'rule':
+                pdf_path = await sql_mgt.get_param(0, 'RULE_PDF')
+                if pdf_path:
+                    local = Path(__file__).resolve().parent.parent / 'site_bot' / pdf_path.lstrip('/')
+                    if local.exists():
+                        doc = await message.answer_document(
+                            FSInputFile(local, filename="Правила.pdf")
+                        )
+                        await sql_mgt.append_param_get_old(
+                            message.chat.id, 'LAST_MEDIA_LIST', str(doc.message_id)
+                        )
+                        replace_last_messages = False
     else:
         if replace:
             await message.edit_text(text_message, reply_markup=reply_kb, parse_mode=ParseMode.HTML)
@@ -163,14 +218,40 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
             )
             last_message_id_new = last_message.message_id
             await sql_mgt.set_param(message.chat.id, 'LAST_MESSAGE_ID', str(last_message_id_new))
+            if tree_item.item_id == 'rule':
+                pdf_path = await sql_mgt.get_param(0, 'RULE_PDF')
+                if pdf_path:
+                    local = Path(__file__).resolve().parent.parent / 'site_bot' / pdf_path.lstrip('/')
+                    if local.exists():
+                        doc = await message.answer_document(
+                            FSInputFile(local, filename="Правила.pdf")
+                        )
+                        await sql_mgt.append_param_get_old(
+                            message.chat.id, 'LAST_MEDIA_LIST', str(doc.message_id)
+                        )
+                        replace_last_messages = False
 
     # для определённых id выполняем действия
     if tree_item.item_id:
         if tree_item.item_id == 'check':
-            await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(True))
+            if await sql_mgt.is_user_blocked(message.chat.id):
+                await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))
+                await message.answer(
+                    "Вы заблокированы и не можете участвовать в розыгрыше"
+                )
+            else:
+                active_draw_id = await sql_mgt.get_active_draw_id()
+                if active_draw_id is None:
+                    await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))
+                else:
+                    await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(True))
+        elif tree_item.item_id == 'help':
+            await sql_mgt.set_param(message.chat.id, 'GET_HELP', str(True))
     else:
         if await sql_mgt.get_param(message.chat.id, 'GET_CHECK') == str(True):
             await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))
+        if await sql_mgt.get_param(message.chat.id, 'GET_HELP') == str(True):
+            await sql_mgt.set_param(message.chat.id, 'GET_HELP', str(False))
 
     # получаем список изображений из параметров
     if last_media_message_str != '':

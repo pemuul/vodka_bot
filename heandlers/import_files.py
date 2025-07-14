@@ -1,5 +1,7 @@
 import os
 import shutil
+from pathlib import Path
+import time
 
 from aiogram import Router, F, Bot
 from aiogram.filters import Command, CommandStart
@@ -7,6 +9,7 @@ from aiogram.types import Message, BotCommand, BotCommandScopeDefault, InlineKey
 from aiogram.types.input_file import FSInputFile
 
 from heandlers import media_heandler
+import sql_mgt
 from keys import MAIN_JSON_FILE
 #from sql_mgt import get_last_media_and_set_next
 
@@ -21,6 +24,7 @@ def init_object(global_objects_inp):
     global_objects = global_objects_inp
     media_heandler.global_objects = global_objects
     media_heandler.sql_mgt.init_object(global_objects)
+    sql_mgt.init_object(global_objects)
 
     
 
@@ -62,6 +66,25 @@ async def get_admin_message(message: Message):
     if not message.chat.id in global_objects.admin_list:
         await message.answer("У вас нет прав администратора")
         return
+
+    # if admin is viewing rules section and sends a PDF, store it as the rules file
+    if message.document.mime_type == "application/pdf":
+        current_path_id = await sql_mgt.get_param(message.chat.id, "CURRENT_PATH_ID")
+        if current_path_id:
+            path = global_objects.tree_data.get_id_to_path(int(current_path_id))
+            tree_item = global_objects.tree_data.get_obj_from_path(path)
+            if tree_item.item_id == "rule":
+                file = await global_objects.bot.download(message.document.file_id)
+                fname = f"rules_{int(time.time())}.pdf"
+                dest_dir = Path(__file__).resolve().parent.parent / "site_bot" / "static" / "uploads"
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                dest = dest_dir / fname
+                with dest.open("wb") as f:
+                    f.write(file.getvalue())
+                web_path = f"/static/uploads/{fname}"
+                await sql_mgt.set_param(0, "RULE_PDF", web_path)
+                await message.answer("Файл правил обновлён")
+                return
     
     if message.document.mime_type in ['image/gif', 'video/mp4']:
         await media_heandler.set_video_file(message)
