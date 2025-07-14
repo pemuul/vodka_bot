@@ -472,6 +472,94 @@ async def api_determine_winners(stage_id: int, req: DetermineReq):
 
     return {"winners": winners_resp}
 
+
+def _format_winner_message(text_before: str | None, winners: list[str], text_after: str | None) -> str:
+    parts = []
+    if text_before:
+        parts.append(text_before.strip())
+    for idx, name in enumerate(winners, 1):
+        parts.append(f"{idx}. {name}")
+    if text_after:
+        parts.append(text_after.strip())
+    return "\n".join(parts)
+
+
+async def _get_stage_winner_names(stage_id: int) -> list[str]:
+    if HAS_PDW_RECEIPT_ID:
+        query = (
+            sqlalchemy.select(
+                prize_draw_winners_table.c.winner_name,
+                prize_draw_winners_table.c.user_tg_id,
+                users_table.c.name.label("user_name"),
+            )
+            .select_from(
+                prize_draw_winners_table.outerjoin(
+                    users_table,
+                    users_table.c.tg_id == prize_draw_winners_table.c.user_tg_id,
+                )
+            )
+            .where(prize_draw_winners_table.c.stage_id == stage_id)
+        )
+    else:
+        query = (
+            sqlalchemy.select(
+                prize_draw_winners_table.c.winner_name,
+                prize_draw_winners_table.c.user_tg_id,
+                users_table.c.name.label("user_name"),
+            )
+            .select_from(
+                prize_draw_winners_table.outerjoin(
+                    users_table,
+                    users_table.c.tg_id == prize_draw_winners_table.c.user_tg_id,
+                )
+            )
+            .where(prize_draw_winners_table.c.stage_id == stage_id)
+        )
+    rows = await database.fetch_all(query)
+    return [r["user_name"] or r["winner_name"] for r in rows]
+
+
+@app.post("/api/draw-stages/{stage_id}/test-mailing")
+async def api_draw_stage_test_mailing(stage_id: int):
+    stage = await database.fetch_one(
+        prize_draw_stages_table.select().where(prize_draw_stages_table.c.id == stage_id)
+    )
+    if not stage:
+        raise HTTPException(status_code=404, detail="Stage not found")
+    winners = await _get_stage_winner_names(stage_id)
+    msg_text = _format_winner_message(stage["text_before"], winners, stage["text_after"])
+
+    testers = await database.fetch_all(
+        participant_settings_table.select().where(participant_settings_table.c.tester == True)
+    )
+    ids = [t["user_tg_id"] for t in testers]
+    for uid in ids:
+        try:
+            await bot.send_message(uid, msg_text)
+        except Exception as e:
+            print("draw test send error", e)
+    return {"success": True}
+
+
+@app.post("/api/draw-stages/{stage_id}/mailing")
+async def api_draw_stage_mailing(stage_id: int):
+    stage = await database.fetch_one(
+        prize_draw_stages_table.select().where(prize_draw_stages_table.c.id == stage_id)
+    )
+    if not stage:
+        raise HTTPException(status_code=404, detail="Stage not found")
+    winners = await _get_stage_winner_names(stage_id)
+    msg_text = _format_winner_message(stage["text_before"], winners, stage["text_after"])
+
+    users = await database.fetch_all(users_table.select())
+    ids = [u["tg_id"] for u in users]
+    for uid in ids:
+        try:
+            await bot.send_message(uid, msg_text)
+        except Exception as e:
+            print("draw mailing send error", e)
+    return {"success": True}
+
 @app.get("/questions", response_class=HTMLResponse)
 async def questions(request: Request):
     rows = await database.fetch_all(
