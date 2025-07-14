@@ -89,6 +89,7 @@ async def command_start_handler(message: Message) -> None:
                         await message.answer('Файл не найден.')
                 else:
                     await message.answer('Чек не найден.')
+            await delete_this_message(message)
             return
         else:
             if not await add_admin_from_key(message.chat.id, atter[1]):
