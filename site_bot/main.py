@@ -740,7 +740,7 @@ async def receipts(request: Request):
             "file_path": file_path,
             "status": r["status"] if has_receipt_status() and "status" in r else None,
             "draw_id": r["draw_id"] if has_receipt_draw_id() and "draw_id" in r else None,
-            "draw_title": r.get("draw_title"),
+            "draw_title": r["draw_title"] if "draw_title" in r else None,
         })
     draws_rows = await database.fetch_all(prize_draws_table.select())
     draws = [{"id": d["id"], "title": d["title"]} for d in draws_rows]
@@ -784,7 +784,7 @@ async def get_receipt(receipt_id: int):
         "status": r["status"] if has_receipt_status() and "status" in r else None,
         "message_id": r["message_id"] if has_receipt_msg_id() and "message_id" in r else None,
         "draw_id": r["draw_id"] if has_receipt_draw_id() and "draw_id" in r else None,
-        "draw_title": r.get("draw_title"),
+        "draw_title": r["draw_title"] if "draw_title" in r else None,
     }
 
 class ReceiptUpdate(BaseModel):
