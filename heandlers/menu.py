@@ -54,6 +54,12 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
         text_message = f'"{tree_name}"' 
     
     tree_item_text = tree_item.text
+    if tree_item.path == SPLITTER_STR and await sql_mgt.is_user_blocked(message.chat.id):
+        blocked_note = (
+            "Вы заблокированы!\n"
+            "Задайте для разблокировки уточните причину на вкладке Вопрос.\n\n"
+        )
+        text_message = blocked_note + text_message
     if tree_item_text:
         text_message += '\n\n'
         text_message += tree_item_text
@@ -167,14 +173,20 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
     # для определённых id выполняем действия
     if tree_item.item_id:
         if tree_item.item_id == 'check':
-            active_draw_id = await sql_mgt.get_active_draw_id()
-            if active_draw_id is None:
+            if await sql_mgt.is_user_blocked(message.chat.id):
                 await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))
                 await message.answer(
-                    "На данный момент активных розыгрышей нету.\nМы сообщим вам, когда можно будет принять участие в новом!"
+                    "Вы заблокированы и не можете участвовать в розыгрыше"
                 )
             else:
-                await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(True))
+                active_draw_id = await sql_mgt.get_active_draw_id()
+                if active_draw_id is None:
+                    await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))
+                    await message.answer(
+                        "На данный момент активных розыгрышей нету.\nМы сообщим вам, когда можно будет принять участие в новом!"
+                    )
+                else:
+                    await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(True))
         elif tree_item.item_id == 'help':
             await sql_mgt.set_param(message.chat.id, 'GET_HELP', str(True))
     else:

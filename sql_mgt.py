@@ -1079,6 +1079,19 @@ async def add_question_message(question_id: int, sender: str, text: str, is_answ
 
 
 @with_connection
+async def is_user_blocked(user_tg_id: int, conn=None) -> bool:
+    """Return True if participant is marked as blocked."""
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT blocked FROM participant_settings WHERE user_tg_id = ?",
+        (user_tg_id,),
+    )
+    row = await cursor.fetchone()
+    await conn.commit()
+    return bool(row[0]) if row else False
+
+
+@with_connection
 async def get_questions(conn=None) -> List[Dict[str, Any]]:
     cursor = await conn.cursor()
     await cursor.execute(

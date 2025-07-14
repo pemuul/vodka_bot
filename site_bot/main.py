@@ -417,6 +417,12 @@ async def api_determine_winners(stage_id: int, req: DetermineReq):
     if not stage_row:
         raise HTTPException(status_code=404, detail="Stage not found")
 
+    join_clause = receipts_table.join(
+        users_table, receipts_table.c.user_tg_id == users_table.c.tg_id
+    ).outerjoin(
+        participant_settings_table,
+        participant_settings_table.c.user_tg_id == users_table.c.tg_id,
+    )
     query = (
         sqlalchemy.select(
             receipts_table.c.id,
@@ -424,12 +430,14 @@ async def api_determine_winners(stage_id: int, req: DetermineReq):
             receipts_table.c.file_path,
             users_table.c.name.label("user_name"),
         )
-        .select_from(
-            receipts_table.join(
-                users_table, receipts_table.c.user_tg_id == users_table.c.tg_id
-            )
-        )
+        .select_from(join_clause)
         .where(receipts_table.c.draw_id == stage_row["draw_id"])
+    )
+    query = query.where(
+        sqlalchemy.or_(
+            participant_settings_table.c.blocked == False,
+            participant_settings_table.c.blocked.is_(None),
+        )
     )
     if has_receipt_status():
         query = query.where(receipts_table.c.status == "Распознан")

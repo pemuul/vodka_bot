@@ -74,6 +74,9 @@ async def set_photo(message: Message) -> None:
 
     is_get_check = await sql_mgt.get_param(message.chat.id, 'GET_CHECK')
     if is_get_check == str(True):
+        if await sql_mgt.is_user_blocked(message.chat.id):
+            await message.reply('Вы заблокированы и не можете участвовать в розыгрыше')
+            return
         photo = message.photo[-1]
         try:
             photo_file = await global_objects.bot.download(photo.file_id)
