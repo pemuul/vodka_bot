@@ -137,28 +137,33 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
     if tree_item.item_id == 'check':
         active_draw_id = await sql_mgt.get_active_draw_id()
         receipts = []
-        if active_draw_id is not None:
+        await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', '')
+        if active_draw_id is None:
+            text_message = (
+                "На данный момент активных розыгрышей нету.\n"
+                "Мы сообщим вам, когда можно будет принять участие в новом!"
+            )
+        else:
             receipts = await sql_mgt.get_user_receipts(
                 message.chat.id, limit=None, draw_id=active_draw_id
             )
-        await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', '')
-        if receipts:
-            me = await global_objects.bot.get_me()
-            text_message += "\n\nВаши чеки:\n"
-            for r in receipts:
-                ts = r["create_dt"]
-                if hasattr(ts, "isoformat"):
-                    ts = ts.isoformat()
-                dt = ts.replace("T", " ")[:16]
-                link = f"https://t.me/{me.username}?start=receipt_{r['id']}"
-                status = (r.get('status') or '').lower()
-                if status == 'распознан':
-                    mark = '✅'
-                elif status == 'отменён':
-                    mark = '❌'
-                else:
-                    mark = '⏳'
-                text_message += f'<a href="{link}">{dt}</a> {mark}\n'
+            if receipts:
+                me = await global_objects.bot.get_me()
+                text_message += "\n\nВаши чеки:\n"
+                for r in receipts:
+                    ts = r["create_dt"]
+                    if hasattr(ts, "isoformat"):
+                        ts = ts.isoformat()
+                    dt = ts.replace("T", " ")[:16]
+                    link = f"https://t.me/{me.username}?start=receipt_{r['id']}"
+                    status = (r.get('status') or '').lower()
+                    if status == 'распознан':
+                        mark = '✅'
+                    elif status == 'отменён':
+                        mark = '❌'
+                    else:
+                        mark = '⏳'
+                    text_message += f'<a href="{link}">{dt}</a> {mark}\n'
     else:
         await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', '')
 
@@ -238,9 +243,6 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                 active_draw_id = await sql_mgt.get_active_draw_id()
                 if active_draw_id is None:
                     await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))
-                    await message.answer(
-                        "На данный момент активных розыгрышей нету.\nМы сообщим вам, когда можно будет принять участие в новом!"
-                    )
                 else:
                     await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(True))
         elif tree_item.item_id == 'help':
