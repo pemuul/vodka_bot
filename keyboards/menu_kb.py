@@ -12,6 +12,17 @@ def init_object(global_objects_inp):
     global_objects = global_objects_inp
 
 
+def _add_paired_rows(keyboard: list[list[KeyboardButton]], labels: list[str]) -> None:
+    row: list[KeyboardButton] = []
+    for label in labels:
+        row.append(KeyboardButton(text=label))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+
 def get_menu_kb(message, path, extra_rows: list[str] | None = None) -> ReplyKeyboardMarkup:
     tree_item = global_objects.tree_data.get_obj_from_path(path)
     next_layers = tree_item.next_layers
@@ -19,10 +30,8 @@ def get_menu_kb(message, path, extra_rows: list[str] | None = None) -> ReplyKeyb
 
     keyboard: list[list[KeyboardButton]] = []
     if extra_rows:
-        for row in extra_rows:
-            keyboard.append([KeyboardButton(text=row)])
-    for button in next_buttons:
-        keyboard.append([KeyboardButton(text=button)])
+        _add_paired_rows(keyboard, extra_rows)
+    _add_paired_rows(keyboard, next_buttons)
 
     path_id = global_objects.tree_data.get_path_to_id(tree_item.path)
     if len(next_buttons) == 0:
