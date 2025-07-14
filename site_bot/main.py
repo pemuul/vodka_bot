@@ -246,6 +246,23 @@ class DrawIn(BaseModel):
 
 @app.post("/prize-draws")
 async def save_draw(draw: DrawIn):
+    # validate date range
+    if draw.end <= draw.start:
+        raise HTTPException(status_code=400, detail="Дата окончания должна быть позже даты начала")
+
+    # ensure no overlap with other active draws
+    if draw.status == "active":
+        overlap_query = (
+            sqlalchemy.select(prize_draws_table.c.id)
+            .where(prize_draws_table.c.status == "active")
+            .where(prize_draws_table.c.id != (draw.id if draw.id is not None else -1))
+            .where(prize_draws_table.c.start_date <= draw.end)
+            .where(prize_draws_table.c.end_date >= draw.start)
+        )
+        conflict = await database.fetch_one(overlap_query)
+        if conflict:
+            raise HTTPException(status_code=400, detail="Период пересекается с другим активным розыгрышем")
+
     if draw.id is None:
         new_id = await database.execute(
             prize_draws_table.insert().values(
