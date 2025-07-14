@@ -2,6 +2,7 @@ from aiogram.types import Message, FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
 from aiogram.enums import ParseMode
 import time
+import json
 
 #from sql_mgt import sql_mgt.add_visit, sql_mgt.insert_user, sql_mgt.get_param, sql_mgt.set_param
 import sql_mgt
@@ -131,11 +132,27 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
     
     # получаем нужную клавиатуру
     on_off_admin_panel = await sql_mgt.get_param(message.chat.id, 'ADMIN_MENU')
+    extra_buttons = None
+    if tree_item.item_id == 'check':
+        receipts = await sql_mgt.get_user_receipts(message.chat.id, limit=5)
+        btn_map = {}
+        extra_buttons = []
+        for r in receipts:
+            ts = r['create_dt']
+            if hasattr(ts, 'isoformat'):
+                ts = ts.isoformat()
+            label = f"\U0001F9FE {ts.replace('T', ' ')[:16]}"
+            extra_buttons.append(label)
+            btn_map[label] = r['id']
+        await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', json.dumps(btn_map, ensure_ascii=False))
+    else:
+        await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', '')
+
     if on_off_admin_panel == 'on':
         inline_kb = edit_menu_kb(message, path)
-        reply_kb = get_menu_kb(message, path)
+        reply_kb = get_menu_kb(message, path, extra_buttons)
     else:
-        reply_kb = get_menu_kb(message, path)
+        reply_kb = get_menu_kb(message, path, extra_buttons)
         inline_kb = None
 
     if on_off_admin_panel == 'on':

@@ -1207,3 +1207,24 @@ async def get_receipt(receipt_id: int, conn=None) -> dict | None:
         return None
     columns = [col[0] for col in cursor.description]
     return dict(zip(columns, row))
+
+
+@with_connection
+async def get_user_receipts(user_tg_id: int, limit: int = 5, conn=None) -> List[Dict[str, Any]]:
+    """Return recent receipts uploaded by the user."""
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT id, file_path, create_dt FROM receipts "
+        "WHERE user_tg_id = ? ORDER BY create_dt DESC LIMIT ?",
+        (user_tg_id, limit),
+    )
+    rows = await cursor.fetchall()
+    await conn.commit()
+    return [
+        {
+            "id": r[0],
+            "file_path": r[1],
+            "create_dt": r[2].isoformat() if hasattr(r[2], "isoformat") else r[2],
+        }
+        for r in rows
+    ]

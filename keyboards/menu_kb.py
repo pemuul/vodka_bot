@@ -12,12 +12,15 @@ def init_object(global_objects_inp):
     global_objects = global_objects_inp
 
 
-def get_menu_kb(message, path) -> ReplyKeyboardMarkup:
+def get_menu_kb(message, path, extra_rows: list[str] | None = None) -> ReplyKeyboardMarkup:
     tree_item = global_objects.tree_data.get_obj_from_path(path)
     next_layers = tree_item.next_layers
     next_buttons = list(next_layers.keys())
 
     keyboard: list[list[KeyboardButton]] = []
+    if extra_rows:
+        for row in extra_rows:
+            keyboard.append([KeyboardButton(text=row)])
     for button in next_buttons:
         keyboard.append([KeyboardButton(text=button)])
 
