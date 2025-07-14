@@ -579,10 +579,11 @@ async def api_notifications():
     )
     for q in q_rows:
         short = q["text"][:30] + ("…" if len(q["text"]) > 30 else "")
+        text = f"Вопрос: {short}"
         notifications.append({
             "type": "question",
             "id": q["id"],
-            "text": short,
+            "text": text,
         })
 
     return {"notifications": notifications}

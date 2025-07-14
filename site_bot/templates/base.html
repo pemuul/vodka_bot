@@ -220,21 +220,43 @@
             if (list.length === 0) return;
             const empty = document.getElementById('notifications-empty');
             if (empty) empty.remove();
-            list.forEach(n => {
+
+            const receipts = list.filter(n => n.type === 'receipt');
+            const questions = list.filter(n => n.type === 'question');
+
+            const createItem = (href, iconCls, text) => {
               const li = document.createElement('li');
-              const a  = document.createElement('a');
-              a.className = 'dropdown-item';
-              if (n.type === 'receipt') {
-                a.href = `/receipts?open=${n.id}`;
-              } else if (n.type === 'question') {
-                a.href = `/questions?open=${n.id}`;
-              } else {
-                a.href = '#';
-              }
-              a.textContent = n.text;
+              const a = document.createElement('a');
+              a.className = 'dropdown-item d-flex align-items-center gap-2';
+              a.href = href;
+              a.innerHTML = `<i class="bi ${iconCls}"></i> <span>${text}</span>`;
               li.appendChild(a);
-              menu.appendChild(li);
-            });
+              return li;
+            };
+
+            if (receipts.length) {
+              const header = document.createElement('li');
+              header.innerHTML = '<h6 class="dropdown-header">Нераспознанные чеки</h6>';
+              menu.appendChild(header);
+              receipts.forEach(r => menu.appendChild(
+                createItem(`/receipts?open=${r.id}`, 'bi-receipt text-danger', r.text)
+              ));
+            }
+
+            if (receipts.length && questions.length) {
+              const div = document.createElement('li');
+              div.innerHTML = '<hr class="dropdown-divider">';
+              menu.appendChild(div);
+            }
+
+            if (questions.length) {
+              const header = document.createElement('li');
+              header.innerHTML = '<h6 class="dropdown-header">Вопросы без ответа</h6>';
+              menu.appendChild(header);
+              questions.forEach(q => menu.appendChild(
+                createItem(`/questions?open=${q.id}`, 'bi-question-circle text-warning', q.text)
+              ));
+            }
           });
       });
     </script>
