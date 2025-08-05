@@ -34,10 +34,7 @@ import random
 import csv
 import io
 
-from aiogram import Bot
-from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo
-from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties
+# aiogram is imported lazily when sending messages
 
 # ==============================
 # Настройка БД
@@ -893,6 +890,7 @@ async def test_send_scheduled_message(message_id: int):
                 if typ not in ("photo", "video") or not fname:
                     continue
                 local = UPLOAD_DIR / fname
+                from aiogram.types import FSInputFile  # type: ignore
                 obj = FSInputFile(local) if local.exists() else fname
                 files.append((typ, obj))
 
@@ -929,6 +927,7 @@ async def send_scheduled_message(message_id: int):
                 if typ not in ("photo", "video") or not fname:
                     continue
                 local = UPLOAD_DIR / fname
+                from aiogram.types import FSInputFile  # type: ignore
                 obj = FSInputFile(local) if local.exists() else fname
                 files.append((typ, obj))
 
@@ -1189,7 +1188,22 @@ async def api_delete_message(message_id: int):
 telegram_bot_token = globals().get("TG_BOT") or os.getenv("TG_BOT")
 if not telegram_bot_token:
     raise RuntimeError("TG_BOT token is not set")
-bot: Bot = Bot(telegram_bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+
+_bot = None
+
+
+def get_bot():
+    global _bot
+    if _bot is None:
+        try:
+            from aiogram import Bot
+            from aiogram.enums import ParseMode
+            from aiogram.client.default import DefaultBotProperties
+        except Exception as e:  # pragma: no cover - aiogram optional
+            print("ERROR: aiogram import failed", e)
+            return None
+        _bot = Bot(telegram_bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    return _bot
 
 
 async def send_and_log_message(
@@ -1198,6 +1212,12 @@ async def send_and_log_message(
     media: Optional[List[Tuple[str, object]]] = None,
 ):
     """Send a message via the bot and log it to participant_messages."""
+    bot = get_bot()
+    if not bot:
+        return
+
+    from aiogram.types import InputMediaPhoto, InputMediaVideo  # type: ignore
+
     sent_messages = []
     files_info: List[Dict[str, Any]] = []
     if not media:
