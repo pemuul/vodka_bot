@@ -110,6 +110,33 @@ def parse_support_requests(dump_path: str) -> List[Dict[str, Any]]:
     return requests
 
 
+def parse_newsletters(dump_path: str) -> List[Dict[str, Any]]:
+    rows = _parse_copy_section(dump_path, 'newsletters')
+    letters: List[Dict[str, Any]] = []
+    for parts in rows:
+        letters.append({
+            'id': int(parts[0]),
+            'status': parts[1],
+            'time': parts[2],
+            'content': parts[3],
+            'created_at': parts[4],
+            'image': parts[7],
+        })
+    return letters
+
+
+def parse_game_ratings(dump_path: str) -> List[Dict[str, Any]]:
+    rows = _parse_copy_section(dump_path, 'game_ratings')
+    ratings: List[Dict[str, Any]] = []
+    for parts in rows:
+        ratings.append({
+            'client_id': int(parts[1]),
+            'rating': int(parts[2]),
+            'created_at': parts[3],
+        })
+    return ratings
+
+
 # ---------------------------------------------------------------------------
 # Migration routines
 # ---------------------------------------------------------------------------
@@ -226,6 +253,58 @@ def migrate_support_requests(
     conn.commit()
 
 
+def migrate_newsletters(letters: List[Dict[str, Any]], conn: sqlite3.Connection) -> None:
+    """Insert newsletters into scheduled_messages table."""
+    cur = conn.cursor()
+    for n in letters:
+        schedule_dt = n['time'] or n['created_at']
+        cur.execute(
+            'INSERT OR IGNORE INTO scheduled_messages (name, content, schedule_dt, status, media, create_dt) '
+            'VALUES (?, ?, ?, ?, ?, ?)',
+            (f'newsletter_{n["id"]}', n['content'], schedule_dt, n['status'], n['image'], n['created_at']),
+        )
+    conn.commit()
+
+
+def migrate_game_ratings(
+    ratings: List[Dict[str, Any]],
+    clients_by_id: Dict[int, Dict[str, Any]],
+    conn: sqlite3.Connection,
+) -> None:
+    """Convert game ratings into a prize draw with participants."""
+    if not ratings:
+        return
+
+    cur = conn.cursor()
+    start = min(r['created_at'] for r in ratings if r['created_at'])
+    end = max(r['created_at'] for r in ratings if r['created_at'])
+
+    cur.execute(
+        'INSERT INTO prize_draws (title, start_date, end_date, status, create_dt) VALUES (?, ?, ?, ?, ?)',
+        ('Imported tournament', start, end, 'completed', start),
+    )
+    draw_id = cur.lastrowid
+    cur.execute(
+        'INSERT INTO prize_draw_stages (draw_id, name, description, winners_count, order_index, create_dt) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
+        (draw_id, 'Ratings', 'Imported from finsky.sql', 0, 0, start),
+    )
+    stage_id = cur.lastrowid
+
+    for r in ratings:
+        client = clients_by_id.get(r['client_id'])
+        if not client:
+            continue
+        full_name = ' '.join(filter(None, [client['name'], client['surname'], client['patronymic']])) or 'unknown'
+        cur.execute(
+            'INSERT OR IGNORE INTO prize_draw_winners (stage_id, user_tg_id, receipt_id, winner_name, create_dt) '
+            'VALUES (?, ?, ?, ?, ?)',
+            (stage_id, client['telegram_id'], r['rating'], full_name, r['created_at']),
+        )
+
+    conn.commit()
+
+
 def main(dump_path: str, db_path: str) -> None:
     conn = sqlite3.connect(db_path)
     create_tables(conn)
@@ -240,11 +319,19 @@ def main(dump_path: str, db_path: str) -> None:
     support_requests = parse_support_requests(dump_path)
     migrate_support_requests(support_requests, clients_by_id, conn)
 
+    newsletters = parse_newsletters(dump_path)
+    migrate_newsletters(newsletters, conn)
+
+    ratings = parse_game_ratings(dump_path)
+    migrate_game_ratings(ratings, clients_by_id, conn)
+
     conn.close()
     print(
         f'Migrated {len(clients)} clients, '
-        f'{len(messages)} chat messages and '
-        f'{len(support_requests)} support requests into {db_path}'
+        f'{len(messages)} chat messages, '
+        f'{len(support_requests)} support requests, '
+        f'{len(newsletters)} newsletters and '
+        f'{len(ratings)} game ratings into {db_path}'
     )
 
 
