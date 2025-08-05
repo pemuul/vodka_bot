@@ -17,7 +17,6 @@ from cryptography.fernet import Fernet
 from sql.sql_site import get_user_id_by_value, get_items, create_order, get_user_orders, get_orders_lines, get_items_by_id, append_additional_fields, get_additional_fields, get_admin, get_admins, get_admin_rules, get_user, update_admin_rule, update_item, get_item_by_id, add_line, edit_line, delete_line, update_is_paid_for, insert_item, get_last_item, get_user_extended, get_all_items, subtract_amount_item, get_line, delete_item, append_fill_wallet_line, get_admins_id
 from heandlers.pyments import buy_order_user_id, succesfull_payment_wallet
 from site_bot.orders_mgt import get_all_data_order, get_all_data_orders, update_order_status, get_admins_all_data
-from site_bot.send_bot_message import get_bot_token
 from keyboards.admin_kb import fill_wallet_alert_message_kb 
 
 from pyment_bot_dir.sql_pyment_bot import create_payment_invite_key
@@ -163,6 +162,9 @@ def get_file(path, filename):
 
 
 def get_bot_token(bot_directory: str):
+    token = globals().get("TG_BOT") or os.getenv("TG_BOT")
+    if token:
+        return token
     bot_directory_settings = bot_directory + '/settings.json'
     with open(bot_directory_settings, 'r') as file:
         settings_data = json.load(file)

@@ -1186,7 +1186,9 @@ async def api_delete_message(message_id: int):
     await mark_message_deleted(message_id)
     return {"success": True}
 
-telegram_bot_token = '7349498734:AAHJb2K6KuLCMqLpkh3Fo_hFJhtV1WkN8tc' # !!!! надо поменять на глобальную
+telegram_bot_token = globals().get("TG_BOT") or os.getenv("TG_BOT")
+if not telegram_bot_token:
+    raise RuntimeError("TG_BOT token is not set")
 bot: Bot = Bot(telegram_bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 

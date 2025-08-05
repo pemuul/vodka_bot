@@ -1,5 +1,6 @@
 
 import asyncio
+import os
 from aiogram import Bot
 import json
 
@@ -7,6 +8,9 @@ from site_bot.orders_mgt import get_admins_all_data
 
 
 def get_bot_token(bot_directory: str):
+    token = globals().get("TG_BOT") or os.getenv("TG_BOT")
+    if token:
+        return token
     bot_directory_settings = bot_directory + '/settings.json'
     with open(bot_directory_settings, 'r') as file:
         settings_data = json.load(file)
