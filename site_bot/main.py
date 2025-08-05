@@ -197,7 +197,14 @@ async def root(request: Request):
 
 @app.get("/prize-draws", response_class=HTMLResponse)
 async def prize_draws(request: Request):
-    draws_rows = await database.fetch_all(prize_draws_table.select())
+    draw_query = sqlalchemy.select(
+        prize_draws_table.c.id,
+        prize_draws_table.c.title,
+        sqlalchemy.cast(prize_draws_table.c.start_date, sqlalchemy.String).label("start_date"),
+        sqlalchemy.cast(prize_draws_table.c.end_date, sqlalchemy.String).label("end_date"),
+        prize_draws_table.c.status,
+    )
+    draws_rows = await database.fetch_all(draw_query)
     draws = []
     for d in draws_rows:
         stages = []
@@ -282,13 +289,15 @@ async def prize_draws(request: Request):
                     "winners": winners,
                 }
             )
+        start_dt = datetime.datetime.fromisoformat(d["start_date"]).date()
+        end_dt = datetime.datetime.fromisoformat(d["end_date"]).date()
         draws.append({
             "id": d["id"],
             "title": d["title"],
-            "start": d["start_date"].isoformat(),
-            "end": d["end_date"].isoformat(),
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
             "status": d["status"],
-            "stages": stages
+            "stages": stages,
         })
     return templates.TemplateResponse(
         "prize_draws.html",
@@ -1025,7 +1034,8 @@ async def receipts(request: Request):
             "draw_id": r["draw_id"] if has_receipt_draw_id() and "draw_id" in r else None,
             "draw_title": r["draw_title"] if "draw_title" in r else None,
         })
-    draws_rows = await database.fetch_all(prize_draws_table.select())
+    draw_query = sqlalchemy.select(prize_draws_table.c.id, prize_draws_table.c.title)
+    draws_rows = await database.fetch_all(draw_query)
     draws = [{"id": d["id"], "title": d["title"]} for d in draws_rows]
     return templates.TemplateResponse(
         "receipts.html",
