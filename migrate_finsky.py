@@ -88,6 +88,7 @@ def parse_chat_messages(dump_path: str) -> List[Dict[str, Any]]:
     for parts in rows:
         messages.append({
             'chat_id': int(parts[1]),
+            'telegram_id': int(parts[2]) if parts[2] else None,
             'from_client': str(parts[3]).lower() in {'t', 'true', '1'},
             'text': parts[4],
             'files': json.loads(parts[5]) if parts[5] else None,
@@ -199,6 +200,8 @@ def migrate_chat_messages(
         sender = 'user' if m['from_client'] else 'admin'
 
         media_payload: Dict[str, Any] = {}
+        if m.get('telegram_id') is not None:
+            media_payload['telegram_id'] = m['telegram_id']
         if m['files'] is not None:
             media_payload['files'] = m['files']
         if m['telegram_data'] is not None:
