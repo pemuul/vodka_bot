@@ -5,6 +5,10 @@ import time
 import random
 import uuid
 from pathlib import Path
+import json
+import os
+import urllib.parse
+import urllib.request
 
 #from sql_mgt import sql_mgt.get_param, sql_mgt.set_param, sql_mgt.append_param_get_old
 import sql_mgt
@@ -23,6 +27,9 @@ router = Router()
 global_objects = None
 UPLOAD_DIR_CHECKS = Path(__file__).resolve().parent.parent / "site_bot" / "static" / "uploads"
 UPLOAD_DIR_CHECKS.mkdir(parents=True, exist_ok=True)
+
+FNS_API_URL = "https://openapi.nalog.ru:8090"
+FNS_TOKEN = os.getenv("FNS_TOKEN", "")
 
 def init_object(global_objects_inp):
     global global_objects
@@ -53,18 +60,40 @@ def _analyze_check(path: str):
     return qr_data, vodka
 
 
+def _check_vodka_in_receipt(qr_data: str) -> bool:
+    if not FNS_TOKEN:
+        return False
+    try:
+        params = urllib.parse.urlencode({"qr": qr_data})
+        url = f"{FNS_API_URL}/v2/receipt?{params}"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {FNS_TOKEN}"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.load(resp)
+    except Exception as e:
+        print(f"FNS API error: {e}")
+        return False
+    items = data.get("items") or data.get("document", {}).get("receipt", {}).get("items", [])
+    for item in items:
+        name = str(item.get("name", "")).lower()
+        if "водк" in name and ("фин" in name or "fin" in name):
+            return True
+    return False
+
+
 async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int):
     loop = asyncio.get_running_loop()
     qr_data, vodka = await loop.run_in_executor(global_objects.ocr_pool, _analyze_check, str(dest))
+    vodka_found = False
     if qr_data:
         await global_objects.bot.send_message(chat_id, f"QR-код найден! Значение: {qr_data}")
-        status = "Распознан"
+        vodka_found = await loop.run_in_executor(None, _check_vodka_in_receipt, qr_data)
     elif vodka:
+        vodka_found = True
+    if vodka_found:
         await global_objects.bot.send_message(chat_id, "Чек принят!", reply_to_message_id=msg_id)
         status = "Распознан"
     else:
         status = "Не распознан"
-
     await sql_mgt.update_receipt_status(receipt_id, status)
 
 
