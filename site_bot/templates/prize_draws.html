@@ -342,15 +342,35 @@
         bsModal.show();
       };
 
-      // === НОВЫЙ КОПИРОВАНИЕ ===
+      // === Копирование розыгрыша ===
       document.getElementById("btn-copy-draw").onclick = async () => {
         if (!currentDraw) return;
-        // 1) делаем глубокий клон без id
+        // 1) глубокий клон без id
         const clone = JSON.parse(JSON.stringify(currentDraw));
         clone.id = null; // чтобы backend вставил новый
         // 2) добавляем « (копия)» в название
         clone.title = currentDraw.title + " (копия)";
-        // 3) отправляем сразу на сервер
+
+        // 3) вычисляем новые даты после последнего розыгрыша
+        const lastEnd = drawsData.reduce(
+          (max, d) => {
+            const end = new Date(d.end);
+            return end > max ? end : max;
+          },
+          new Date(currentDraw.end)
+        );
+        const durationDays = Math.round(
+          (new Date(currentDraw.end) - new Date(currentDraw.start)) / 86400000
+        );
+        const newStart = new Date(lastEnd);
+        newStart.setDate(newStart.getDate() + 1);
+        const newEnd = new Date(newStart);
+        newEnd.setDate(newEnd.getDate() + durationDays);
+        clone.start = newStart.toISOString().slice(0, 10);
+        clone.end = newEnd.toISOString().slice(0, 10);
+        clone.status = "upcoming";
+
+        // 4) отправляем на сервер
         const resp = await fetch("/prize-draws", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -361,10 +381,10 @@
           return;
         }
         const body = await resp.json();
-        // 4) получаем реальный id и пушим в drawsData
+        // 5) получаем реальный id и пушим в drawsData
         clone.id = body.id;
         drawsData.push(clone);
-        // 5) перерисовываем таблицу и открываем модал для правок
+        // 6) перерисовываем таблицу и открываем модал для правок
         drawsTableBody.innerHTML = "";
         drawsData.forEach(renderDrawRow);
         openDrawModal(clone.id);
