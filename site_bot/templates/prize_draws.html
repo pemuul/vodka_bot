@@ -75,9 +75,12 @@
             </div>
           </div>
 
-          <!-- Добавить этап -->
+          <!-- Добавить этап / Удалить розыгрыш -->
           <div class="px-3 mb-3">
-            <button id="btn-add-stage" class="btn btn-outline-primary">Добавить этап</button>
+            <div class="d-flex gap-2">
+              <button id="btn-add-stage" class="btn btn-outline-primary">Добавить этап</button>
+              <button id="btn-delete-draw" class="btn btn-outline-danger">Удалить розыгрыш</button>
+            </div>
           </div>
 
           <!-- Вкладки -->
@@ -325,6 +328,26 @@
         };
         currentDraw.stages.push(newStage);
         createStageTab(newStage);
+      };
+
+      // кнопка «Удалить розыгрыш»
+      document.getElementById("btn-delete-draw").onclick = async () => {
+        if (!currentDraw || !currentDraw.id) {
+          alert("Сначала сохраните розыгрыш");
+          return;
+        }
+        if (!confirm("Точно удалить розыгрыш?")) return;
+        const resp = await fetch(`/prize-draws/${currentDraw.id}`, { method: 'DELETE' });
+        if (resp.ok) {
+          const idx = drawsData.findIndex(d => d.id === currentDraw.id);
+          if (idx !== -1) drawsData.splice(idx, 1);
+          bsModal.hide();
+          drawsTableBody.innerHTML = "";
+          drawsData.forEach(renderDrawRow);
+        } else {
+          const data = await resp.json().catch(() => ({ detail: 'Ошибка' }));
+          alert(data.detail || 'Ошибка');
+        }
       };
 
       // кнопка «Новый розыгрыш»

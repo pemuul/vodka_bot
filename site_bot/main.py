@@ -412,6 +412,36 @@ async def save_draw(draw: DrawIn):
     return {"success": True, "id": new_id}
 
 
+@app.delete("/prize-draws/{draw_id}")
+async def delete_draw(draw_id: int):
+    stage_ids = await database.fetch_all(
+        sqlalchemy.select(prize_draw_stages_table.c.id).where(
+            prize_draw_stages_table.c.draw_id == draw_id
+        )
+    )
+    for sid in stage_ids:
+        await database.execute(
+            prize_draw_winners_table.delete().where(
+                prize_draw_winners_table.c.stage_id == sid["id"]
+            )
+        )
+    await database.execute(
+        prize_draw_stages_table.delete().where(
+            prize_draw_stages_table.c.draw_id == draw_id
+        )
+    )
+    if has_receipt_draw_id():
+        await database.execute(
+            receipts_table.update()
+            .where(receipts_table.c.draw_id == draw_id)
+            .values(draw_id=None)
+        )
+    await database.execute(
+        prize_draws_table.delete().where(prize_draws_table.c.id == draw_id)
+    )
+    return {"success": True}
+
+
 class DetermineReq(BaseModel):
     winners_count: int
 
