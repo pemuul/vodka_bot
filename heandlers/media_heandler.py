@@ -41,29 +41,37 @@ def init_object(global_objects_inp):
 
 
 def _analyze_check(path: str):
-    """Run QR detection and fallback OCR in a separate process."""
+    """Run QR detection first, then fall back to OCR and log the steps."""
+    print(f"Analyze check: {path}")
     img = cv2.imread(path)
     if img is None:
+        print("Failed to read image")
         return None, False
 
     qr_data = None
-    # try pyzbar first on grayscale to maximize recognition
+    print("Trying to detect QR code via pyzbar...")
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     decoded_objects = decode(gray, symbols=[ZBarSymbol.QRCODE])
     if decoded_objects:
         qr_data = decoded_objects[0].data.decode("utf-8")
+        print(f"QR found by pyzbar: {qr_data}")
     else:
-        # fall back to OpenCV's built-in detector
+        print("pyzbar failed, trying OpenCV detector...")
         detector = cv2.QRCodeDetector()
         data, points, _ = detector.detectAndDecode(gray)
         if points is not None and data:
             qr_data = data.strip()
+            print(f"QR found by OpenCV: {qr_data}")
 
     text = ""
     if qr_data is None:
+        print("No QR code detected; running OCR to search for vodka text")
         try:
             text = extract_text(img)
-        except Exception:
+            if text:
+                print(f"OCR extracted text snippet: {text[:80]}")
+        except Exception as e:
+            print(f"OCR failed: {e}")
             text = ""
     lower = text.lower()
     vodka = "водк" in lower and ("фин" in lower or "fin" in lower)
@@ -72,7 +80,9 @@ def _analyze_check(path: str):
 
 def _check_vodka_in_receipt(qr_data: str) -> bool:
     if not FNS_TOKEN:
+        print("FNS_TOKEN not set; skipping API lookup")
         return False
+    print(f"Querying FNS API for QR: {qr_data}")
     try:
         params = urllib.parse.urlencode({"qr": qr_data})
         url = f"{FNS_API_URL}/v2/receipt?{params}"
@@ -99,17 +109,21 @@ def _check_vodka_in_receipt(qr_data: str) -> bool:
 
 
 async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int):
+    print(f"Start processing receipt {dest}")
     loop = asyncio.get_running_loop()
     qr_data, vodka = await loop.run_in_executor(global_objects.ocr_pool, _analyze_check, str(dest))
     vodka_found = False
     if qr_data:
+        print(f"QR detected: {qr_data}")
         params = urllib.parse.urlencode({"qr": qr_data})
         link = f"{FNS_API_URL}/v2/receipt?{params}"
         await global_objects.bot.send_message(chat_id, f"QR-код найден! {link}")
         try:
             vodka_found = await loop.run_in_executor(None, _check_vodka_in_receipt, qr_data)
+            print(f"Vodka found via FNS: {vodka_found}")
         except Exception as e:
             # Catch unexpected failures so the whole bot isn't killed.
+            print(f"Error during FNS lookup: {e}")
             await global_objects.bot.send_message(
                 chat_id,
                 f"Ошибка при проверке QR через ФНС: {e}",
@@ -117,7 +131,10 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
             )
             vodka_found = False
     elif vodka:
+        print("QR not found, vodka mentioned in OCR text")
         vodka_found = True
+    else:
+        print("Neither QR nor vodka text detected")
     if vodka_found:
         await global_objects.bot.send_message(chat_id, "Чек принят!", reply_to_message_id=msg_id)
         status = "Распознан"
