@@ -68,8 +68,16 @@ def _check_vodka_in_receipt(qr_data: str) -> bool:
         url = f"{FNS_API_URL}/v2/receipt?{params}"
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {FNS_TOKEN}"})
         with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.load(resp)
+            # limit the amount of data read from the service so a bad
+            # response can't eat all memory and kill the process
+            raw = resp.read(1_000_000)
+        data = json.loads(raw)
+    except MemoryError:
+        print("FNS API error: response too large")
+        return False
     except Exception as e:
+        # log any network or JSON parsing issues so the caller can
+        # diagnose problems instead of the whole process being killed
         print(f"FNS API error: {e}")
         return False
     items = data.get("items") or data.get("document", {}).get("receipt", {}).get("items", [])
@@ -86,7 +94,16 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     vodka_found = False
     if qr_data:
         await global_objects.bot.send_message(chat_id, f"QR-код найден! Значение: {qr_data}")
-        vodka_found = await loop.run_in_executor(None, _check_vodka_in_receipt, qr_data)
+        try:
+            vodka_found = await loop.run_in_executor(None, _check_vodka_in_receipt, qr_data)
+        except Exception as e:
+            # Catch unexpected failures so the whole bot isn't killed.
+            await global_objects.bot.send_message(
+                chat_id,
+                f"Ошибка при проверке QR через ФНС: {e}",
+                reply_to_message_id=msg_id,
+            )
+            vodka_found = False
     elif vodka:
         vodka_found = True
     if vodka_found:
