@@ -38,7 +38,7 @@ def init_object(global_objects_inp):
     sql_mgt.init_object(global_objects_inp)
 
 
-def _analyze_check(path: str):
+def _analyze_check(path: str, keywords: list[str]):
     """Run QR detection first, then fall back to OCR and log the steps."""
     print(f"Analyze check: {path}")
     img = cv2.imread(path)
@@ -68,7 +68,7 @@ def _analyze_check(path: str):
 
     text = ""
     if qr_data is None:
-        print("No QR code detected; running OCR to search for vodka text")
+        print("No QR code detected; running OCR to search for product text")
         try:
             text = extract_text(img)
             if text:
@@ -77,7 +77,7 @@ def _analyze_check(path: str):
             print(f"OCR failed: {e}")
             text = ""
     lower = text.lower()
-    vodka = "водк" in lower and ("фин" in lower or "fin" in lower)
+    vodka = any(k in lower for k in keywords)
     return qr_data, vodka
 
 
@@ -119,15 +119,15 @@ def _enhanced_qr(gray):
     return None
 
 
-def _check_vodka_in_receipt(qr_data: str) -> bool:
-    """Call FNS service and search receipt items for vodka."""
+def _check_vodka_in_receipt(qr_data: str, keywords: list[str]) -> bool:
+    """Call FNS service and search receipt items for configured products."""
     data = get_receipt_by_qr(qr_data)
     if not data:
         return False
     items = data.get("items") or data.get("document", {}).get("receipt", {}).get("items", [])
     for item in items:
         name = str(item.get("name", "")).lower()
-        if "водк" in name and ("фин" in name or "fin" in name):
+        if any(k in name for k in keywords):
             return True
     return False
 
@@ -135,7 +135,9 @@ def _check_vodka_in_receipt(qr_data: str) -> bool:
 async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int):
     print(f"Start processing receipt {dest}")
     loop = asyncio.get_running_loop()
-    qr_data, vodka = await loop.run_in_executor(global_objects.ocr_pool, _analyze_check, str(dest))
+    keywords_raw = await sql_mgt.get_param(0, 'product_keywords')
+    keywords = [k.strip().lower() for k in keywords_raw.split(';') if k.strip()]
+    qr_data, vodka = await loop.run_in_executor(global_objects.ocr_pool, _analyze_check, str(dest), keywords)
     vodka_found = False
     if qr_data:
         print(f"QR detected: {qr_data}")
@@ -143,7 +145,7 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
         link = f"{FNS_LINK_URL}/v2/receipt?{params}"
         await global_objects.bot.send_message(chat_id, f"QR-код найден! {link}")
         try:
-            vodka_found = await loop.run_in_executor(None, _check_vodka_in_receipt, qr_data)
+            vodka_found = await loop.run_in_executor(None, _check_vodka_in_receipt, qr_data, keywords)
             print(f"Vodka found via FNS: {vodka_found}")
         except Exception as e:
             # Catch unexpected failures so the whole bot isn't killed.

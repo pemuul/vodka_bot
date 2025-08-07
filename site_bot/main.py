@@ -23,6 +23,7 @@ from sqlalchemy.orm import sessionmaker
 from typing import List, Optional, Dict, Any, Tuple
 import datetime
 from pydantic import BaseModel
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 # Админ-панель через SQLAdmin
 from sqladmin import Admin, ModelView
@@ -942,6 +943,38 @@ async def send_scheduled_message(message_id: int):
         .values(schedule_dt=now, status="Отправлено")
     )
     return {"success": True}
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings(request: Request):
+    row = await database.fetch_one(
+        params_table.select()
+        .where(params_table.c.user_tg_id == 0)
+        .where(params_table.c.param_name == "product_keywords")
+    )
+    keywords = row["value"] if row else ""
+    return templates.TemplateResponse(
+        "settings.html",
+        {
+            "request": request,
+            "active_page": "settings",
+            "keywords": keywords,
+            "version": app.state.static_version,
+        },
+    )
+
+
+@app.post("/settings")
+async def save_settings(product_names: str = Form("")):
+    query = sqlite_insert(params_table).values(
+        user_tg_id=0, param_name="product_keywords", value=product_names
+    )
+    query = query.on_conflict_do_update(
+        index_elements=[params_table.c.user_tg_id, params_table.c.param_name],
+        set_={"value": product_names},
+    )
+    await database.execute(query)
+    return RedirectResponse("/settings", status_code=303)
 
 @app.get("/participants", response_class=HTMLResponse)
 async def participants(request: Request):

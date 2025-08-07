@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Настройки – rtd-bot{% endblock %}
+
+{% block content %}
+<div class="h-100 overflow-auto">
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb mb-2">
+      <li class="breadcrumb-item"><a href="/settings" class="text-secondary text-decoration-none">Настройки</a></li>
+      <li class="breadcrumb-item active" aria-current="page">Список</li>
+    </ol>
+  </nav>
+  <div class="container">
+    <h1 class="h3 mb-3">Настройки</h1>
+    <form method="post">
+      <div class="mb-3">
+        <label for="product-names" class="form-label">Наименования продуктов</label>
+        <input type="text" class="form-control" id="product-names" name="product_names" value="{{ keywords }}" />
+        <div class="form-text">Введите названия через ;</div>
+      </div>
+      <button type="submit" class="btn btn-primary">Сохранить</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
