@@ -4,6 +4,8 @@ Migrate data from legacy Finsky SQLite database into our SQLite database.
 Run the script with paths to the source and target databases::
 
     python migrate_finsky.py --source finsky.db --target our.db
+
+Clients lacking names are still imported; their Telegram ID is used as a fallback name.
 """
 
 import argparse
@@ -15,13 +17,19 @@ from typing import Any, Dict
 def migrate_clients(src: sqlite3.Connection, dst: sqlite3.Connection) -> Dict[int, sqlite3.Row]:
     """Import clients and basic profile info."""
     clients = src.execute("SELECT * FROM clients").fetchall()
-    by_id: Dict[int, sqlite3.Row] = {}
+    by_id: Dict[int, Dict[str, Any]] = {}
     for c in clients:
-        by_id[c["id"]] = c
-        full_name = " ".join(filter(None, [c["name"], c["surname"], c["patronymic"]])) or None
+        tg_id = c["telegram_id"] or c["id"]
+        client_record = dict(c)
+        client_record["tg_id"] = tg_id
+        by_id[c["id"]] = client_record
+        full_name = " ".join(filter(None, [c["name"], c["surname"], c["patronymic"]]))
+        if not full_name:
+            # some legacy rows lack a name; use Telegram ID to keep record
+            full_name = str(tg_id)
         dst.execute(
             "INSERT OR IGNORE INTO users (tg_id, name, phone, create_dt) VALUES (?, ?, ?, ?)",
-            (c["telegram_id"], full_name, c["phone"], c["created_at"]),
+            (tg_id, full_name, c["phone"], c["created_at"]),
         )
 
         extra = {
@@ -38,7 +46,7 @@ def migrate_clients(src: sqlite3.Connection, dst: sqlite3.Connection) -> Dict[in
         if extra:
             dst.execute(
                 "INSERT OR IGNORE INTO user_extended (tg_id, all_data) VALUES (?, ?)",
-                (c["telegram_id"], json.dumps(extra, ensure_ascii=False)),
+                (tg_id, json.dumps(extra, ensure_ascii=False)),
             )
     return by_id
 
@@ -62,7 +70,7 @@ def migrate_chat_messages(
         client = clients_by_id.get(chat["client_id"])
         if not client:
             continue
-        user_tg_id = client["telegram_id"]
+        user_tg_id = client["tg_id"]
         sender = "user" if m["from_client"] else "admin"
 
         media_payload: Dict[str, Any] = {}
@@ -102,7 +110,7 @@ def migrate_support_requests(
         client = clients_by_id.get(r["client_id"])
         if not client:
             continue
-        tg_id = client["telegram_id"]
+        tg_id = client["tg_id"]
         dst.execute(
             "INSERT OR IGNORE INTO questions (id, user_tg_id, text, type, status, create_dt) VALUES (?, ?, ?, 'support', 'imported', ?)",
             (r["id"], tg_id, r["message"], r["created_at"]),
@@ -151,10 +159,10 @@ def migrate_game_ratings(
             continue
         full_name = " ".join(
             filter(None, [client["name"], client["surname"], client["patronymic"]])
-        ) or "unknown"
+        ) or str(client["tg_id"])
         dst.execute(
             "INSERT OR IGNORE INTO prize_draw_winners (stage_id, user_tg_id, receipt_id, winner_name, create_dt) VALUES (?, ?, ?, ?, ?)",
-            (stage_id, client["telegram_id"], r["rating"], full_name, r["created_at"]),
+            (stage_id, client["tg_id"], r["rating"], full_name, r["created_at"]),
         )
 
 
