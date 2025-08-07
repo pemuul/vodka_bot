@@ -17,7 +17,7 @@ from heandlers import import_files, admin
 from keyboards import admin_kb
 
 import cv2
-from pyzbar.pyzbar import decode
+from pyzbar.pyzbar import decode, ZBarSymbol
 # OCR helper based on Tesseract with Russian and English models
 from ocr import extract_text
 
@@ -41,13 +41,23 @@ def init_object(global_objects_inp):
 
 
 def _analyze_check(path: str):
-    """Run heavy OCR logic in a separate process."""
+    """Run QR detection and fallback OCR in a separate process."""
     img = cv2.imread(path)
     if img is None:
         return None, False
 
-    decoded_objects = decode(img)
-    qr_data = decoded_objects[0].data.decode("utf-8") if decoded_objects else None
+    qr_data = None
+    # try pyzbar first on grayscale to maximize recognition
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    decoded_objects = decode(gray, symbols=[ZBarSymbol.QRCODE])
+    if decoded_objects:
+        qr_data = decoded_objects[0].data.decode("utf-8")
+    else:
+        # fall back to OpenCV's built-in detector
+        detector = cv2.QRCodeDetector()
+        data, points, _ = detector.detectAndDecode(gray)
+        if points is not None and data:
+            qr_data = data.strip()
 
     text = ""
     if qr_data is None:
