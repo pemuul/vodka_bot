@@ -8,8 +8,14 @@ import requests
 import xml.etree.ElementTree as ET
 import json
 
-AUTH_ENDPOINT = os.getenv("FNS_AUTH_ENDPOINT", "https://gateway.fns.ru/open-api/AuthService/0.1")
-ASYNC_ENDPOINT = os.getenv("FNS_ASYNC_ENDPOINT", "https://gateway.fns.ru/open-api/ais3/KktService/0.1")
+AUTH_ENDPOINT = os.getenv(
+    "FNS_AUTH_ENDPOINT",
+    "https://openapi.nalog.ru:8090/open-api/AuthService/0.1",
+)
+ASYNC_ENDPOINT = os.getenv(
+    "FNS_ASYNC_ENDPOINT",
+    "https://openapi.nalog.ru:8090/open-api/ais3/KktService/0.1",
+)
 MASTER_TOKEN = os.getenv("FNS_MASTER_TOKEN", "")
 
 NAMESPACES = {
