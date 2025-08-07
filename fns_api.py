@@ -36,6 +36,9 @@ def _post_soap(url: str, soap_action: str, xml_body: str, extra_headers: Optiona
     if extra_headers:
         headers.update(extra_headers)
     r = requests.post(url, data=xml_body.encode("utf-8"), headers=headers, timeout=30)
+    if len(r.content) > 1_000_000:
+        raise RuntimeError(f"Response size {len(r.content)} exceeds 1MB limit")
+    print(f"FNS API HTTP {r.status_code} response from {url}:\n{r.text}")
     if r.status_code != 200:
         raise RuntimeError(f"HTTP {r.status_code}: {r.text[:400]}")
     envelope = ET.fromstring(r.text)
@@ -167,7 +170,9 @@ def get_receipt_by_qr(qr: str) -> Optional[dict]:
         params = qr_to_params(qr)
         msg_id = send_get_ticket(token, params)
         env = poll_message(token, msg_id)
-        return parse_ticket(env)
+        ticket = parse_ticket(env)
+        print(f"FNS ticket data: {json.dumps(ticket, ensure_ascii=False)}")
+        return ticket
     except Exception as e:
         print(f"FNS API error: {e}")
         return None
