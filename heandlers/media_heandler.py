@@ -18,6 +18,7 @@ from keyboards import admin_kb
 
 import cv2
 from pyzbar.pyzbar import decode, ZBarSymbol
+# optional ZXing libraries may provide more robust QR reading
 # OCR helper based on Tesseract with Russian and English models
 from ocr import extract_text
 
@@ -62,6 +63,11 @@ def _analyze_check(path: str):
         if points is not None and data:
             qr_data = data.strip()
             print(f"QR found by OpenCV: {qr_data}")
+    if qr_data is None:
+        print("Standard detectors failed; trying enhanced processing...")
+        qr_data = _enhanced_qr(gray)
+        if qr_data:
+            print(f"QR found after enhancement: {qr_data}")
 
     text = ""
     if qr_data is None:
@@ -76,6 +82,44 @@ def _analyze_check(path: str):
     lower = text.lower()
     vodka = "водк" in lower and ("фин" in lower or "fin" in lower)
     return qr_data, vodka
+
+
+def _enhanced_qr(gray):
+    """Attempt to decode difficult QR codes by rotating, scaling,
+    thresholding, and using optional ZXing-based readers."""
+    detector = cv2.QRCodeDetector()
+    rotate_codes = [None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE]
+    for rc in rotate_codes:
+        img = gray if rc is None else cv2.rotate(gray, rc)
+        up = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_LINEAR)
+        for processed in (
+            up,
+            cv2.adaptiveThreshold(
+                up, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2
+            ),
+        ):
+            decoded = decode(processed, symbols=[ZBarSymbol.QRCODE])
+            if decoded:
+                return decoded[0].data.decode("utf-8")
+            data, points, _ = detector.detectAndDecode(processed)
+            if points is not None and data:
+                return data.strip()
+    try:
+        import zxingcpp  # type: ignore
+        results = zxingcpp.read_barcodes(gray)
+        if results:
+            return results[0].text
+    except Exception as e:
+        print(f"zxingcpp failed: {e}")
+    try:
+        from pyzxing import BarCodeReader  # type: ignore
+        reader = BarCodeReader()
+        res = reader.decode_array(gray)
+        if res and 'parsed' in res[0]:
+            return res[0]['parsed']
+    except Exception as e:
+        print(f"pyzxing failed: {e}")
+    return None
 
 
 def _check_vodka_in_receipt(qr_data: str) -> bool:

@@ -16,4 +16,6 @@ pytesseract
 python-multipart
 requests
 cryptography
+zxing-cpp
+pyzxing
 
