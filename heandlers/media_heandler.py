@@ -5,10 +5,8 @@ import time
 import random
 import uuid
 from pathlib import Path
-import json
-import os
 import urllib.parse
-import urllib.request
+from fns_api import get_receipt_by_qr
 
 #from sql_mgt import sql_mgt.get_param, sql_mgt.set_param, sql_mgt.append_param_get_old
 import sql_mgt
@@ -29,8 +27,7 @@ global_objects = None
 UPLOAD_DIR_CHECKS = Path(__file__).resolve().parent.parent / "site_bot" / "static" / "uploads"
 UPLOAD_DIR_CHECKS.mkdir(parents=True, exist_ok=True)
 
-FNS_API_URL = "https://openapi.nalog.ru:8090"
-FNS_TOKEN = os.getenv("FNS_TOKEN", "")
+FNS_LINK_URL = "https://openapi.nalog.ru:8090"
 
 def init_object(global_objects_inp):
     global global_objects
@@ -123,26 +120,9 @@ def _enhanced_qr(gray):
 
 
 def _check_vodka_in_receipt(qr_data: str) -> bool:
-    if not FNS_TOKEN:
-        print("FNS_TOKEN not set; skipping API lookup")
-        return False
-    print(f"Querying FNS API for QR: {qr_data}")
-    try:
-        params = urllib.parse.urlencode({"qr": qr_data})
-        url = f"{FNS_API_URL}/v2/receipt?{params}"
-        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {FNS_TOKEN}"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            # limit the amount of data read from the service so a bad
-            # response can't eat all memory and kill the process
-            raw = resp.read(1_000_000)
-        data = json.loads(raw)
-    except MemoryError:
-        print("FNS API error: response too large")
-        return False
-    except Exception as e:
-        # log any network or JSON parsing issues so the caller can
-        # diagnose problems instead of the whole process being killed
-        print(f"FNS API error: {e}")
+    """Call FNS service and search receipt items for vodka."""
+    data = get_receipt_by_qr(qr_data)
+    if not data:
         return False
     items = data.get("items") or data.get("document", {}).get("receipt", {}).get("items", [])
     for item in items:
@@ -160,7 +140,7 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     if qr_data:
         print(f"QR detected: {qr_data}")
         params = urllib.parse.urlencode({"qr": qr_data})
-        link = f"{FNS_API_URL}/v2/receipt?{params}"
+        link = f"{FNS_LINK_URL}/v2/receipt?{params}"
         await global_objects.bot.send_message(chat_id, f"QR-код найден! {link}")
         try:
             vodka_found = await loop.run_in_executor(None, _check_vodka_in_receipt, qr_data)
