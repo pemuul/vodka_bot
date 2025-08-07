@@ -76,7 +76,7 @@ def _analyze_check(path: str, keywords: list[str]):
         except Exception as e:
             print(f"OCR failed: {e}")
             text = ""
-    lower = text.lower()
+    lower = text.casefold()
     vodka = any(k in lower for k in keywords)
     return qr_data, vodka
 
@@ -124,9 +124,13 @@ def _check_vodka_in_receipt(qr_data: str, keywords: list[str]) -> bool:
     data = get_receipt_by_qr(qr_data)
     if not data:
         return False
-    items = data.get("items") or data.get("document", {}).get("receipt", {}).get("items", [])
+    items = (
+        data.get("items")
+        or data.get("content", {}).get("items")
+        or data.get("document", {}).get("receipt", {}).get("items", [])
+    )
     for item in items:
-        name = str(item.get("name", "")).lower()
+        name = str(item.get("name", "")).casefold()
         if any(k in name for k in keywords):
             return True
     return False
@@ -136,7 +140,7 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     print(f"Start processing receipt {dest}")
     loop = asyncio.get_running_loop()
     keywords_raw = await sql_mgt.get_param(0, 'product_keywords')
-    keywords = [k.strip().lower() for k in keywords_raw.split(';') if k.strip()]
+    keywords = [k.strip().casefold() for k in keywords_raw.split(';') if k.strip()]
     qr_data, vodka = await loop.run_in_executor(global_objects.ocr_pool, _analyze_check, str(dest), keywords)
     vodka_found = False
     if qr_data:
