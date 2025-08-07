@@ -128,7 +128,6 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     qr_data, vodka = await loop.run_in_executor(global_objects.ocr_pool, _analyze_check, str(dest), keywords)
     vodka_found = False
     if qr_data:
-        await global_objects.bot.send_message(chat_id, "QR-код найден!")
         try:
             vodka_found = await loop.run_in_executor(None, _check_vodka_in_receipt, qr_data, keywords)
         except Exception as e:
