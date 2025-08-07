@@ -38,7 +38,6 @@ def _post_soap(url: str, soap_action: str, xml_body: str, extra_headers: Optiona
     r = requests.post(url, data=xml_body.encode("utf-8"), headers=headers, timeout=30)
     if len(r.content) > 1_000_000:
         raise RuntimeError(f"Response size {len(r.content)} exceeds 1MB limit")
-    print(f"FNS API HTTP {r.status_code} response from {url}:\n{r.text}")
     if r.status_code != 200:
         raise RuntimeError(f"HTTP {r.status_code}: {r.text[:400]}")
     envelope = ET.fromstring(r.text)
@@ -163,7 +162,6 @@ def qr_to_params(qr: str) -> dict:
 def get_receipt_by_qr(qr: str) -> Optional[dict]:
     """Fetch receipt info by QR string. Returns ticket dict or None."""
     if not MASTER_TOKEN:
-        print("FNS_MASTER_TOKEN not set; skipping FNS lookup")
         return None
     try:
         token, _ = get_access_token()
@@ -171,9 +169,7 @@ def get_receipt_by_qr(qr: str) -> Optional[dict]:
         msg_id = send_get_ticket(token, params)
         env = poll_message(token, msg_id)
         ticket = parse_ticket(env)
-        print(f"FNS ticket data: {json.dumps(ticket, ensure_ascii=False)}")
         return ticket
     except Exception as e:
-        print(f"FNS API error: {e}")
-        return None
+        raise RuntimeError(f"FNS API error: {e}") from e
 
