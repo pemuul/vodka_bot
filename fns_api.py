@@ -132,7 +132,7 @@ def poll_message(access_token: str, message_id: str, timeout: int = 60) -> ET.El
 
 def parse_ticket(env: ET.Element) -> dict:
     """Extract JSON ticket from response."""
-    ticket_text = env.findtext(".//kkt:Ticket", NAMESPACES)
+    ticket_text = env.findtext(".//kkt:Ticket", namespaces=NAMESPACES)
     return json.loads(ticket_text)
 
 
