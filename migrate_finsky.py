@@ -125,9 +125,13 @@ def migrate_newsletters(src: sqlite3.Connection, dst: sqlite3.Connection) -> Non
     letters = src.execute("SELECT * FROM newsletters").fetchall()
     for n in letters:
         schedule_dt = n["time"] or n["created_at"]
+        # use beginning of newsletter text as its name instead of generic placeholder
+        raw_text = (n["content"] or "").strip()
+        first_line = raw_text.splitlines()[0] if raw_text else ""
+        name = first_line[:50]  # keep names short for readability
         dst.execute(
             "INSERT OR IGNORE INTO scheduled_messages (name, content, schedule_dt, status, media, create_dt) VALUES (?, ?, ?, ?, ?, ?)",
-            (f"newsletter_{n['id']}", n["content"], schedule_dt, n["status"], n["image"], n["created_at"]),
+            (name, n["content"], schedule_dt, n["status"], n["image"], n["created_at"]),
         )
 
 
