@@ -134,7 +134,7 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
             await sql_mgt.update_receipt_status(receipt_id, "Этот чек уже принят!")
             await global_objects.bot.send_message(
                 chat_id,
-                "Данный чек уже принят в работу",
+                "❌ Уже участвует",
                 reply_to_message_id=msg_id,
             )
             return
