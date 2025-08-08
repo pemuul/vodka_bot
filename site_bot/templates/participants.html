@@ -277,9 +277,9 @@
           [
             (currentPage - 1) * per + i + 1,
             p.id,
-            p.name,
-            p.phone,
-            p.telegramId,
+            p.name || "",
+            p.phone || "",
+            p.telegramId || "",
             fmtDateTime(p.createdAt)
           ].forEach(txt => {
             const td = document.createElement("td");
@@ -295,9 +295,9 @@
       searchInput.oninput = () => {
         const q = searchInput.value.trim().toLowerCase();
         filtered = participants.filter(p =>
-          p.name.toLowerCase().includes(q) ||
-          p.phone.includes(q) ||
-          String(p.telegramId).includes(q) ||
+          (p.name || "").toLowerCase().includes(q) ||
+          (p.phone || "").includes(q) ||
+          String(p.telegramId ?? "").includes(q) ||
           String(p.id).includes(q)
         );
         currentPage = 1;
