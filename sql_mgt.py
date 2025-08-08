@@ -1273,3 +1273,10 @@ async def get_user_receipts(
         }
         for r in rows
     ]
+
+
+@with_connection
+async def delete_receipt(receipt_id: int, conn=None) -> None:
+    cursor = await conn.cursor()
+    await cursor.execute("DELETE FROM receipts WHERE id = ?", (receipt_id,))
+    await conn.commit()

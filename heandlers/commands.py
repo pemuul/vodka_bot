@@ -1,6 +1,14 @@
 from aiogram import Router, F, Bot
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, BotCommand, BotCommandScopeDefault, FSInputFile
+from aiogram.types import (
+    Message,
+    BotCommand,
+    BotCommandScopeDefault,
+    FSInputFile,
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from aiogram.enums import ParseMode
 from pathlib import Path
 import os
@@ -84,7 +92,23 @@ async def command_start_handler(message: Message) -> None:
                         if hasattr(ts, 'isoformat'):
                             ts = ts.isoformat()
                         caption = ts.replace('T', ' ')[:16] if ts else ''
-                        await message.answer_photo(FSInputFile(local), caption=caption)
+                        kb = InlineKeyboardMarkup(
+                            inline_keyboard=[
+                                [
+                                    InlineKeyboardButton(
+                                        text='🗑 Удалить',
+                                        callback_data=f'receipt_delete_{rid}'
+                                    ),
+                                    InlineKeyboardButton(
+                                        text='🙈 Скрыть',
+                                        callback_data=f'receipt_hide_{rid}'
+                                    ),
+                                ]
+                            ]
+                        )
+                        await message.answer_photo(
+                            FSInputFile(local), caption=caption, reply_markup=kb
+                        )
                     else:
                         await message.answer('Файл не найден.')
                 else:
@@ -105,17 +129,42 @@ async def command_start_handler(message: Message) -> None:
     else:
         await set_commands()
 
-        user = await sql_mgt.get_user_async(message.chat.id)
-        if user:
-            if not user.get('age_18'):
-                answer_message = await message.answer("Вы не подтвердили, что вам есть 18 лет!\n\nДля продолжения работы с ботом, нажмите на кнопку ниже")
+    user = await sql_mgt.get_user_async(message.chat.id)
+    if user:
+        if not user.get('age_18'):
+            answer_message = await message.answer(
+                "Вы не подтвердили, что вам есть 18 лет!\n\nДля продолжения работы с ботом, нажмите на кнопку ниже"
+            )
 
-        await menu.get_message(message)
-        
-    #return 
+    await menu.get_message(message)
+
+    #return
     await sql_mgt.insert_user(message)
     await set_commands()
     await delete_this_message(message)
+
+
+@router.callback_query(F.data.startswith("receipt_hide_"))
+async def receipt_hide_callback(callback: CallbackQuery):
+    await menu.get_message(callback.message)
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("receipt_delete_"))
+async def receipt_delete_callback(callback: CallbackQuery):
+    rid = callback.data.split("_")[-1]
+    if rid.isdigit():
+        await sql_mgt.delete_receipt(int(rid))
+    await menu.get_message(callback.message)
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.answer()
 
 
 def create_def_cmd(def_list:dict):
