@@ -128,6 +128,17 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     qr_data, vodka = await loop.run_in_executor(global_objects.ocr_pool, _analyze_check, str(dest), keywords)
     vodka_found = False
     if qr_data:
+        existing = await sql_mgt.find_receipt_by_qr(qr_data)
+        if existing and existing != receipt_id:
+            await sql_mgt.update_receipt_qr(receipt_id, qr_data)
+            await sql_mgt.update_receipt_status(receipt_id, "Этот чек уже принят!")
+            await global_objects.bot.send_message(
+                chat_id,
+                "Данный чек уже принят в работу",
+                reply_to_message_id=msg_id,
+            )
+            return
+        await sql_mgt.update_receipt_qr(receipt_id, qr_data)
         try:
             vodka_found = await loop.run_in_executor(None, _check_vodka_in_receipt, qr_data, keywords)
         except Exception as e:
