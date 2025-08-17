@@ -147,7 +147,14 @@ async def command_start_handler(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("receipt_hide_"))
 async def receipt_hide_callback(callback: CallbackQuery):
-    await menu.get_message(callback.message, path=f"{SPLITTER_STR}check")
+    current_path_id = await sql_mgt.get_param(callback.from_user.id, "CURRENT_PATH_ID")
+    if not current_path_id:
+        current_path_id = 0
+    try:
+        path = global_objects.tree_data.get_id_to_path(int(current_path_id))
+    except Exception:
+        path = SPLITTER_STR
+    await menu.get_message(callback.message, path=path)
     try:
         await callback.message.delete()
     except Exception:
@@ -160,7 +167,14 @@ async def receipt_delete_callback(callback: CallbackQuery):
     rid = callback.data.split("_")[-1]
     if rid.isdigit():
         await sql_mgt.delete_receipt(int(rid))
-    await menu.get_message(callback.message, path=f"{SPLITTER_STR}check")
+    current_path_id = await sql_mgt.get_param(callback.from_user.id, "CURRENT_PATH_ID")
+    if not current_path_id:
+        current_path_id = 0
+    try:
+        path = global_objects.tree_data.get_id_to_path(int(current_path_id))
+    except Exception:
+        path = SPLITTER_STR
+    await menu.get_message(callback.message, path=path)
     try:
         await callback.message.delete()
     except Exception:
