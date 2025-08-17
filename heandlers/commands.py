@@ -20,6 +20,7 @@ import sql_mgt
 #from sql_mgt import sql_mgt.insert_user, sql_mgt.get_visit, sql_mgt.set_param, sql_mgt.get_users_per_day, sql_mgt.add_admin, sql_mgt.is_normal_invite_admin_key, sql_mgt.get_last_order
 #from heandlers.web_market import start, send_item_message
 #from site_bot.orders_mgt import get_all_data_order
+from keys import SPLITTER_STR
 
 
 router = Router()  # [1]
@@ -146,7 +147,7 @@ async def command_start_handler(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("receipt_hide_"))
 async def receipt_hide_callback(callback: CallbackQuery):
-    await menu.get_message(callback.message)
+    await menu.get_message(callback.message, path=f"{SPLITTER_STR}check")
     try:
         await callback.message.delete()
     except Exception:
@@ -159,7 +160,7 @@ async def receipt_delete_callback(callback: CallbackQuery):
     rid = callback.data.split("_")[-1]
     if rid.isdigit():
         await sql_mgt.delete_receipt(int(rid))
-    await menu.get_message(callback.message)
+    await menu.get_message(callback.message, path=f"{SPLITTER_STR}check")
     try:
         await callback.message.delete()
     except Exception:
