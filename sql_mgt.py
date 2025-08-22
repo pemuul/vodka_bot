@@ -1246,3 +1246,73 @@ async def get_user_receipts(
         }
         for r in rows
     ]
+
+
+@with_connection
+async def delete_all_user_data(user_tg_id: int, conn=None):
+    cursor = await conn.cursor()
+
+    tables = [
+        ("users", "tg_id"),
+        ("user_settings", "tg_id"),
+        ("user_extended", "tg_id"),
+        ("user_params", "user_tg_id"),
+        ("user_rule", "user_tg_id"),
+        ("history_user", "user_tg_id"),
+        ("last_image", "user_tg_id"),
+        ("visite_log", "user_tg_id"),
+        ("params", "user_tg_id"),
+        ("admins", "user_tg_id"),
+        ("wallet_log", "user_tg_id"),
+        ("cancel_order", "user_tg_id"),
+        ("params_site", "user_tg_id"),
+        ("participant_settings", "user_tg_id"),
+        ("participant_messages", "user_tg_id"),
+        ("prize_draw_winners", "user_tg_id"),
+        ("receipts", "user_tg_id"),
+        ("notifications", "user_tg_id"),
+    ]
+
+    for table, column in tables:
+        await cursor.execute(
+            f"DELETE FROM {table} WHERE {column} = ?", (user_tg_id,)
+        )
+
+    await cursor.execute("SELECT id FROM questions WHERE user_tg_id = ?", (user_tg_id,))
+    q_ids = [row[0] for row in await cursor.fetchall()]
+    if q_ids:
+        placeholders = ",".join(["?"] * len(q_ids))
+        await cursor.execute(
+            f"DELETE FROM question_messages WHERE question_id IN ({placeholders})",
+            tuple(q_ids),
+        )
+        await cursor.execute(
+            f"DELETE FROM questions WHERE id IN ({placeholders})", tuple(q_ids)
+        )
+
+    await cursor.execute("SELECT id FROM images WHERE user_tg_id = ?", (user_tg_id,))
+    img_ids = [row[0] for row in await cursor.fetchall()]
+    if img_ids:
+        placeholders = ",".join(["?"] * len(img_ids))
+        await cursor.execute(
+            f"DELETE FROM deleted_images WHERE image_id IN ({placeholders})",
+            tuple(img_ids),
+        )
+    await cursor.execute("DELETE FROM images WHERE user_tg_id = ?", (user_tg_id,))
+
+    await cursor.execute(
+        "SELECT no FROM sales_header WHERE client_id = ?", (user_tg_id,)
+    )
+    sales = [row[0] for row in await cursor.fetchall()]
+    for sale_no in sales:
+        await cursor.execute(
+            "DELETE FROM sales_line WHERE sales_no = ?", (sale_no,)
+        )
+        await cursor.execute(
+            "DELETE FROM additional_field WHERE sales_no = ?", (sale_no,)
+        )
+    await cursor.execute(
+        "DELETE FROM sales_header WHERE client_id = ?", (user_tg_id,)
+    )
+
+    await conn.commit()
