@@ -60,10 +60,7 @@ async def update_table(conn, table_name, new_schema):
         await recreate_table_with_new_schema(conn, table_name, new_schema, existing_schema)
 
 async def recreate_table_with_new_schema(conn, table_name, new_schema, existing_schema):
-    # Получаем текущие данные из таблицы
     cursor = await conn.cursor()
-    await cursor.execute(f"SELECT * FROM {table_name}")
-    data = await cursor.fetchall()
 
     # Создаем временную таблицу с новой схемой
     columns_definition = ', '.join([f"{col} {col_type}" for col, col_type in new_schema.items()])
@@ -72,11 +69,13 @@ async def recreate_table_with_new_schema(conn, table_name, new_schema, existing_
     await cursor.execute(f"CREATE TABLE {table_name}_new ({columns_definition})")
     await conn.commit()
 
-    # Копируем данные в новую таблицу, соответствующие новым столбцам
-    new_columns = ', '.join(new_schema.keys())
+    # Копируем данные в новую таблицу, соответствующие существующим столбцам
     old_columns = ', '.join([col for col in new_schema.keys() if col in existing_schema.keys()])
-    await cursor.executemany(f"INSERT INTO {table_name}_new ({new_columns}) SELECT {old_columns} FROM {table_name}", data)
-    await conn.commit()
+    if old_columns:
+        await cursor.execute(
+            f"INSERT INTO {table_name}_new ({old_columns}) SELECT {old_columns} FROM {table_name}"
+        )
+        await conn.commit()
 
     # Удаляем старую таблицу и переименовываем новую
     await cursor.execute(f"DROP TABLE {table_name}")
