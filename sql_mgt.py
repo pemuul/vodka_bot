@@ -67,6 +67,8 @@ async def recreate_table_with_new_schema(conn, table_name, new_schema, existing_
 
     # Создаем временную таблицу с новой схемой
     columns_definition = ', '.join([f"{col} {col_type}" for col, col_type in new_schema.items()])
+    # Удаляем временную таблицу, если осталась после предыдущей неудачной миграции
+    await cursor.execute(f"DROP TABLE IF EXISTS {table_name}_new")
     await cursor.execute(f"CREATE TABLE {table_name}_new ({columns_definition})")
     await conn.commit()
 
