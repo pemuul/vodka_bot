@@ -60,21 +60,22 @@ async def update_table(conn, table_name, new_schema):
         await recreate_table_with_new_schema(conn, table_name, new_schema, existing_schema)
 
 async def recreate_table_with_new_schema(conn, table_name, new_schema, existing_schema):
-    # Получаем текущие данные из таблицы
     cursor = await conn.cursor()
-    await cursor.execute(f"SELECT * FROM {table_name}")
-    data = await cursor.fetchall()
 
     # Создаем временную таблицу с новой схемой
     columns_definition = ', '.join([f"{col} {col_type}" for col, col_type in new_schema.items()])
+    # Удаляем временную таблицу, если осталась после предыдущей неудачной миграции
+    await cursor.execute(f"DROP TABLE IF EXISTS {table_name}_new")
     await cursor.execute(f"CREATE TABLE {table_name}_new ({columns_definition})")
     await conn.commit()
 
-    # Копируем данные в новую таблицу, соответствующие новым столбцам
-    new_columns = ', '.join(new_schema.keys())
+    # Копируем данные в новую таблицу, соответствующие существующим столбцам
     old_columns = ', '.join([col for col in new_schema.keys() if col in existing_schema.keys()])
-    await cursor.executemany(f"INSERT INTO {table_name}_new ({new_columns}) SELECT {old_columns} FROM {table_name}", data)
-    await conn.commit()
+    if old_columns:
+        await cursor.execute(
+            f"INSERT INTO {table_name}_new ({old_columns}) SELECT {old_columns} FROM {table_name}"
+        )
+        await conn.commit()
 
     # Удаляем старую таблицу и переименовываем новую
     await cursor.execute(f"DROP TABLE {table_name}")
@@ -1246,3 +1247,73 @@ async def get_user_receipts(
         }
         for r in rows
     ]
+
+
+@with_connection
+async def delete_all_user_data(user_tg_id: int, conn=None):
+    cursor = await conn.cursor()
+
+    tables = [
+        ("users", "tg_id"),
+        ("user_settings", "tg_id"),
+        ("user_extended", "tg_id"),
+        ("user_params", "user_tg_id"),
+        ("user_rule", "user_tg_id"),
+        ("history_user", "user_tg_id"),
+        ("last_image", "user_tg_id"),
+        ("visite_log", "user_tg_id"),
+        ("params", "user_tg_id"),
+        ("admins", "user_tg_id"),
+        ("wallet_log", "user_tg_id"),
+        ("cancel_order", "user_tg_id"),
+        ("params_site", "user_tg_id"),
+        ("participant_settings", "user_tg_id"),
+        ("participant_messages", "user_tg_id"),
+        ("prize_draw_winners", "user_tg_id"),
+        ("receipts", "user_tg_id"),
+        ("notifications", "user_tg_id"),
+    ]
+
+    for table, column in tables:
+        await cursor.execute(
+            f"DELETE FROM {table} WHERE {column} = ?", (user_tg_id,)
+        )
+
+    await cursor.execute("SELECT id FROM questions WHERE user_tg_id = ?", (user_tg_id,))
+    q_ids = [row[0] for row in await cursor.fetchall()]
+    if q_ids:
+        placeholders = ",".join(["?"] * len(q_ids))
+        await cursor.execute(
+            f"DELETE FROM question_messages WHERE question_id IN ({placeholders})",
+            tuple(q_ids),
+        )
+        await cursor.execute(
+            f"DELETE FROM questions WHERE id IN ({placeholders})", tuple(q_ids)
+        )
+
+    await cursor.execute("SELECT id FROM images WHERE user_tg_id = ?", (user_tg_id,))
+    img_ids = [row[0] for row in await cursor.fetchall()]
+    if img_ids:
+        placeholders = ",".join(["?"] * len(img_ids))
+        await cursor.execute(
+            f"DELETE FROM deleted_images WHERE image_id IN ({placeholders})",
+            tuple(img_ids),
+        )
+    await cursor.execute("DELETE FROM images WHERE user_tg_id = ?", (user_tg_id,))
+
+    await cursor.execute(
+        "SELECT no FROM sales_header WHERE client_id = ?", (user_tg_id,)
+    )
+    sales = [row[0] for row in await cursor.fetchall()]
+    for sale_no in sales:
+        await cursor.execute(
+            "DELETE FROM sales_line WHERE sales_no = ?", (sale_no,)
+        )
+        await cursor.execute(
+            "DELETE FROM additional_field WHERE sales_no = ?", (sale_no,)
+        )
+    await cursor.execute(
+        "DELETE FROM sales_header WHERE client_id = ?", (user_tg_id,)
+    )
+
+    await conn.commit()
