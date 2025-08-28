@@ -5,9 +5,9 @@ from aiogram.types import (
     BotCommand,
     BotCommandScopeDefault,
     FSInputFile,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
     CallbackQuery,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
 )
 from aiogram.enums import ParseMode
 from pathlib import Path
@@ -20,6 +20,7 @@ import sql_mgt
 #from sql_mgt import sql_mgt.insert_user, sql_mgt.get_visit, sql_mgt.set_param, sql_mgt.get_users_per_day, sql_mgt.add_admin, sql_mgt.is_normal_invite_admin_key, sql_mgt.get_last_order
 #from heandlers.web_market import start, send_item_message
 #from site_bot.orders_mgt import get_all_data_order
+from keys import SPLITTER_STR
 
 
 router = Router()  # [1]
@@ -92,7 +93,23 @@ async def command_start_handler(message: Message) -> None:
                         if hasattr(ts, 'isoformat'):
                             ts = ts.isoformat()
                         caption = ts.replace('T', ' ')[:16] if ts else ''
-                        await message.answer_photo(FSInputFile(local), caption=caption)
+                        kb = InlineKeyboardMarkup(
+                            inline_keyboard=[
+                                [
+                                    InlineKeyboardButton(
+                                        text='🗑 Удалить',
+                                        callback_data=f'receipt_delete_{rid}'
+                                    ),
+                                    InlineKeyboardButton(
+                                        text='🙈 Скрыть',
+                                        callback_data=f'receipt_hide_{rid}'
+                                    ),
+                                ]
+                            ]
+                        )
+                        await message.answer_photo(
+                            FSInputFile(local), caption=caption, reply_markup=kb
+                        )
                     else:
                         await message.answer('Файл не найден.')
                 else:
@@ -113,17 +130,56 @@ async def command_start_handler(message: Message) -> None:
     else:
         await set_commands()
 
-        user = await sql_mgt.get_user_async(message.chat.id)
-        if user:
-            if not user.get('age_18'):
-                answer_message = await message.answer("Вы не подтвердили, что вам есть 18 лет!\n\nДля продолжения работы с ботом, нажмите на кнопку ниже")
+    user = await sql_mgt.get_user_async(message.chat.id)
+    if user:
+        if not user.get('age_18'):
+            answer_message = await message.answer(
+                "Вы не подтвердили, что вам есть 18 лет!\n\nДля продолжения работы с ботом, нажмите на кнопку ниже"
+            )
 
-        await menu.get_message(message)
-        
-    #return 
+    await menu.get_message(message)
+
+    #return
     await sql_mgt.insert_user(message)
     await set_commands()
     await delete_this_message(message)
+
+
+@router.callback_query(F.data.startswith("receipt_hide_"))
+async def receipt_hide_callback(callback: CallbackQuery):
+    current_path_id = await sql_mgt.get_param(callback.from_user.id, "CURRENT_PATH_ID")
+    if not current_path_id:
+        current_path_id = 0
+    try:
+        path = global_objects.tree_data.get_id_to_path(int(current_path_id))
+    except Exception:
+        path = SPLITTER_STR
+    await menu.get_message(callback.message, path=path)
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("receipt_delete_"))
+async def receipt_delete_callback(callback: CallbackQuery):
+    rid = callback.data.split("_")[-1]
+    if rid.isdigit():
+        await sql_mgt.delete_receipt(int(rid))
+    current_path_id = await sql_mgt.get_param(callback.from_user.id, "CURRENT_PATH_ID")
+    if not current_path_id:
+        current_path_id = 0
+    try:
+        path = global_objects.tree_data.get_id_to_path(int(current_path_id))
+    except Exception:
+        path = SPLITTER_STR
+    await menu.get_message(callback.message, path=path)
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.answer()
 
 
 def create_def_cmd(def_list:dict):

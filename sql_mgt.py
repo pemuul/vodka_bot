@@ -1156,6 +1156,7 @@ async def add_receipt(
     date: str | None = None,
     amount: float | None = None,
     message_id: int | None = None,
+    qr: str | None = None,
     draw_id: int | None = None,
     conn=None,
 ) -> int:
@@ -1170,6 +1171,9 @@ async def add_receipt(
     if "message_id" in schema:
         fields.append("message_id")
         values.append(message_id)
+    if "qr" in schema and qr is not None:
+        fields.append("qr")
+        values.append(qr)
     fields.extend(["file_path", "status"])
     values.extend([file_path, status])
     placeholders = ", ".join(["?"] * len(values))
@@ -1196,6 +1200,29 @@ async def update_receipt_status(receipt_id: int, status: str, conn=None) -> str 
     )
     await conn.commit()
     return old_status
+
+
+@with_connection
+async def update_receipt_qr(receipt_id: int, qr: str, conn=None) -> None:
+    """Set QR code string for a receipt."""
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "UPDATE receipts SET qr = ? WHERE id = ?",
+        (qr, receipt_id),
+    )
+    await conn.commit()
+
+
+@with_connection
+async def find_receipt_by_qr(qr: str, conn=None) -> int | None:
+    """Return receipt id with given QR or None."""
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT id FROM receipts WHERE qr = ?",
+        (qr,),
+    )
+    row = await cursor.fetchone()
+    return row[0] if row else None
 
 
 @with_connection
@@ -1248,6 +1275,12 @@ async def get_user_receipts(
         for r in rows
     ]
 
+
+@with_connection
+async def delete_receipt(receipt_id: int, conn=None) -> None:
+    cursor = await conn.cursor()
+    await cursor.execute("DELETE FROM receipts WHERE id = ?", (receipt_id,))
+    await conn.commit()
 
 @with_connection
 async def delete_all_user_data(user_tg_id: int, conn=None):
@@ -1315,5 +1348,4 @@ async def delete_all_user_data(user_tg_id: int, conn=None):
     await cursor.execute(
         "DELETE FROM sales_header WHERE client_id = ?", (user_tg_id,)
     )
-
     await conn.commit()

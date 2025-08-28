@@ -9,7 +9,6 @@ import sqlite3
 import asyncio
 import copy
 import datetime
-from aiogram import Bot
 from io import StringIO, BytesIO
 from cryptography.fernet import Fernet  
 #from jinja2 import Template
@@ -17,7 +16,6 @@ from cryptography.fernet import Fernet
 from sql.sql_site import get_user_id_by_value, get_items, create_order, get_user_orders, get_orders_lines, get_items_by_id, append_additional_fields, get_additional_fields, get_admin, get_admins, get_admin_rules, get_user, update_admin_rule, update_item, get_item_by_id, add_line, edit_line, delete_line, update_is_paid_for, insert_item, get_last_item, get_user_extended, get_all_items, subtract_amount_item, get_line, delete_item, append_fill_wallet_line, get_admins_id
 from heandlers.pyments import buy_order_user_id, succesfull_payment_wallet
 from site_bot.orders_mgt import get_all_data_order, get_all_data_orders, update_order_status, get_admins_all_data
-from site_bot.send_bot_message import get_bot_token
 from keyboards.admin_kb import fill_wallet_alert_message_kb 
 
 from pyment_bot_dir.sql_pyment_bot import create_payment_invite_key
@@ -163,6 +161,9 @@ def get_file(path, filename):
 
 
 def get_bot_token(bot_directory: str):
+    token = globals().get("TG_BOT") or os.getenv("TG_BOT")
+    if token:
+        return token
     bot_directory_settings = bot_directory + '/settings.json'
     with open(bot_directory_settings, 'r') as file:
         settings_data = json.load(file)
@@ -174,12 +175,14 @@ def get_bot_token(bot_directory: str):
 async def send_message_to_user(bot_directory: str, user_id: int, message_text: str):
     api_token = get_bot_token(bot_directory)
 
+    try:
+        from aiogram import Bot
+    except Exception as e:  # pragma: no cover - aiogram may be missing
+        print("ERROR: aiogram import failed", e)
+        return
+
     bot = Bot(token=api_token)
-    #try:
     await bot.send_message(user_id, message_text)
-        #print(f"Сообщение отправлено пользователю с ID {user_id}")
-    #except Exception as e:
-        #print(f"Ошибка при отправке сообщения пользователю с ID {user_id}: {e}")
 
 # Функция, которая будет вызываться из Flask
 def send_message_handler(bot_directory: str, user_id: int, message_text: str):
@@ -199,6 +202,12 @@ def send_message_handler(bot_directory: str, user_id: int, message_text: str):
 async def send_message_to_users(bot_directory: str, user_id_list: list, message_text: str, reply_markup = None):
     print('user_id_list -> ', user_id_list)
     api_token = get_bot_token(bot_directory)
+
+    try:
+        from aiogram import Bot
+    except Exception as e:  # pragma: no cover
+        print("ERROR: aiogram import failed", e)
+        return
 
     params = {}
     if reply_markup:
@@ -358,6 +367,12 @@ def get_help_manager_post(path):
 
 
 async def get_bot_params_from_bot(current_derictory):
+    try:
+        from aiogram import Bot
+    except Exception as e:  # pragma: no cover
+        print("ERROR: aiogram import failed", e)
+        return {}
+
     bot = Bot(token=get_bot_token(current_derictory))
     bot_info = await bot.get_me()
     # Извлечение нужных параметров
@@ -424,6 +439,12 @@ def create_order_post(path):
 
     settings = get_settings(path_text)
     #print(settings)
+    try:
+        from aiogram import Bot
+    except Exception as e:  # pragma: no cover
+        print("ERROR: aiogram import failed", e)
+        return jsonify({'success': False, 'error': 'telegram unavailable'})
+
     bot = Bot(token=settings.get('TELEGRAM_BOT_TOKEN'))
     new_order_all_data = get_all_data_order(new_order.get('no'), path_text, path, 'tg_base.sqlite', conn, False)
 
@@ -477,6 +498,12 @@ def send_issue_invoice_post(path):
 
     settings = get_settings(path_text)
     pyment_settings = settings.get('site')['settings']
+    try:
+        from aiogram import Bot
+    except Exception as e:  # pragma: no cover
+        print("ERROR: aiogram import failed", e)
+        return jsonify({'success': False, 'error': 'telegram unavailable'})
+
     bot = Bot(token=settings.get('TELEGRAM_BOT_TOKEN'))
     new_order_all_data = get_all_data_order(order_no, path_text, path, 'tg_base.sqlite', conn, False)
     asyncio.run(buy_order_user_id(new_order_all_data, bot, pyment_settings))

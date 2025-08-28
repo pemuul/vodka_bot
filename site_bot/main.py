@@ -23,6 +23,7 @@ from sqlalchemy.orm import sessionmaker
 from typing import List, Optional, Dict, Any, Tuple
 import datetime
 from pydantic import BaseModel
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 # Админ-панель через SQLAdmin
 from sqladmin import Admin, ModelView
@@ -34,10 +35,7 @@ import random
 import csv
 import io
 
-from aiogram import Bot
-from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo
-from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties
+# aiogram is imported lazily when sending messages
 
 # ==============================
 # Настройка БД
@@ -197,7 +195,14 @@ async def root(request: Request):
 
 @app.get("/prize-draws", response_class=HTMLResponse)
 async def prize_draws(request: Request):
-    draws_rows = await database.fetch_all(prize_draws_table.select())
+    draw_query = sqlalchemy.select(
+        prize_draws_table.c.id,
+        prize_draws_table.c.title,
+        sqlalchemy.cast(prize_draws_table.c.start_date, sqlalchemy.String).label("start_date"),
+        sqlalchemy.cast(prize_draws_table.c.end_date, sqlalchemy.String).label("end_date"),
+        prize_draws_table.c.status,
+    )
+    draws_rows = await database.fetch_all(draw_query)
     draws = []
     for d in draws_rows:
         stages = []
@@ -282,13 +287,15 @@ async def prize_draws(request: Request):
                     "winners": winners,
                 }
             )
+        start_dt = datetime.datetime.fromisoformat(d["start_date"]).date()
+        end_dt = datetime.datetime.fromisoformat(d["end_date"]).date()
         draws.append({
             "id": d["id"],
             "title": d["title"],
-            "start": d["start_date"].isoformat(),
-            "end": d["end_date"].isoformat(),
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
             "status": d["status"],
-            "stages": stages
+            "stages": stages,
         })
     return templates.TemplateResponse(
         "prize_draws.html",
@@ -403,6 +410,36 @@ async def save_draw(draw: DrawIn):
             )
 
     return {"success": True, "id": new_id}
+
+
+@app.delete("/prize-draws/{draw_id}")
+async def delete_draw(draw_id: int):
+    stage_ids = await database.fetch_all(
+        sqlalchemy.select(prize_draw_stages_table.c.id).where(
+            prize_draw_stages_table.c.draw_id == draw_id
+        )
+    )
+    for sid in stage_ids:
+        await database.execute(
+            prize_draw_winners_table.delete().where(
+                prize_draw_winners_table.c.stage_id == sid["id"]
+            )
+        )
+    await database.execute(
+        prize_draw_stages_table.delete().where(
+            prize_draw_stages_table.c.draw_id == draw_id
+        )
+    )
+    if has_receipt_draw_id():
+        await database.execute(
+            receipts_table.update()
+            .where(receipts_table.c.draw_id == draw_id)
+            .values(draw_id=None)
+        )
+    await database.execute(
+        prize_draws_table.delete().where(prize_draws_table.c.id == draw_id)
+    )
+    return {"success": True}
 
 
 class DetermineReq(BaseModel):
@@ -884,6 +921,7 @@ async def test_send_scheduled_message(message_id: int):
                 if typ not in ("photo", "video") or not fname:
                     continue
                 local = UPLOAD_DIR / fname
+                from aiogram.types import FSInputFile  # type: ignore
                 obj = FSInputFile(local) if local.exists() else fname
                 files.append((typ, obj))
 
@@ -920,6 +958,7 @@ async def send_scheduled_message(message_id: int):
                 if typ not in ("photo", "video") or not fname:
                     continue
                 local = UPLOAD_DIR / fname
+                from aiogram.types import FSInputFile  # type: ignore
                 obj = FSInputFile(local) if local.exists() else fname
                 files.append((typ, obj))
 
@@ -934,6 +973,38 @@ async def send_scheduled_message(message_id: int):
         .values(schedule_dt=now, status="Отправлено")
     )
     return {"success": True}
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings(request: Request):
+    row = await database.fetch_one(
+        params_table.select()
+        .where(params_table.c.user_tg_id == 0)
+        .where(params_table.c.param_name == "product_keywords")
+    )
+    keywords = row["value"] if row else ""
+    return templates.TemplateResponse(
+        "settings.html",
+        {
+            "request": request,
+            "active_page": "settings",
+            "keywords": keywords,
+            "version": app.state.static_version,
+        },
+    )
+
+
+@app.post("/settings")
+async def save_settings(product_names: str = Form("")):
+    query = sqlite_insert(params_table).values(
+        user_tg_id=0, param_name="product_keywords", value=product_names
+    )
+    query = query.on_conflict_do_update(
+        index_elements=[params_table.c.user_tg_id, params_table.c.param_name],
+        set_={"value": product_names},
+    )
+    await database.execute(query)
+    return RedirectResponse("/settings", status_code=303)
 
 @app.get("/participants", response_class=HTMLResponse)
 async def participants(request: Request):
@@ -1025,7 +1096,8 @@ async def receipts(request: Request):
             "draw_id": r["draw_id"] if has_receipt_draw_id() and "draw_id" in r else None,
             "draw_title": r["draw_title"] if "draw_title" in r else None,
         })
-    draws_rows = await database.fetch_all(prize_draws_table.select())
+    draw_query = sqlalchemy.select(prize_draws_table.c.id, prize_draws_table.c.title)
+    draws_rows = await database.fetch_all(draw_query)
     draws = [{"id": d["id"], "title": d["title"]} for d in draws_rows]
     return templates.TemplateResponse(
         "receipts.html",
@@ -1176,8 +1248,25 @@ async def api_delete_message(message_id: int):
     await mark_message_deleted(message_id)
     return {"success": True}
 
-telegram_bot_token = '7349498734:AAHJb2K6KuLCMqLpkh3Fo_hFJhtV1WkN8tc' # !!!! надо поменять на глобальную
-bot: Bot = Bot(telegram_bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+telegram_bot_token = globals().get("TG_BOT") or os.getenv("TG_BOT")
+if not telegram_bot_token:
+    raise RuntimeError("TG_BOT token is not set")
+
+_bot = None
+
+
+def get_bot():
+    global _bot
+    if _bot is None:
+        try:
+            from aiogram import Bot
+            from aiogram.enums import ParseMode
+            from aiogram.client.default import DefaultBotProperties
+        except Exception as e:  # pragma: no cover - aiogram optional
+            print("ERROR: aiogram import failed", e)
+            return None
+        _bot = Bot(telegram_bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    return _bot
 
 
 async def send_and_log_message(
@@ -1186,6 +1275,12 @@ async def send_and_log_message(
     media: Optional[List[Tuple[str, object]]] = None,
 ):
     """Send a message via the bot and log it to participant_messages."""
+    bot = get_bot()
+    if not bot:
+        return
+
+    from aiogram.types import InputMediaPhoto, InputMediaVideo  # type: ignore
+
     sent_messages = []
     files_info: List[Dict[str, Any]] = []
     if not media:

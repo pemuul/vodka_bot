@@ -1,5 +1,9 @@
 """OCR helper using EasyOCR for Russian and English text."""
 
+import warnings
+
+warnings.filterwarnings("ignore", message=".*pin_memory.*")
+
 import easyocr
 import numpy as np
 

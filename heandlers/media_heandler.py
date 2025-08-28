@@ -5,6 +5,7 @@ import time
 import random
 import uuid
 from pathlib import Path
+from fns_api import get_receipt_by_qr
 
 #from sql_mgt import sql_mgt.get_param, sql_mgt.set_param, sql_mgt.append_param_get_old
 import sql_mgt
@@ -13,7 +14,8 @@ from heandlers import import_files, admin
 from keyboards import admin_kb
 
 import cv2
-from pyzbar.pyzbar import decode
+from pyzbar.pyzbar import decode, ZBarSymbol
+# optional ZXing libraries may provide more robust QR reading
 # OCR helper based on Tesseract with Russian and English models
 from ocr import extract_text
 
@@ -24,6 +26,7 @@ global_objects = None
 UPLOAD_DIR_CHECKS = Path(__file__).resolve().parent.parent / "site_bot" / "static" / "uploads"
 UPLOAD_DIR_CHECKS.mkdir(parents=True, exist_ok=True)
 
+
 def init_object(global_objects_inp):
     global global_objects
 
@@ -33,14 +36,24 @@ def init_object(global_objects_inp):
     sql_mgt.init_object(global_objects_inp)
 
 
-def _analyze_check(path: str):
-    """Run heavy OCR logic in a separate process."""
+def _analyze_check(path: str, keywords: list[str]):
+    """Detect QR code first; fall back to OCR for keyword search."""
     img = cv2.imread(path)
     if img is None:
         return None, False
 
-    decoded_objects = decode(img)
-    qr_data = decoded_objects[0].data.decode("utf-8") if decoded_objects else None
+    qr_data = None
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    decoded_objects = decode(gray, symbols=[ZBarSymbol.QRCODE])
+    if decoded_objects:
+        qr_data = decoded_objects[0].data.decode("utf-8")
+    else:
+        detector = cv2.QRCodeDetector()
+        data, points, _ = detector.detectAndDecode(gray)
+        if points is not None and data:
+            qr_data = data.strip()
+    if qr_data is None:
+        qr_data = _enhanced_qr(gray)
 
     text = ""
     if qr_data is None:
@@ -48,23 +61,100 @@ def _analyze_check(path: str):
             text = extract_text(img)
         except Exception:
             text = ""
-    lower = text.lower()
-    vodka = "водк" in lower and ("фин" in lower or "fin" in lower)
+    lower = text.casefold()
+    vodka = any(k in lower for k in keywords)
     return qr_data, vodka
+
+
+def _enhanced_qr(gray):
+    """Attempt to decode difficult QR codes by rotating, scaling,
+    thresholding, and using optional ZXing-based readers."""
+    detector = cv2.QRCodeDetector()
+    rotate_codes = [None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE]
+    for rc in rotate_codes:
+        img = gray if rc is None else cv2.rotate(gray, rc)
+        up = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_LINEAR)
+        for processed in (
+            up,
+            cv2.adaptiveThreshold(
+                up, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 2
+            ),
+        ):
+            decoded = decode(processed, symbols=[ZBarSymbol.QRCODE])
+            if decoded:
+                return decoded[0].data.decode("utf-8")
+            data, points, _ = detector.detectAndDecode(processed)
+            if points is not None and data:
+                return data.strip()
+    try:
+        import zxingcpp  # type: ignore
+        results = zxingcpp.read_barcodes(gray)
+        if results:
+            return results[0].text
+    except Exception:
+        pass
+    try:
+        from pyzxing import BarCodeReader  # type: ignore
+        reader = BarCodeReader()
+        res = reader.decode_array(gray)
+        if res and 'parsed' in res[0]:
+            return res[0]['parsed']
+    except Exception:
+        pass
+    return None
+
+
+def _check_vodka_in_receipt(qr_data: str, keywords: list[str]) -> bool:
+    """Call FNS service and search receipt items for configured products."""
+    data = get_receipt_by_qr(qr_data)
+    if not data:
+        return False
+    items = (
+        data.get("items")
+        or data.get("content", {}).get("items")
+        or data.get("document", {}).get("receipt", {}).get("items", [])
+    )
+    for item in items:
+        name = str(item.get("name", "")).casefold()
+        if any(k in name for k in keywords):
+            return True
+    return False
 
 
 async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int):
     loop = asyncio.get_running_loop()
-    qr_data, vodka = await loop.run_in_executor(global_objects.ocr_pool, _analyze_check, str(dest))
+    keywords_raw = await sql_mgt.get_param(0, 'product_keywords')
+    keywords = [k.strip().casefold() for k in keywords_raw.split(';') if k.strip()]
+    qr_data, vodka = await loop.run_in_executor(global_objects.ocr_pool, _analyze_check, str(dest), keywords)
+    vodka_found = False
     if qr_data:
-        await global_objects.bot.send_message(chat_id, f"QR-код найден! Значение: {qr_data}")
-        status = "Распознан"
+        existing = await sql_mgt.find_receipt_by_qr(qr_data)
+        if existing and existing != receipt_id:
+            await sql_mgt.update_receipt_qr(receipt_id, qr_data)
+            await sql_mgt.update_receipt_status(receipt_id, "Этот чек уже принят!")
+            await global_objects.bot.send_message(
+                chat_id,
+                "❌ Уже участвует",
+                reply_to_message_id=msg_id,
+            )
+            return
+        await sql_mgt.update_receipt_qr(receipt_id, qr_data)
+        try:
+            vodka_found = await loop.run_in_executor(None, _check_vodka_in_receipt, qr_data, keywords)
+        except Exception as e:
+            await global_objects.bot.send_message(
+                chat_id,
+                f"Ошибка при проверке QR через ФНС: {e}",
+                reply_to_message_id=msg_id,
+            )
+            vodka_found = False
     elif vodka:
+        vodka_found = True
+    if vodka_found:
         await global_objects.bot.send_message(chat_id, "Чек принят!", reply_to_message_id=msg_id)
         status = "Распознан"
     else:
         status = "Не распознан"
-
     await sql_mgt.update_receipt_status(receipt_id, status)
 
 
@@ -97,9 +187,8 @@ async def set_photo(message: Message) -> None:
             await message.reply('Чек получен, идёт обработка...')
             asyncio.create_task(process_receipt(dest, message.chat.id, message.message_id, receipt_id))
             return
-        except Exception as e:
+        except Exception:
             await message.reply('Ошибка при обработке чека. Попробуйте ещё раз.')
-            print(f'Ошибка при обработке фото: {e}')
             return
     
     if not message.chat.id in global_objects.admin_list:
@@ -147,8 +236,8 @@ async def add_admin_media(message: Message, type_file:str = 'image'):
             message_id=int(last_message_id),
             reply_markup=admin_kb.import_media_kb(last_path_id),
         )
-    except Exception as e:
-        print(e)
+    except Exception:
+        pass
     #await callback.message.edit_text(f'Отправте фото, которые будут добавлены!\nЗагружено фото: {}', reply_markup=admin_kb.import_media_kb(callback_data.path_id), parse_mode=ParseMode.HTML)
     
 

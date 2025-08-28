@@ -1,12 +1,15 @@
 
 import asyncio
-from aiogram import Bot
+import os
 import json
 
 from site_bot.orders_mgt import get_admins_all_data
 
 
 def get_bot_token(bot_directory: str):
+    token = globals().get("TG_BOT") or os.getenv("TG_BOT")
+    if token:
+        return token
     bot_directory_settings = bot_directory + '/settings.json'
     with open(bot_directory_settings, 'r') as file:
         settings_data = json.load(file)
@@ -18,12 +21,14 @@ def get_bot_token(bot_directory: str):
 async def send_message_to_user(bot_directory: str, user_id: int, message_text: str):
     api_token = get_bot_token(bot_directory)
 
+    try:
+        from aiogram import Bot
+    except Exception as e:  # pragma: no cover - aiogram may be missing
+        print("ERROR: aiogram import failed", e)
+        return
+
     bot = Bot(token=api_token)
-    #try:
     await bot.send_message(user_id, message_text)
-        #print(f"Сообщение отправлено пользователю с ID {user_id}")
-    #except Exception as e:
-        #print(f"Ошибка при отправке сообщения пользователю с ID {user_id}: {e}")
 
 # Функция, которая будет вызываться из Flask
 def send_message_handler(bot_directory: str, user_id: int, message_text: str):
@@ -34,6 +39,12 @@ def send_message_handler(bot_directory: str, user_id: int, message_text: str):
 
 async def send_message_to_users(bot_directory: str, user_id_list: list, message_text: str, reply_markup = None):
     api_token = get_bot_token(bot_directory)
+
+    try:
+        from aiogram import Bot
+    except Exception as e:  # pragma: no cover
+        print("ERROR: aiogram import failed", e)
+        return
 
     params = {}
     if reply_markup:
