@@ -221,6 +221,31 @@ async def cmd_my_id(message: Message):
     await delete_this_message(message)
 
 
+@router.message(Command("remove_me"))
+async def cmd_remove_me(message: Message):
+    buttons = [[
+        InlineKeyboardButton(text="Да", callback_data="remove_me_yes"),
+        InlineKeyboardButton(text="Нет", callback_data="remove_me_no"),
+    ]]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer(
+        "Уверены ли вы, что вас надо удалить?", reply_markup=keyboard
+    )
+    await delete_this_message(message)
+
+
+@router.callback_query(F.data.startswith("remove_me_"))
+async def callbacks_remove_me(callback: CallbackQuery):
+    if callback.data == "remove_me_yes":
+        await sql_mgt.delete_all_user_data(callback.from_user.id)
+        await callback.message.answer("Ваши данные удалены.")
+
+    await global_objects.bot.delete_message(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+    )
+
+
 @router.message(Command("get_log_click"))
 async def cmd_get_log_click(message: Message, find_day:int=10):   
     if message.chat.id not in global_objects.admin_list:
@@ -326,6 +351,13 @@ async def set_commands():
             BotCommand(
             command='about_bot',
             description='О боте'
+        )
+    )
+
+    commands.append(
+            BotCommand(
+            command='remove_me',
+            description='Удалить мои данные'
         )
     )
 
