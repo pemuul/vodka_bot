@@ -98,26 +98,23 @@ async def except_message(message: Message, except_message_name: str):
         try:
             new_admin_id = int(message.html_text)
         except:
-            await global_objects.bot.edit_message_text(
-                text='Вам нужно ввести только число!',
-                chat_id=message.chat.id,
-                message_id=last_message_id,
+            await message.answer(
+                'Вам нужно ввести только число!',
                 reply_markup=tu_menu('ОТМЕНА'),
                 parse_mode=ParseMode.HTML,
             )
+            await delete_message(message.chat.id, last_message_id)
             await delete_message(message.chat.id, message.message_id)
-            return 
+            return
 
         await sql_mgt.add_admin(new_admin_id, message.chat.id)
         global_objects.admin_list.append(new_admin_id)
-
-        await global_objects.bot.edit_message_text(
-            text='Администратор добавлен!',
-            chat_id=message.chat.id,
-            message_id=last_message_id,
+        await message.answer(
+            'Администратор добавлен!',
             reply_markup=tu_menu('В МЕНЮ'),
             parse_mode=ParseMode.HTML,
         )
+        await delete_message(message.chat.id, last_message_id)
         await delete_message(message.chat.id, message.message_id)
         return
 
