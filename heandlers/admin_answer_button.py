@@ -412,7 +412,12 @@ async def callbacks_num_change_fab(callback: CallbackQuery, callback_data: Admin
         url_start += await sql_mgt.create_invite_admin_key(callback.message.chat.id)
 
         answerd_text += f'<a href="{url_start}">СТАТЬ АДМИНОМ</a>'
-        await callback.message.edit_text(answerd_text, reply_markup=tu_menu('В МЕНЮ'), parse_mode=ParseMode.HTML)
+        await callback.message.answer(
+            answerd_text,
+            reply_markup=tu_menu('В МЕНЮ'),
+            parse_mode=ParseMode.HTML,
+        )
+        await commands.delete_this_message(callback.message)
     elif callback_data.button == 'DELETE_ADMIN':
         await callback.message.edit_text('Удалите ненужных администраторов', reply_markup=await admin_kb.delete_admin(), parse_mode=ParseMode.HTML)
     elif callback_data.button == 'ROLL_BACK_CHANGE':
