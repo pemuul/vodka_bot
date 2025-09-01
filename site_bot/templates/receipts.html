@@ -120,7 +120,8 @@
 
   <script>
     document.addEventListener("DOMContentLoaded", () => {
-      const data = {{ receipts_data | default([]) | tojson }};
+      const rawData = {{ receipts_data | default([]) | tojson }};
+      const data = rawData.filter(r => r.id !== null && r.id !== undefined);
       const draws = {{ draws_data | default([]) | tojson }};
       const tableBody = document.getElementById("receipts-table-body");
       const pageStart = document.getElementById("page-start");

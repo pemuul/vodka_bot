@@ -1070,10 +1070,14 @@ async def update_participant(tg_id: int, data: ParticipantUpdate):
 @app.get("/receipts", response_class=HTMLResponse)
 async def receipts(request: Request):
     sel_columns = [receipts_table, users_table.c.name.label("user_name")]
-    join_clause = receipts_table.outerjoin(users_table, receipts_table.c.user_tg_id == users_table.c.tg_id)
+    join_clause = receipts_table.outerjoin(
+        users_table, receipts_table.c.user_tg_id == users_table.c.tg_id
+    )
     if has_receipt_draw_id():
         sel_columns.append(prize_draws_table.c.title.label("draw_title"))
-        join_clause = join_clause.outerjoin(prize_draws_table, receipts_table.c.draw_id == prize_draws_table.c.id)
+        join_clause = join_clause.outerjoin(
+            prize_draws_table, receipts_table.c.draw_id == prize_draws_table.c.id
+        )
     query = (
         sqlalchemy.select(*sel_columns)
         .select_from(join_clause)
@@ -1082,20 +1086,28 @@ async def receipts(request: Request):
     rows = await database.fetch_all(query)
     receipts = []
     for r in rows:
-        file_path = r["file_path"]
-        if file_path and not file_path.startswith("/static"):
+        file_path = r[receipts_table.c.file_path]
+        if file_path and not str(file_path).startswith("/static"):
             file_path = f"/static/uploads/{Path(file_path).name}"
-        receipts.append({
-            "id": r["id"],
-            "number": r["number"],
-            "created_at": r["create_dt"].isoformat() if r["create_dt"] else None,
-            "user_tg_id": r["user_tg_id"],
-            "user_name": r["user_name"],
-            "file_path": file_path,
-            "status": r["status"] if has_receipt_status() and "status" in r else None,
-            "draw_id": r["draw_id"] if has_receipt_draw_id() and "draw_id" in r else None,
-            "draw_title": r["draw_title"] if "draw_title" in r else None,
-        })
+        receipts.append(
+            {
+                "id": r[receipts_table.c.id],
+                "number": r[receipts_table.c.number],
+                "created_at": r[receipts_table.c.create_dt].isoformat()
+                if r[receipts_table.c.create_dt]
+                else None,
+                "user_tg_id": r[receipts_table.c.user_tg_id],
+                "user_name": r["user_name"],
+                "file_path": file_path,
+                "status": r[receipts_table.c.status]
+                if has_receipt_status()
+                else None,
+                "draw_id": r[receipts_table.c.draw_id]
+                if has_receipt_draw_id()
+                else None,
+                "draw_title": r["draw_title"] if "draw_title" in r else None,
+            }
+        )
     draw_query = sqlalchemy.select(prize_draws_table.c.id, prize_draws_table.c.title)
     draws_rows = await database.fetch_all(draw_query)
     draws = [{"id": d["id"], "title": d["title"]} for d in draws_rows]
@@ -1113,10 +1125,14 @@ async def receipts(request: Request):
 @app.get("/api/receipts/{receipt_id}")
 async def get_receipt(receipt_id: int):
     sel_cols = [receipts_table, users_table.c.name.label("user_name")]
-    join_clause = receipts_table.outerjoin(users_table, receipts_table.c.user_tg_id == users_table.c.tg_id)
+    join_clause = receipts_table.outerjoin(
+        users_table, receipts_table.c.user_tg_id == users_table.c.tg_id
+    )
     if has_receipt_draw_id():
         sel_cols.append(prize_draws_table.c.title.label("draw_title"))
-        join_clause = join_clause.outerjoin(prize_draws_table, receipts_table.c.draw_id == prize_draws_table.c.id)
+        join_clause = join_clause.outerjoin(
+            prize_draws_table, receipts_table.c.draw_id == prize_draws_table.c.id
+        )
     query = (
         sqlalchemy.select(*sel_cols)
         .select_from(join_clause)
@@ -1125,20 +1141,28 @@ async def get_receipt(receipt_id: int):
     r = await database.fetch_one(query)
     if not r:
         raise HTTPException(404, "Receipt not found")
-    file_path = r["file_path"]
-    if file_path and not file_path.startswith("/static"):
+    file_path = r[receipts_table.c.file_path]
+    if file_path and not str(file_path).startswith("/static"):
         file_path = f"/static/uploads/{Path(file_path).name}"
     return {
-        "id": r["id"],
-        "number": r["number"],
-        "created_at": r["create_dt"].isoformat() if r["create_dt"] else None,
-        "amount": r["amount"],
-        "user_tg_id": r["user_tg_id"],
+        "id": r[receipts_table.c.id],
+        "number": r[receipts_table.c.number],
+        "created_at": r[receipts_table.c.create_dt].isoformat()
+        if r[receipts_table.c.create_dt]
+        else None,
+        "amount": r[receipts_table.c.amount],
+        "user_tg_id": r[receipts_table.c.user_tg_id],
         "user_name": r["user_name"],
         "file_path": file_path,
-        "status": r["status"] if has_receipt_status() and "status" in r else None,
-        "message_id": r["message_id"] if has_receipt_msg_id() and "message_id" in r else None,
-        "draw_id": r["draw_id"] if has_receipt_draw_id() and "draw_id" in r else None,
+        "status": r[receipts_table.c.status]
+        if has_receipt_status()
+        else None,
+        "message_id": r[receipts_table.c.message_id]
+        if has_receipt_msg_id()
+        else None,
+        "draw_id": r[receipts_table.c.draw_id]
+        if has_receipt_draw_id()
+        else None,
         "draw_title": r["draw_title"] if "draw_title" in r else None,
     }
 
@@ -1159,8 +1183,13 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
         .where(receipts_table.c.id == receipt_id)
         .values(**update_values)
     )
-    if old_row and has_receipt_status() and old_row["status"] != upd.status and has_receipt_msg_id():
-        if old_row["message_id"] and old_row["user_tg_id"]:
+    if (
+        old_row
+        and has_receipt_status()
+        and old_row[receipts_table.c.status] != upd.status
+        and has_receipt_msg_id()
+    ):
+        if old_row[receipts_table.c.message_id] and old_row[receipts_table.c.user_tg_id]:
             text = None
             if upd.status == "Распознан":
                 text = "Чек принят!"
@@ -1169,12 +1198,12 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
             if text:
                 try:
                     await bot.send_message(
-                        old_row["user_tg_id"],
+                        old_row[receipts_table.c.user_tg_id],
                         text,
-                        reply_to_message_id=old_row["message_id"],
+                        reply_to_message_id=old_row[receipts_table.c.message_id],
                     )
                     log_values = {
-                        "user_tg_id": old_row["user_tg_id"],
+                        "user_tg_id": old_row[receipts_table.c.user_tg_id],
                         "sender": "admin",
                         "text": text,
                         "buttons": None,
@@ -1191,6 +1220,30 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
 
 @app.delete("/api/receipts/{receipt_id}")
 async def delete_receipt(receipt_id: int):
+    row = await database.fetch_one(
+        receipts_table.select().where(receipts_table.c.id == receipt_id)
+    )
+    if not row:
+        raise HTTPException(404, "Receipt not found")
+    file_path = row[receipts_table.c.file_path]
+    if file_path:
+        upload_dir = Path(__file__).resolve().parent / "static" / "uploads"
+        fpath = upload_dir / Path(str(file_path)).name
+        try:
+            fpath.unlink()
+        except FileNotFoundError:
+            pass
+    if HAS_PDW_RECEIPT_ID:
+        await database.execute(
+            prize_draw_winners_table.delete().where(
+                prize_draw_winners_table.c.receipt_id == receipt_id
+            )
+        )
+    await database.execute(
+        notifications_table.delete().where(
+            notifications_table.c.message.like(f"%{receipt_id}%")
+        )
+    )
     await database.execute(
         receipts_table.delete().where(receipts_table.c.id == receipt_id)
     )
