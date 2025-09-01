@@ -1,11 +1,11 @@
 """
-Migrate data from legacy Finsky SQLite database into our SQLite database.
+Перенос данных из одной базы SQLite в другую.
 
-Run the script with paths to the source and target databases::
+Запуск:
+    python join_sqlite.py --source путь_к_старой.db --target путь_к_новой.db
 
-    python migrate_finsky.py --source finsky.db --target our.db
-
-Clients lacking names are still imported; their Telegram ID is used as a fallback name.
+Скрипт читает данные из старой базы и записывает их в новую. Подходит для миграции
+клиентов, чатов, поддержи, рассылок и результатов игр.
 """
 
 import argparse
