@@ -152,11 +152,12 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                 text_message += "\n\nВаши чеки:\n"
                 for r in receipts:
                     ts = r.get("create_dt")
-                    dt = "-"
                     if ts:
                         if hasattr(ts, "isoformat"):
                             ts = ts.isoformat()
-                        dt = ts.replace("T", " ")[:16]
+                        name = ts.replace("T", " ")[:16]
+                    else:
+                        name = f"Чек #{r['id']}"
                     link = f"https://t.me/{me.username}?start=receipt_{r['id']}"
                     status = (r.get('status') or '').lower()
                     if status == 'распознан':
@@ -165,7 +166,7 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                         mark = '❌'
                     else:
                         mark = '⏳'
-                    text_message += f'<a href="{link}">{dt}</a> {mark}\n'
+                    text_message += f'<a href="{link}">{name}</a> {mark}\n'
     else:
         await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', '')
 

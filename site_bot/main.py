@@ -1086,31 +1086,25 @@ async def receipts(request: Request):
     rows = await database.fetch_all(query)
     receipts: list[dict] = []
     for r in rows:
-        rid = r[receipts_table.c.id]
+        rid = r["id"]
         # иногда в таблице могут остаться записи без ID из-за некорректных вставок
         # такие записи нельзя корректно обрабатывать через API, поэтому пропускаем их
         if rid is None:
             continue
-        file_path = r[receipts_table.c.file_path]
+        file_path = r["file_path"]
         if file_path and not str(file_path).startswith("/static"):
             file_path = f"/static/uploads/{Path(file_path).name}"
         receipts.append(
             {
                 "id": rid,
-                "number": r[receipts_table.c.number],
-                "created_at": r[receipts_table.c.create_dt].isoformat()
-                if r[receipts_table.c.create_dt]
-                else None,
-                "user_tg_id": r[receipts_table.c.user_tg_id],
-                "user_name": r["user_name"],
+                "number": r.get("number"),
+                "created_at": r["create_dt"].isoformat() if r.get("create_dt") else None,
+                "user_tg_id": r.get("user_tg_id"),
+                "user_name": r.get("user_name"),
                 "file_path": file_path,
-                "status": r[receipts_table.c.status]
-                if has_receipt_status()
-                else None,
-                "draw_id": r[receipts_table.c.draw_id]
-                if has_receipt_draw_id()
-                else None,
-                "draw_title": r["draw_title"] if "draw_title" in r else None,
+                "status": r.get("status") if has_receipt_status() else None,
+                "draw_id": r.get("draw_id") if has_receipt_draw_id() else None,
+                "draw_title": r.get("draw_title"),
             }
         )
     draw_query = sqlalchemy.select(prize_draws_table.c.id, prize_draws_table.c.title)
@@ -1146,29 +1140,21 @@ async def get_receipt(receipt_id: int):
     r = await database.fetch_one(query)
     if not r:
         raise HTTPException(404, "Receipt not found")
-    file_path = r[receipts_table.c.file_path]
+    file_path = r["file_path"]
     if file_path and not str(file_path).startswith("/static"):
         file_path = f"/static/uploads/{Path(file_path).name}"
     return {
-        "id": r[receipts_table.c.id],
-        "number": r[receipts_table.c.number],
-        "created_at": r[receipts_table.c.create_dt].isoformat()
-        if r[receipts_table.c.create_dt]
-        else None,
-        "amount": r[receipts_table.c.amount],
-        "user_tg_id": r[receipts_table.c.user_tg_id],
-        "user_name": r["user_name"],
+        "id": r["id"],
+        "number": r.get("number"),
+        "created_at": r["create_dt"].isoformat() if r.get("create_dt") else None,
+        "amount": r.get("amount"),
+        "user_tg_id": r.get("user_tg_id"),
+        "user_name": r.get("user_name"),
         "file_path": file_path,
-        "status": r[receipts_table.c.status]
-        if has_receipt_status()
-        else None,
-        "message_id": r[receipts_table.c.message_id]
-        if has_receipt_msg_id()
-        else None,
-        "draw_id": r[receipts_table.c.draw_id]
-        if has_receipt_draw_id()
-        else None,
-        "draw_title": r["draw_title"] if "draw_title" in r else None,
+        "status": r.get("status") if has_receipt_status() else None,
+        "message_id": r.get("message_id") if has_receipt_msg_id() else None,
+        "draw_id": r.get("draw_id") if has_receipt_draw_id() else None,
+        "draw_title": r.get("draw_title"),
     }
 
 class ReceiptUpdate(BaseModel):
@@ -1191,10 +1177,10 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
     if (
         old_row
         and has_receipt_status()
-        and old_row[receipts_table.c.status] != upd.status
+        and old_row.get("status") != upd.status
         and has_receipt_msg_id()
     ):
-        if old_row[receipts_table.c.message_id] and old_row[receipts_table.c.user_tg_id]:
+        if old_row.get("message_id") and old_row.get("user_tg_id"):
             text = None
             if upd.status == "Распознан":
                 text = "Чек принят!"
@@ -1203,12 +1189,12 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
             if text:
                 try:
                     await bot.send_message(
-                        old_row[receipts_table.c.user_tg_id],
+                        old_row["user_tg_id"],
                         text,
-                        reply_to_message_id=old_row[receipts_table.c.message_id],
+                        reply_to_message_id=old_row["message_id"],
                     )
                     log_values = {
-                        "user_tg_id": old_row[receipts_table.c.user_tg_id],
+                        "user_tg_id": old_row["user_tg_id"],
                         "sender": "admin",
                         "text": text,
                         "buttons": None,
@@ -1230,7 +1216,7 @@ async def delete_receipt(receipt_id: int):
     )
     if not row:
         raise HTTPException(404, "Receipt not found")
-    file_path = row[receipts_table.c.file_path]
+    file_path = row["file_path"]
     if file_path:
         upload_dir = Path(__file__).resolve().parent / "static" / "uploads"
         fpath = upload_dir / Path(str(file_path)).name
