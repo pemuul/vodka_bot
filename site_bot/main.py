@@ -687,12 +687,18 @@ async def api_draw_stage_export(stage_id: int):
     }
     return Response(csv_data, media_type="text/csv", headers=headers)
 
+
 @app.get("/questions", response_class=HTMLResponse)
 async def questions(request: Request):
     rows = await database.fetch_all(
         questions_table.select().order_by(questions_table.c.create_dt.desc())
     )
-    user_ids = {r["user_tg_id"] for r in rows}
+    user_ids = set()
+    for r in rows:
+        row = dict(r)
+        uid = row.get("user_tg_id") or row.get("user_id")
+        if uid:
+            user_ids.add(uid)
     user_map = {}
     if user_ids:
         user_rows = await database.fetch_all(
@@ -701,16 +707,18 @@ async def questions(request: Request):
         user_map = {u["tg_id"]: u["name"] for u in user_rows}
 
     questions = []
-    for q in rows:
+    for r in rows:
+        row = dict(r)
+        user_id = row.get("user_tg_id") or row.get("user_id")
+        name = user_map.get(user_id)
+        if not name:
+            name = str(user_id) if user_id is not None else "Пользователь"
         questions.append({
-            "id": q["id"],
-            "text": q["text"],
-            "type": q["type"],
-            "status": q["status"],
-            "user": {
-                "id": q["user_tg_id"],
-                "name": user_map.get(q["user_tg_id"]) or "Пользователь"
-            }
+            "id": row.get("id"),
+            "text": row.get("text", ""),
+            "type": row.get("type", ""),
+            "status": row.get("status", ""),
+            "user": {"id": user_id, "name": name},
         })
     msgs = await database.fetch_all(
         question_messages_table.select().order_by(question_messages_table.c.timestamp)
@@ -736,7 +744,6 @@ async def questions(request: Request):
         },
     )
 
-
 @app.get("/api/questions")
 async def api_get_questions(status: Optional[str] = None):
     query = questions_table.select()
@@ -744,7 +751,12 @@ async def api_get_questions(status: Optional[str] = None):
         query = query.where(questions_table.c.status == status)
     query = query.order_by(questions_table.c.create_dt.desc())
     rows = await database.fetch_all(query)
-    user_ids = {r["user_tg_id"] for r in rows}
+    user_ids = set()
+    for r in rows:
+        rd = dict(r)
+        uid = rd.get("user_tg_id") or rd.get("user_id")
+        if uid:
+            user_ids.add(uid)
     user_map = {}
     if user_ids:
         user_rows = await database.fetch_all(
@@ -753,16 +765,18 @@ async def api_get_questions(status: Optional[str] = None):
         user_map = {u["tg_id"]: u["name"] for u in user_rows}
 
     questions = []
-    for q in rows:
+    for r in rows:
+        row = dict(r)
+        user_id = row.get("user_tg_id") or row.get("user_id")
+        name = user_map.get(user_id)
+        if not name:
+            name = str(user_id) if user_id is not None else "Пользователь"
         questions.append({
-            "id": q["id"],
-            "text": q["text"],
-            "type": q["type"],
-            "status": q["status"],
-            "user": {
-                "id": q["user_tg_id"],
-                "name": user_map.get(q["user_tg_id"]) or "Пользователь"
-            }
+            "id": row.get("id"),
+            "text": row.get("text", ""),
+            "type": row.get("type", ""),
+            "status": row.get("status", ""),
+            "user": {"id": user_id, "name": name},
         })
     return {"questions": questions}
 
