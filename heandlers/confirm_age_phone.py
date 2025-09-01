@@ -140,11 +140,6 @@ async def send_age_question(message: Message):
 
 
 async def send_privacy_policy(message: Message):
-    file_path = await sql_mgt.get_param(0, "privacy_policy_file")
-    if file_path:
-        local = Path(__file__).resolve().parent.parent / "site_bot" / file_path.lstrip("/")
-        if local.exists():
-            await message.answer_document(FSInputFile(local))
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Я даю согласие", callback_data="privacy_yes")],
@@ -156,6 +151,16 @@ async def send_privacy_policy(message: Message):
         reply_markup=kb,
     )
     await commands.delete_answer_leater(answer_message)
+
+    file_path = await sql_mgt.get_param(0, "privacy_policy_file")
+    if file_path:
+        local = Path(__file__).resolve().parent.parent / "site_bot" / file_path.lstrip("/")
+        if local.exists():
+            ext = local.suffix
+            await message.answer_document(
+                FSInputFile(local, filename=f"Политика конфиденциальности{ext}"),
+                caption="Политика конфиденциальности",
+            )
     await sql_mgt.set_param(message.chat.id, "DELETE_LAST_MESSAGE", "yes")
 
 
