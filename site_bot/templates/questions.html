@@ -166,7 +166,7 @@
           tr.innerHTML = `
             <td>${(currentPage - 1) * per + i + 1}</td>
             <td>${q.text.length>50 ? q.text.slice(0,47)+"…" : q.text}</td>
-            <td><a href="#" class="text-decoration-none open-chat">${(q.user && (q.user.name || q.user.id)) || '—'}</a></td>
+            <td><a href="#" class="text-decoration-none open-chat">${q.user?.name || 'Пользователь'}</a></td>
             <td>${q.type}</td>
             <td>
               <span class="badge ${q.status==='Новый'?'bg-primary':'bg-success'}">
@@ -188,7 +188,7 @@
         convContainer.classList.remove("d-none");
 
         const usernameLink = document.getElementById("conv-username");
-        const uname = question.user?.name || question.user?.id || "—";
+        const uname = question.user?.name || "Пользователь";
         usernameLink.textContent = uname;
         usernameLink.href = "#";
         usernameLink.onclick = (e) => {

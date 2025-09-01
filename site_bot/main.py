@@ -710,9 +710,7 @@ async def questions(request: Request):
     for r in rows:
         row = dict(r)
         user_id = row.get("user_tg_id") or row.get("user_id")
-        name = user_map.get(user_id)
-        if not name:
-            name = str(user_id) if user_id is not None else "Пользователь"
+        name = user_map.get(user_id) or "Пользователь"
         questions.append({
             "id": row.get("id"),
             "text": row.get("text", ""),
@@ -768,9 +766,7 @@ async def api_get_questions(status: Optional[str] = None):
     for r in rows:
         row = dict(r)
         user_id = row.get("user_tg_id") or row.get("user_id")
-        name = user_map.get(user_id)
-        if not name:
-            name = str(user_id) if user_id is not None else "Пользователь"
+        name = user_map.get(user_id) or "Пользователь"
         questions.append({
             "id": row.get("id"),
             "text": row.get("text", ""),
