@@ -983,19 +983,29 @@ async def settings(request: Request):
         .where(params_table.c.param_name == "product_keywords")
     )
     keywords = row["value"] if row else ""
+    row_file = await database.fetch_one(
+        params_table.select()
+        .where(params_table.c.user_tg_id == 0)
+        .where(params_table.c.param_name == "privacy_policy_file")
+    )
+    policy_url = row_file["value"] if row_file else ""
     return templates.TemplateResponse(
         "settings.html",
         {
             "request": request,
             "active_page": "settings",
             "keywords": keywords,
+            "policy_url": policy_url,
             "version": app.state.static_version,
         },
     )
 
 
 @app.post("/settings")
-async def save_settings(product_names: str = Form("")):
+async def save_settings(
+    product_names: str = Form(""),
+    privacy_file: UploadFile | None = File(None),
+):
     query = sqlite_insert(params_table).values(
         user_tg_id=0, param_name="product_keywords", value=product_names
     )
@@ -1004,6 +1014,20 @@ async def save_settings(product_names: str = Form("")):
         set_={"value": product_names},
     )
     await database.execute(query)
+    if privacy_file and privacy_file.filename:
+        fname = f"privacy_{uuid.uuid4().hex}{Path(privacy_file.filename).suffix}"
+        dest = UPLOAD_DIR / fname
+        with open(dest, "wb") as out:
+            out.write(await privacy_file.read())
+        rel = f"/static/uploads/{fname}"
+        query = sqlite_insert(params_table).values(
+            user_tg_id=0, param_name="privacy_policy_file", value=rel
+        )
+        query = query.on_conflict_do_update(
+            index_elements=[params_table.c.user_tg_id, params_table.c.param_name],
+            set_={"value": rel},
+        )
+        await database.execute(query)
     return RedirectResponse("/settings", status_code=303)
 
 @app.get("/participants", response_class=HTMLResponse)
