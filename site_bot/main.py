@@ -1466,11 +1466,12 @@ async def proxy_file(file_id: str):
     if not file_id or file_id == "undefined":
         raise HTTPException(status_code=400, detail="File ID is required")
     
-    file = await bot.get_file(file_id)
-    # В file.file_path лежит, например, "photos/file_123.jpg"
-    file_path = file.file_path
+    bot = get_bot()
+    if not bot:
+        raise HTTPException(status_code=500, detail="Bot is not configured")
 
-    # Собираем ссылку на CDN:
+    file = await bot.get_file(file_id)
+    file_path = file.file_path  # например: "photos/file_123.jpg"
     url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
 
     # Перенаправляем браузер на этот URL
