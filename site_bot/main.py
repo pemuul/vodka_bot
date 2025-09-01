@@ -1085,7 +1085,8 @@ async def receipts(request: Request):
     )
     rows = await database.fetch_all(query)
     receipts: list[dict] = []
-    for r in rows:
+    for row in rows:
+        r = dict(row)
         rid = r["id"]
         # иногда в таблице могут остаться записи без ID из-за некорректных вставок
         # такие записи нельзя корректно обрабатывать через API, поэтому пропускаем их
@@ -1145,6 +1146,7 @@ async def get_receipt(receipt_id: int):
     r = await database.fetch_one(query)
     if not r:
         raise HTTPException(404, "Receipt not found")
+    r = dict(r)
     file_path = r["file_path"]
     if file_path and not str(file_path).startswith("/static"):
         file_path = f"/static/uploads/{Path(file_path).name}"
