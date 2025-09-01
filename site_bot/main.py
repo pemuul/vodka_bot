@@ -704,13 +704,14 @@ async def questions(request: Request):
         user_rows = await database.fetch_all(
             users_table.select().where(users_table.c.tg_id.in_(user_ids))
         )
-        user_map = {u["tg_id"]: u["name"] for u in user_rows}
+        # key by stringified tg_id to avoid mismatches between int/str types
+        user_map = {str(u["tg_id"]): u["name"] for u in user_rows}
 
     questions = []
     for r in rows:
         row = dict(r)
         user_id = row.get("user_tg_id") or row.get("user_id")
-        name = user_map.get(user_id) or "Пользователь"
+        name = user_map.get(str(user_id)) or "Пользователь"
         questions.append({
             "id": row.get("id"),
             "text": row.get("text", ""),
@@ -760,13 +761,13 @@ async def api_get_questions(status: Optional[str] = None):
         user_rows = await database.fetch_all(
             users_table.select().where(users_table.c.tg_id.in_(user_ids))
         )
-        user_map = {u["tg_id"]: u["name"] for u in user_rows}
+        user_map = {str(u["tg_id"]): u["name"] for u in user_rows}
 
     questions = []
     for r in rows:
         row = dict(r)
         user_id = row.get("user_tg_id") or row.get("user_id")
-        name = user_map.get(user_id) or "Пользователь"
+        name = user_map.get(str(user_id)) or "Пользователь"
         questions.append({
             "id": row.get("id"),
             "text": row.get("text", ""),
