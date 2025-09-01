@@ -151,10 +151,12 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                 me = await global_objects.bot.get_me()
                 text_message += "\n\nВаши чеки:\n"
                 for r in receipts:
-                    ts = r["create_dt"]
-                    if hasattr(ts, "isoformat"):
-                        ts = ts.isoformat()
-                    dt = ts.replace("T", " ")[:16]
+                    ts = r.get("create_dt")
+                    dt = "-"
+                    if ts:
+                        if hasattr(ts, "isoformat"):
+                            ts = ts.isoformat()
+                        dt = ts.replace("T", " ")[:16]
                     link = f"https://t.me/{me.username}?start=receipt_{r['id']}"
                     status = (r.get('status') or '').lower()
                     if status == 'распознан':

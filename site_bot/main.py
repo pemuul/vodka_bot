@@ -1084,14 +1084,19 @@ async def receipts(request: Request):
         .order_by(receipts_table.c.id.desc())
     )
     rows = await database.fetch_all(query)
-    receipts = []
+    receipts: list[dict] = []
     for r in rows:
+        rid = r[receipts_table.c.id]
+        # иногда в таблице могут остаться записи без ID из-за некорректных вставок
+        # такие записи нельзя корректно обрабатывать через API, поэтому пропускаем их
+        if rid is None:
+            continue
         file_path = r[receipts_table.c.file_path]
         if file_path and not str(file_path).startswith("/static"):
             file_path = f"/static/uploads/{Path(file_path).name}"
         receipts.append(
             {
-                "id": r[receipts_table.c.id],
+                "id": rid,
                 "number": r[receipts_table.c.number],
                 "created_at": r[receipts_table.c.create_dt].isoformat()
                 if r[receipts_table.c.create_dt]

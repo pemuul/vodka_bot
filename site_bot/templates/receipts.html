@@ -121,7 +121,8 @@
   <script>
     document.addEventListener("DOMContentLoaded", () => {
       const rawData = {{ receipts_data | default([]) | tojson }};
-      const data = rawData.filter(r => r.id !== null && r.id !== undefined);
+      // отфильтровываем записи без корректного идентификатора
+      const data = rawData.filter(r => r.id != null && r.id !== 'null');
       const draws = {{ draws_data | default([]) | tojson }};
       const tableBody = document.getElementById("receipts-table-body");
       const pageStart = document.getElementById("page-start");
@@ -240,6 +241,7 @@
             <td>${r.draw_title ?? ''}</td>
             <td><button class="btn btn-sm btn-outline-danger btn-del">Удалить</button></td>`;
           tr.onclick = () => {
+            if (r.id == null || r.id === 'null') return;
             fetch(`/api/receipts/${r.id}`)
               .then(res=>res.json())
               .then(rec=>{
@@ -263,6 +265,7 @@
           };
           tr.querySelector('.btn-del').onclick = (ev) => {
             ev.stopPropagation();
+            if (r.id == null || r.id === 'null') return;
             if (!confirm("Удалить этот чек?")) return;
             fetch(`/api/receipts/${r.id}`, { method: "DELETE" })
               .then(()=>{
