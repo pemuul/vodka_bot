@@ -173,7 +173,7 @@ async def send_name_request(message: Message):
 @router.callback_query(F.data == "reg_continue")
 async def reg_continue_handler(call: CallbackQuery):
     await sql_mgt.set_param(call.from_user.id, "REG_STAGE", "phone")
-    await call.message.delete()
+    await commands.delete_this_message(call.message)
     await send_phone_request(call.message)
     await call.answer()
 
@@ -182,7 +182,7 @@ async def reg_continue_handler(call: CallbackQuery):
 async def age_yes_handler(call: CallbackQuery):
     await sql_mgt.update_user_async(call.from_user.id, {"age_18": True})
     await sql_mgt.set_param(call.from_user.id, "REG_STAGE", "privacy")
-    await call.message.delete()
+    await commands.delete_this_message(call.message)
     await send_privacy_policy(call.message)
     await call.answer()
 
@@ -202,7 +202,7 @@ async def age_no_handler(call: CallbackQuery):
 
 @router.callback_query(F.data == "age_retry")
 async def age_retry_handler(call: CallbackQuery):
-    await call.message.delete()
+    await commands.delete_this_message(call.message)
     await send_age_question(call.message)
     await call.answer()
 
@@ -212,10 +212,10 @@ async def privacy_yes_handler(call: CallbackQuery):
     await sql_mgt.set_param(call.from_user.id, "policy_agreed", "yes")
     await sql_mgt.set_param(call.from_user.id, "REG_STAGE", "name")
     try:
-        await call.message.bot.delete_message(call.message.chat.id, call.message.message_id - 1)
+        await commands.delete_message_by_id(call.message.chat.id, call.message.message_id - 1)
     except Exception:
         pass
-    await call.message.delete()
+    await commands.delete_this_message(call.message)
     await send_name_request(call.message)
     await call.answer()
 
@@ -226,7 +226,7 @@ async def privacy_no_handler(call: CallbackQuery):
         inline_keyboard=[[InlineKeyboardButton(text="Вернуться в начало", callback_data="start_over")]]
     )
     try:
-        await call.message.bot.delete_message(call.message.chat.id, call.message.message_id - 1)
+        await commands.delete_message_by_id(call.message.chat.id, call.message.message_id - 1)
     except Exception:
         pass
     await sql_mgt.set_param(call.from_user.id, "REG_STAGE", "start")
@@ -239,7 +239,7 @@ async def privacy_no_handler(call: CallbackQuery):
 
 @router.callback_query(F.data == "start_over")
 async def start_over_handler(call: CallbackQuery):
-    await call.message.delete()
+    await commands.delete_this_message(call.message)
     await send_greeting(call.message)
     await call.answer()
 

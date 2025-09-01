@@ -9,7 +9,7 @@ import json
 import sql_mgt
 from keyboards.menu_kb import get_menu_kb, init_object as init_object_mkb
 from keyboards.admin_kb import edit_menu_kb, init_object as init_object_akb
-from keys import SPLITTER_STR
+from keys import SPLITTER_STR, DELETE_MESSAGES
 
 
 global_objects = None
@@ -32,15 +32,16 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
     # удалим сообщения, которые были введены до меню
     delete_answer_messages_str = await sql_mgt.get_param(message.chat.id, 'DELETE_ANSWER_LEATER')
     delete_answer_messages = delete_answer_messages_str.split(',')
-    for delete_answer_message in delete_answer_messages:
-        if delete_answer_message != '':
-            try:
-                await global_objects.bot.delete_message(
-                    chat_id=message.chat.id,
-                    message_id=int(delete_answer_message)
-                )
-            except Exception as e:
-                print(f'Ошибка1: {e}')
+    if DELETE_MESSAGES:
+        for delete_answer_message in delete_answer_messages:
+            if delete_answer_message != '':
+                try:
+                    await global_objects.bot.delete_message(
+                        chat_id=message.chat.id,
+                        message_id=int(delete_answer_message)
+                    )
+                except Exception as e:
+                    print(f'Ошибка1: {e}')
     await sql_mgt.set_param(message.chat.id, 'DELETE_ANSWER_LEATER', '')
 
     tree_item = global_objects.tree_data.get_obj_from_path(path)
@@ -128,8 +129,8 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
         await sql_mgt.set_param(message.chat.id, 'LAST_MEDIA_LIST', last_media_message_list_str)
         replace_last_messages = False # мы записали новые фото, не надо перезаписывать
 
-    if delete_old_message:
-        replace = False # создадим меню в новом сообщении 
+    if delete_old_message and DELETE_MESSAGES:
+        replace = False # создадим меню в новом сообщении
     
     # получаем нужную клавиатуру
     on_off_admin_panel = await sql_mgt.get_param(message.chat.id, 'ADMIN_MENU')
@@ -181,7 +182,8 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
         # update reply keyboard separately
         tmp_msg = await message.answer('.', reply_markup=reply_kb, disable_notification=True)
         try:
-            await global_objects.bot.delete_message(chat_id=tmp_msg.chat.id, message_id=tmp_msg.message_id)
+            if DELETE_MESSAGES:
+                await global_objects.bot.delete_message(chat_id=tmp_msg.chat.id, message_id=tmp_msg.message_id)
         except Exception:
             pass
 
@@ -264,7 +266,7 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
     else:
         last_media_message_list = []
 
-    if delete_old_message:
+    if delete_old_message and DELETE_MESSAGES:
         try:
             await global_objects.bot.delete_message(
                 chat_id=message.chat.id,
@@ -275,7 +277,7 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
         await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', '')
 
     # удаляем сообщение с изображениями, чтобы не засорять
-    if len(last_media_message_list) > 0:
+    if DELETE_MESSAGES and len(last_media_message_list) > 0:
         for last_media_messag_id in last_media_message_list:
             try:
                 await global_objects.bot.delete_message(
@@ -284,6 +286,6 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                 )
             except Exception as e:
                 print(f'Ошибка: {e}')
-        
+
         if replace_last_messages:
-            await sql_mgt.set_param(message.chat.id, 'LAST_MEDIA_LIST', '')     
+            await sql_mgt.set_param(message.chat.id, 'LAST_MEDIA_LIST', '')

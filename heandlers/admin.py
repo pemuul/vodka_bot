@@ -8,6 +8,7 @@ from aiogram.types import Message
 from aiogram.enums import ParseMode
 
 import sql_mgt
+from keys import DELETE_MESSAGES
 #from sql_mgt import sql_mgt.get_param, sql_mgt.add_admin
 from heandlers import admin_answer_button, menu
 from heandlers.import_files import get_next_filename
@@ -157,8 +158,9 @@ async def delete_old_file(directory_path:str, pattern:str = 'data_tree_*', to_le
                 os.remove(file)
 
 
-async def delete_message(chat_id:int, message_id:int):
-    await global_objects.bot.delete_message(
+async def delete_message(chat_id:int, message_id:int, force: bool = False):
+    if DELETE_MESSAGES or force:
+        await global_objects.bot.delete_message(
             chat_id=chat_id,
             message_id=message_id
         )

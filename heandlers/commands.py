@@ -20,7 +20,7 @@ import sql_mgt
 #from sql_mgt import sql_mgt.insert_user, sql_mgt.get_visit, sql_mgt.set_param, sql_mgt.get_users_per_day, sql_mgt.add_admin, sql_mgt.is_normal_invite_admin_key, sql_mgt.get_last_order
 #from heandlers.web_market import start, send_item_message
 #from site_bot.orders_mgt import get_all_data_order
-from keys import SPLITTER_STR
+from keys import SPLITTER_STR, DELETE_MESSAGES
 
 
 router = Router()  # [1]
@@ -41,20 +41,33 @@ def init_object(global_objects_inp):
 async def delete_answer_messages(message: Message) -> dict:
     delete_answer_messages_str = await sql_mgt.get_param(message.chat.id, 'DELETE_ANSWER_LEATER')
     delete_answer_messages = delete_answer_messages_str.split(',')
-    for delete_answer_message in delete_answer_messages:
-        if delete_answer_message != '':
-            try:
-                await global_objects.bot.delete_message(
-                    chat_id=message.chat.id,
-                    message_id=int(delete_answer_message)
-                )
-            except Exception as e:
-                print(f'Ошибка1: {e}')
+    if DELETE_MESSAGES:
+        for delete_answer_message in delete_answer_messages:
+            if delete_answer_message != '':
+                try:
+                    await global_objects.bot.delete_message(
+                        chat_id=message.chat.id,
+                        message_id=int(delete_answer_message)
+                    )
+                except Exception as e:
+                    print(f'Ошибка1: {e}')
     await sql_mgt.set_param(message.chat.id, 'DELETE_ANSWER_LEATER', '')
 
 
-async def delete_this_message(message: Message):
-    await global_objects.bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
+async def delete_this_message(message: Message, force: bool = False):
+    if DELETE_MESSAGES or force:
+        try:
+            await global_objects.bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
+        except Exception as e:
+            print(f'Ошибка: {e}')
+
+
+async def delete_message_by_id(chat_id: int, message_id: int, force: bool = False):
+    if DELETE_MESSAGES or force:
+        try:
+            await global_objects.bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except Exception as e:
+            print(f'Ошибка: {e}')
 
 
 async def delete_answer_leater(answer_message: Message):
