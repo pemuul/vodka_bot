@@ -1301,6 +1301,54 @@ async def api_delete_message(message_id: int):
     await mark_message_deleted(message_id)
     return {"success": True}
 
+@app.post("/get_settings_site_all")
+async def get_settings_site_all(request: Request):
+    rows = await database.fetch_all(
+        params_table.select().where(params_table.c.user_tg_id == 0)
+    )
+    data = {r["param_name"]: r["value"] for r in rows}
+    return {
+        "settings_site": {
+            "min_amount": data.get("min_amount", ""),
+            "PAYMENTS_TOKEN": data.get("PAYMENTS_TOKEN", ""),
+        }
+    }
+
+
+@app.post("/update_settings_site")
+async def update_settings_site(
+    user_id: int = Form(...),
+    min_order: str = Form(""),
+    payment_token: str = Form(""),
+    privacy_file: UploadFile | None = File(None),
+):
+    for name, value in (("min_amount", min_order), ("PAYMENTS_TOKEN", payment_token)):
+        if value:
+            query = sqlite_insert(params_table).values(
+                user_tg_id=0, param_name=name, value=value
+            )
+            query = query.on_conflict_do_update(
+                index_elements=[params_table.c.user_tg_id, params_table.c.param_name],
+                set_={"value": value},
+            )
+            await database.execute(query)
+    if privacy_file and privacy_file.filename:
+        fname = f"privacy_{uuid.uuid4().hex}{Path(privacy_file.filename).suffix}"
+        dest = UPLOAD_DIR / fname
+        with open(dest, "wb") as out:
+            out.write(await privacy_file.read())
+        rel = f"/static/uploads/{fname}"
+        query = sqlite_insert(params_table).values(
+            user_tg_id=0, param_name="privacy_policy_file", value=rel
+        )
+        query = query.on_conflict_do_update(
+            index_elements=[params_table.c.user_tg_id, params_table.c.param_name],
+            set_={"value": rel},
+        )
+        await database.execute(query)
+    return {"success": True}
+
+
 telegram_bot_token = globals().get("TG_BOT") or os.getenv("TG_BOT")
 if not telegram_bot_token:
     raise RuntimeError("TG_BOT token is not set")
