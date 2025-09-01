@@ -1094,11 +1094,16 @@ async def receipts(request: Request):
         file_path = r["file_path"]
         if file_path and not str(file_path).startswith("/static"):
             file_path = f"/static/uploads/{Path(file_path).name}"
+        created_at = r.get("create_dt")
+        if isinstance(created_at, (datetime.date, datetime.datetime)):
+            created_at = created_at.isoformat()
+        elif created_at is not None:
+            created_at = str(created_at)
         receipts.append(
             {
                 "id": rid,
                 "number": r.get("number"),
-                "created_at": r["create_dt"].isoformat() if r.get("create_dt") else None,
+                "created_at": created_at,
                 "user_tg_id": r.get("user_tg_id"),
                 "user_name": r.get("user_name"),
                 "file_path": file_path,
@@ -1143,10 +1148,15 @@ async def get_receipt(receipt_id: int):
     file_path = r["file_path"]
     if file_path and not str(file_path).startswith("/static"):
         file_path = f"/static/uploads/{Path(file_path).name}"
+    created_at = r.get("create_dt")
+    if isinstance(created_at, (datetime.date, datetime.datetime)):
+        created_at = created_at.isoformat()
+    elif created_at is not None:
+        created_at = str(created_at)
     return {
         "id": r["id"],
         "number": r.get("number"),
-        "created_at": r["create_dt"].isoformat() if r.get("create_dt") else None,
+        "created_at": created_at,
         "amount": r.get("amount"),
         "user_tg_id": r.get("user_tg_id"),
         "user_name": r.get("user_name"),
