@@ -184,7 +184,12 @@ async def get_message_admin_wallet(message: Message):
 
     pyment_settings = global_objects.settings_bot.get('pyment_settings')
     pyment_limit_per_mounth = pyment_settings.get('pyment_limit_per_mounth')
-    wallet_text = f"Ваш кошелёк\n\nБалланс: {wallet_data.get('balance', 0)} руб.\nЗа месяц было купленно на сумму: {wallet_data.get('total_spent_month', 0)} руб.\nЛимит в месяц без процента: {pyment_limit_per_mounth} руб.\n\nВсего было куплено на: {wallet_data.get('total_spent', 0)} руб.\n\nДата оплаты: {wallet_data.get('next_write_off_date', 0)}\nЕжемесячная оплата: {pyment_settings.get('monthly_payment', 0)} руб."
+    wallet_text = (
+        f"Ваш кошелёк\n\nБалланс: {wallet_data.get('balance', 0)} руб."
+        f"\nЗа месяц было купленно на сумму: {wallet_data.get('total_spent_month', 0)} руб."
+        f"\nЛимит в месяц без процента: {pyment_limit_per_mounth} руб."
+        f"\n\nВсего было куплено на: {wallet_data.get('total_spent', 0)} руб."
+    )
 
     return [wallet_text, admin_kb.wallet_kb()]
     

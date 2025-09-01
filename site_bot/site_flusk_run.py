@@ -19,7 +19,6 @@ from site_bot.orders_mgt import get_all_data_order, get_all_data_orders, update_
 from keyboards.admin_kb import fill_wallet_alert_message_kb 
 
 from pyment_bot_dir.sql_pyment_bot import create_payment_invite_key
-from pyment_bot_dir.pyment_mgt import monthly_payment
 from generate_hash import decrypt
 
 
@@ -1242,7 +1241,6 @@ def set_payment():
     try:
         wallet_data = append_fill_wallet_line(user_id, 'FILL_WALLET', '', f'Пополнение кошелька на сумму {amount}', amount, conn)
         #print("wallet_data['next_write_off_date'] -> ", datetime.datetime.strptime(wallet_data['next_write_off_date'], "%Y-%m-%d"), datetime.datetime.now())
-        monthly_payment(current_directory, conn)
     finally:
         conn.close()
 

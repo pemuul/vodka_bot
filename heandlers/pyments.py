@@ -219,36 +219,4 @@ async def succesfull_payment_wallet(user_id, amount):
     #message_data = await admin_answer_button.get_message_admin_wallet(message)
     #await message.answer(message_data[0], reply_markup=message_data[1])
 
-    await monthly_payment(alert_message=False)
-# ===========================================================================
-
-
-# ========================= Оплата бота =========================
-async def monthly_payment(alert_message:bool=True):
-    wallet_data = await sql_mgt.get_wallet_data_asunc()
-    #print("wallet_data['next_write_off_date'] -> ", datetime.datetime.strptime(wallet_data['next_write_off_date'], "%Y-%m-%d"), datetime.datetime.now())
-    pay_date = datetime.datetime.strptime(wallet_data['next_write_off_date'], "%Y-%m-%d")
-    monthly_payment = global_objects.settings_bot['pyment_settings']['monthly_payment']
-
-    if (not alert_message) and (datetime.datetime.now() < pay_date):
-        return
-
-    if (pay_date <= datetime.datetime.now() + datetime.timedelta(days=5)) and (wallet_data['balance'] - monthly_payment < 0):
-        # если за 5 дней до оплаты денег нехватает, то оповещаем менаджеров
-        #admins_dict = await sql_mgt.get_admins_id()
-        message_text = f"На счёте бота закончились средства!\n\nЧерез {pay_date - datetime.datetime.now()} дней будет списание.\n\nНа баллансе нехватает {(wallet_data['balance'] - monthly_payment) * -1} рублей"
-        for admon in global_objects.admin_list:
-            await global_objects.bot.send_message(admon, message_text, reply_markup=fill_wallet_alert_message_kb((wallet_data['balance'] - monthly_payment) * -1))
-    elif datetime.datetime.now() >= pay_date:
-        if wallet_data['balance'] - monthly_payment < 0:
-            # если сегодня оплата или позже и денег нехватает, то оповещаем 
-            message_text = f"🚧🚧🚧\nНа счёте бота закончились средства\n🚧🚧🚧\n\nНа баллансе нехватает {(wallet_data['balance'] - monthly_payment) * -1} рублей.\n\nПополните счёт иначе, бот будет заблокирован!"
-            for admon in global_objects.admin_list:
-                await global_objects.bot.send_message(admon, message_text, reply_markup=fill_wallet_alert_message_kb((wallet_data['balance'] - monthly_payment) * -1))
-        else:
-            # если деньги есть и сегодня или уже прошёл день оплаты, то мы снимем деньги и + месяц до следущей даты оплаты
-            wallet_data_new = await sql_mgt.payment_bot(global_objects.settings_bot['pyment_settings']['monthly_payment'])
-            message_text = f"Бот оплачен!\n\nСледущее списание будет: {wallet_data_new['next_write_off_date']}"
-            for admon in global_objects.admin_list:
-                await global_objects.bot.send_message(admon, message_text)
 # ===========================================================================
