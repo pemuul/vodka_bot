@@ -166,7 +166,7 @@
           tr.innerHTML = `
             <td>${(currentPage - 1) * per + i + 1}</td>
             <td>${q.text.length>50 ? q.text.slice(0,47)+"…" : q.text}</td>
-            <td><a href="/participants?open=${q.user.id}" class="text-decoration-none">${q.user.name}</a></td>
+            <td><a href="#" class="text-decoration-none open-chat">${q.user.name}</a></td>
             <td>${q.type}</td>
             <td>
               <span class="badge ${q.status==='Новый'?'bg-primary':'bg-success'}">
@@ -177,6 +177,7 @@
               <button class="btn btn-sm btn-outline-primary">Ответить</button>
             </td>`;
           tr.querySelector("button").onclick = () => openConversation(q);
+          tr.querySelector(".open-chat").onclick = (e) => { e.preventDefault(); openConversation(q); };
           tableBody.appendChild(tr);
         });
         updatePagination();
@@ -188,7 +189,11 @@
 
         const usernameLink = document.getElementById("conv-username");
         usernameLink.textContent = question.user.name;
-        usernameLink.href = `/participants?open=${question.user.id}`;
+        usernameLink.href = "#";
+        usernameLink.onclick = (e) => {
+          e.preventDefault();
+          openConversation(question);
+        };
         document.getElementById("conv-userid").textContent   = `ID: ${question.user.id}`;
         document.getElementById("original-question").textContent = question.text;
         statusSelect.value = question.status;

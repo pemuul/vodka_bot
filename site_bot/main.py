@@ -709,7 +709,7 @@ async def questions(request: Request):
             "status": q["status"],
             "user": {
                 "id": q["user_tg_id"],
-                "name": user_map.get(q["user_tg_id"], f"Пользователь {q['user_tg_id']}")
+                "name": user_map.get(q["user_tg_id"]) or "Пользователь"
             }
         })
     msgs = await database.fetch_all(
@@ -761,7 +761,7 @@ async def api_get_questions(status: Optional[str] = None):
             "status": q["status"],
             "user": {
                 "id": q["user_tg_id"],
-                "name": user_map.get(q["user_tg_id"], f"Пользователь {q['user_tg_id']}")
+                "name": user_map.get(q["user_tg_id"]) or "Пользователь"
             }
         })
     return {"questions": questions}
