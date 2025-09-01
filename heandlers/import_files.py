@@ -8,7 +8,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, BotCommand, BotCommandScopeDefault, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from aiogram.types.input_file import FSInputFile
 
-from heandlers import media_heandler
+from heandlers import media_heandler, commands
 import sql_mgt
 from keys import MAIN_JSON_FILE
 #from sql_mgt import get_last_media_and_set_next
@@ -115,10 +115,7 @@ async def callbacks_num(callback: CallbackQuery):
     if data_split[1] == "yes":
         await load_file(callback, data_split)  
 
-    await global_objects.bot.delete_message(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id
-    )
+    await commands.delete_this_message(callback.message)
     
 
 async def load_file(callback, data_split):

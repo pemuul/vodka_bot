@@ -1721,7 +1721,7 @@ async function openSettingsSite() {
                     </div>
                     <div class="textareaInput">
                         <label for="min-order">Не меньше:</label>
-                        <input type="number" id="min-order" value="${settings_site.min_amount}"
+                        <input type="number" id="min-order" name="min_order" value="${settings_site.min_amount}"
                             style="width: 40%; padding: 3px 5px; font-size: 13px; border: 1px solid #ccc; border-radius: 4px;">
                     </div>
                 </div>
@@ -1731,9 +1731,18 @@ async function openSettingsSite() {
                         <label for="payment-token">Токен оплаты</label>
                     </div>
                     <div class="textareaInput">
-                        <textarea id="payment-token"
+                        <textarea id="payment-token" name="payment_token"
                             style="width: 91%; padding: 10px; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; color: #acacac; height: 100px;"
                             placeholder="Токен оплаты" value="${settings_site.PAYMENTS_TOKEN}"></textarea>
+                    </div>
+                </div>
+                <div style="margin-bottom: 20px;">
+                    <div class="nameInput">
+                        <img class="icon_arrow" src="icon/Line 15.png" alt="">
+                        <label for="privacy-file">Политика конфиденциальности</label>
+                    </div>
+                    <div class="textareaInput">
+                        <input type="file" id="privacy-file" name="privacy_file">
                     </div>
                 </div>
                 <button id="save-settings-site" class="btn btnGreen">Сохранить</button>
@@ -1767,29 +1776,14 @@ async function getSettingsSite() {
 }
 
 async function updateSettingsSite() {
-    var data_site_settings = {};
     var form_settings_site = document.getElementById('form-settings-site');
-
-    // Получаем все элементы формы
-    var elements = form_settings_site.elements;
-
-    // Проходимся по каждому элементу формы
-    for (var i = 0; i < elements.length; i++) {
-        var element = elements[i];
-        // Проверяем, что элемент - текстовое поле (или другой тип поля ввода, который вам нужен)
-        if (element.tagName === 'INPUT' && element.type !== 'button') {
-            // Добавляем значение поля в объект formData, используя имя поля в качестве ключа
-            data_site_settings[element.name] = element.value;
-        }
-    }
+    var formData = new FormData(form_settings_site);
+    formData.append('user_id', tg_id);
 
     try {
         const response = await fetch(urlTgParams + '/update_settings_site', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ user_id: tg_id, site_settings: data_site_settings })
+            body: formData
         });
         const data = await response.json();
         return data.success; // Предполагается, что ваш API возвращает массив товаров

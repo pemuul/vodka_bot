@@ -11,11 +11,18 @@
   </nav>
   <div class="container">
     <h1 class="h3 mb-3">Настройки</h1>
-    <form method="post">
+    <form method="post" enctype="multipart/form-data">
       <div class="mb-3">
         <label for="product-names" class="form-label">Наименования продуктов</label>
         <input type="text" class="form-control" id="product-names" name="product_names" value="{{ keywords }}" />
         <div class="form-text">Введите названия через ;</div>
+      </div>
+      <div class="mb-3">
+        <label for="privacy-file" class="form-label">Файл с политикой конфиденциальности</label>
+        {% if policy_url %}
+        <p><a href="{{ policy_url }}" target="_blank">Текущий файл</a></p>
+        {% endif %}
+        <input type="file" class="form-control" id="privacy-file" name="privacy_file" />
       </div>
       <button type="submit" class="btn btn-primary">Сохранить</button>
     </form>

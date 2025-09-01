@@ -8,6 +8,7 @@ from aiogram.types import Message
 from aiogram.enums import ParseMode
 
 import sql_mgt
+from keys import DELETE_MESSAGES
 #from sql_mgt import sql_mgt.get_param, sql_mgt.add_admin
 from heandlers import admin_answer_button, menu
 from heandlers.import_files import get_next_filename
@@ -98,26 +99,23 @@ async def except_message(message: Message, except_message_name: str):
         try:
             new_admin_id = int(message.html_text)
         except:
-            await global_objects.bot.edit_message_text(
-                text='Вам нужно ввести только число!',
-                chat_id=message.chat.id,
-                message_id=last_message_id,
+            await message.answer(
+                'Вам нужно ввести только число!',
                 reply_markup=tu_menu('ОТМЕНА'),
                 parse_mode=ParseMode.HTML,
             )
+            await delete_message(message.chat.id, last_message_id)
             await delete_message(message.chat.id, message.message_id)
-            return 
+            return
 
         await sql_mgt.add_admin(new_admin_id, message.chat.id)
         global_objects.admin_list.append(new_admin_id)
-
-        await global_objects.bot.edit_message_text(
-            text='Администратор добавлен!',
-            chat_id=message.chat.id,
-            message_id=last_message_id,
+        await message.answer(
+            'Администратор добавлен!',
             reply_markup=tu_menu('В МЕНЮ'),
             parse_mode=ParseMode.HTML,
         )
+        await delete_message(message.chat.id, last_message_id)
         await delete_message(message.chat.id, message.message_id)
         return
 
@@ -160,8 +158,9 @@ async def delete_old_file(directory_path:str, pattern:str = 'data_tree_*', to_le
                 os.remove(file)
 
 
-async def delete_message(chat_id:int, message_id:int):
-    await global_objects.bot.delete_message(
+async def delete_message(chat_id:int, message_id:int, force: bool = False):
+    if DELETE_MESSAGES or force:
+        await global_objects.bot.delete_message(
             chat_id=chat_id,
             message_id=message_id
         )

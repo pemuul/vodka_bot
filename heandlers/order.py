@@ -3,7 +3,8 @@ from aiogram import Router, Bot
 #from sql_mgt import sql_mgt.update_order_status_sql, sql_mgt.get_admins_by_rule, sql_mgt.add_cancel_order, sql_mgt.get_cancel_orders, sql_mgt.get_order
 import sql_mgt
 import aiosqlite
-from heandlers import pyments 
+from heandlers import pyments
+from keys import DELETE_MESSAGES
 from datetime import datetime, timedelta
 
 
@@ -97,11 +98,12 @@ async def cancel_old_orders():
         if order['status'] == 'NEED_PAYMENTS':
             await update_order_status(cancel_order['user_tg_id'], order, 'CANCEL', 'Заказ не был оплачен и автоматически отменён', {})
         
-            try:
-                await global_objects.bot.delete_message(
-                    chat_id=cancel_order['chat_id'],
-                    message_id=cancel_order['pyment_message_id']
-                )
-            except:
-                print('ERROR -> Сообщение уже удалено!')
+            if DELETE_MESSAGES:
+                try:
+                    await global_objects.bot.delete_message(
+                        chat_id=cancel_order['chat_id'],
+                        message_id=cancel_order['pyment_message_id']
+                    )
+                except Exception:
+                    print('ERROR -> Сообщение уже удалено!')
     #await global_objects.bot.send_message(1087624586, f"AAAAAAAaaaaaaa")

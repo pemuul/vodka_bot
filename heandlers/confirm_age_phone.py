@@ -1,6 +1,24 @@
 from aiogram import Router, F, Bot, BaseMiddleware
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, Update, BotCommandScopeDefault, FSInputFile, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, PhotoSize, Document, Audio, Video, Voice, VideoNote, Sticker, Animation
+from aiogram.types import (
+    Message,
+    Update,
+    BotCommandScopeDefault,
+    FSInputFile,
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    PhotoSize,
+    Document,
+    Audio,
+    Video,
+    Voice,
+    VideoNote,
+    Sticker,
+    Animation,
+)
 from aiogram.enums import ParseMode
 import os
 import sys
@@ -19,146 +37,227 @@ import sql_mgt
 router = Router()  # [1]
 global_objects = None
 
+
 def init_object(global_objects_inp):
     global global_objects
 
     global_objects = global_objects_inp
-    global_objects.dp.message.outer_middleware(AgePhoneCheckMiddleware())
+    global_objects.dp.message.outer_middleware(RegistrationMiddleware())
     #global_objects.dp.update.middleware.register(SaveIncomingFiles())
     menu.init_object(global_objects)
     sql_mgt.init_object(global_objects)
     settings_bot.init_object(global_objects)
     commands.init_object(global_objects)
 
-class AgePhoneCheckMiddleware(BaseMiddleware):
-    """
-    Перехватывает абсолютно все Message (outer), проверяет:
-      1) Если поле age_18=False → блокирует и отправляет inline-кнопку “Мне есть 18 лет”.
-      2) Если age_18=True, но phone=None → блокирует и отправляет Reply-кнопку “Отправить номер телефона”.
-      3) Если пришёл Message с contact → пропускает его дальше, чтобы сработал хендлер @router.message(F.contact).
-      4) Как только оба поля в базе (age_18 и phone) заполнены → пропускает любые другие сообщения к обычным хендлерам.
-    """
 
-    async def __call__(self, handler, event: Message, data: dict) -> any:
-        # 1) Если пришёл контакт – пропускаем дальше (должен сработать хендлер @router.message(F.contact))
+class RegistrationMiddleware(BaseMiddleware):
+    """Пошаговая проверка регистрации пользователя."""
+
+    async def __call__(self, handler, event: Message, data: dict) -> Any:
         await commands.delete_answer_messages(event)
 
-        if event.contact:
-            return await handler(event, data)
-
-        # 2) Получаем или создаём запись пользователя в БД
         user = await sql_mgt.get_user_async(event.chat.id)
         if not user:
             await sql_mgt.insert_user(event)
             user = await sql_mgt.get_user_async(event.chat.id)
 
-        # 3) Проверка возраста
-        if not user.get("age_18", False):
-            inline_kb_age = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="Мне есть 18 лет",
-                            callback_data="confirm_age"
-                        )
-                    ]
-                ]
-            )
-            answer_message = await event.answer(
-                "Прежде чем продолжить, подтвердите, что вам есть 18 лет:\n\n"
-                "Нажмите кнопку ниже.",
-                reply_markup=inline_kb_age
-            )
-
-            await commands.delete_answer_leater(answer_message)
-            await sql_mgt.set_param(event.chat.id, 'DELETE_LAST_MESSAGE', 'yes')
-            await commands.delete_this_message(event)
-            return  # НЕ вызываем handler(event, data) – блокируем все остальные сообщения
-
-        # 4) Проверка наличия телефона
-        if not user.get("phone"):
-            # Отправляем ReplyKeyboard с одной кнопкой request_contact (один шаг отправки контакта)
-            await send_phone_request(event)
-            return  # Снова блокируем всё, кроме нажатия этой кнопки
-
-        # 5) Оба условия выполнены – пускаем Message дальше к соответствующим хендлерам
+        stage = await sql_mgt.get_param(event.chat.id, "REG_STAGE")
+        if stage != "done":
+            if not stage or stage == "start":
+                await sql_mgt.set_param(event.chat.id, "REG_STAGE", "start")
+                await send_greeting(event)
+                await commands.delete_this_message(event)
+                return
+            if stage == "phone":
+                if event.contact:
+                    return await handler(event, data)
+                await send_phone_request(event)
+                await commands.delete_this_message(event)
+                return
+            if stage == "age":
+                await send_age_question(event)
+                await commands.delete_this_message(event)
+                return
+            if stage == "privacy":
+                await send_privacy_policy(event)
+                await commands.delete_this_message(event)
+                return
+            if stage == "name":
+                if not event.text:
+                    await send_name_request(event)
+                    await commands.delete_this_message(event)
+                    return
+                await sql_mgt.update_user_async(event.from_user.id, {"name": event.text})
+                await sql_mgt.set_param(event.from_user.id, "REG_STAGE", "done")
+                answer_message = await event.answer(f"Очень приятно, {event.text}!")
+                await commands.delete_answer_leater(answer_message)
+                await sql_mgt.set_param(event.chat.id, "DELETE_LAST_MESSAGE", "yes")
+                await commands.delete_this_message(event)
+                await commands.command_start_handler(event)
+                return
         return await handler(event, data)
-    
+
+
+async def send_greeting(message: Message):
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="Продолжить", callback_data="reg_continue")]]
+    )
+    answer_message = await message.answer(
+        "Добро пожаловать в «Клуб любителей FINSKY ICE» 💙 Здесь вы найдете аппетитные рецепты коктейлей, первыми узнаете о новинках и сможете выиграть призы за участие в акциях 🎁 Присоединяйтесь! 🚀",
+        reply_markup=kb,
+    )
+    await commands.delete_answer_leater(answer_message)
+    await sql_mgt.set_param(message.chat.id, "DELETE_LAST_MESSAGE", "yes")
+
 
 async def send_phone_request(message: Message):
-    """
-    Отправляет ReplyKeyboard с кнопкой “Отправить номер телефона” (request_contact=True).
-    Используется в хендлере @router.callback_query(F.data == "start_phone_share").
-    """
     reply_kb_contact = ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(
-                    text="Отправить номер телефона",
-                    request_contact=True
-                )
-            ]
-        ],
+        keyboard=[[KeyboardButton(text="Поделиться", request_contact=True)]],
         resize_keyboard=True,
-        one_time_keyboard=True
+        one_time_keyboard=True,
     )
     answer_message = await message.answer(
-        "Чтобы продолжить работу с ботом, необходимо поделиться номером телефона.\n\n"
-        "Нажмите кнопку ниже, чтобы отправить контакт:",
-        reply_markup=reply_kb_contact
+        "Поделитесь вашим контактным номером телефона для нашей службы поддержки ⬇️",
+        reply_markup=reply_kb_contact,
     )
-
     await commands.delete_answer_leater(answer_message)
-    await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', 'yes')
-    await commands.delete_this_message(message)
+    await sql_mgt.set_param(message.chat.id, "DELETE_LAST_MESSAGE", "yes")
 
 
-# ----------------------
-# 2. CallbackQuery-хендлер: подтверждение возраста
-# ----------------------
-@router.callback_query(F.data == "confirm_age")
-async def confirm_age_handler(call: CallbackQuery):
-    """
-    Когда пользователь нажал “Мне есть 18 лет”:
-      – сохраняем age_18=True в БД,
-      – редактируем исходное сообщение, убирая inline-кнопку.
-    """
+async def send_age_question(message: Message):
+    inline_kb_age = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Мне есть 18 лет", callback_data="age_yes")],
+            [InlineKeyboardButton(text="Мне нет 18 лет", callback_data="age_no")],
+        ]
+    )
+    answer_message = await message.answer(
+        "По правилам нашего Клуба вам должно быть больше 18 лет. Вы уже достигли совершеннолетия? ✨",
+        reply_markup=inline_kb_age,
+    )
+    await commands.delete_answer_leater(answer_message)
+    await sql_mgt.set_param(message.chat.id, "DELETE_LAST_MESSAGE", "yes")
+
+
+async def send_privacy_policy(message: Message):
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Я даю согласие", callback_data="privacy_yes")],
+            [InlineKeyboardButton(text="Я не даю согласие", callback_data="privacy_no")],
+        ]
+    )
+    answer_message = await message.answer(
+        "Продолжая использовать чат-бот, вы соглашаетесь с политикой конфиденциальности",
+        reply_markup=kb,
+    )
+    await commands.delete_answer_leater(answer_message)
+
+    file_path = await sql_mgt.get_param(0, "privacy_policy_file")
+    if file_path:
+        local = Path(__file__).resolve().parent.parent / "site_bot" / file_path.lstrip("/")
+        if local.exists():
+            ext = local.suffix
+            await message.answer_document(
+                FSInputFile(local, filename=f"Политика конфиденциальности{ext}"),
+                caption="Политика конфиденциальности",
+            )
+    await sql_mgt.set_param(message.chat.id, "DELETE_LAST_MESSAGE", "yes")
+
+
+async def send_name_request(message: Message):
+    answer_message = await message.answer("Как я могу к вам обращаться? 💙")
+    await commands.delete_answer_leater(answer_message)
+    await sql_mgt.set_param(message.chat.id, "DELETE_LAST_MESSAGE", "yes")
+
+
+@router.callback_query(F.data == "reg_continue")
+async def reg_continue_handler(call: CallbackQuery):
+    await sql_mgt.set_param(call.from_user.id, "REG_STAGE", "phone")
+    await commands.delete_this_message(call.message)
+    await send_phone_request(call.message)
+    await call.answer()
+
+
+@router.callback_query(F.data == "age_yes")
+async def age_yes_handler(call: CallbackQuery):
     await sql_mgt.update_user_async(call.from_user.id, {"age_18": True})
-    await call.answer("Возраст подтверждён", show_alert=False)
+    await sql_mgt.set_param(call.from_user.id, "REG_STAGE", "privacy")
+    await commands.delete_this_message(call.message)
+    await send_privacy_policy(call.message)
+    await call.answer()
 
-    # Убираем inline-кнопку и меняем текст
+
+@router.callback_query(F.data == "age_no")
+async def age_no_handler(call: CallbackQuery):
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="Вернуться", callback_data="age_retry")]]
+    )
+    await sql_mgt.set_param(call.from_user.id, "REG_STAGE", "age")
+    await call.message.edit_text(
+        "Обязательно возвращайтесь, когда вам исполнится 18 лет. До новых встреч! 👋",
+        reply_markup=kb,
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "age_retry")
+async def age_retry_handler(call: CallbackQuery):
+    await commands.delete_this_message(call.message)
+    await send_age_question(call.message)
+    await call.answer()
+
+
+@router.callback_query(F.data == "privacy_yes")
+async def privacy_yes_handler(call: CallbackQuery):
+    await sql_mgt.set_param(call.from_user.id, "policy_agreed", "yes")
+    await sql_mgt.set_param(call.from_user.id, "REG_STAGE", "name")
     try:
-        await call.message.edit_text("✅ Вы подтвердили, что вам есть 18 лет.")
-        await send_phone_request(call.message)
-    except:
-        pass  # Если редактирование не удалось, просто продолжаем
+        await commands.delete_message_by_id(call.message.chat.id, call.message.message_id - 1)
+    except Exception:
+        pass
+    await commands.delete_this_message(call.message)
+    await send_name_request(call.message)
+    await call.answer()
 
 
-# ----------------------
-# 3. Message-хендлер: получение контакта (content_type=contact)
-# ----------------------
+@router.callback_query(F.data == "privacy_no")
+async def privacy_no_handler(call: CallbackQuery):
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="Вернуться в начало", callback_data="start_over")]]
+    )
+    try:
+        await commands.delete_message_by_id(call.message.chat.id, call.message.message_id - 1)
+    except Exception:
+        pass
+    await sql_mgt.set_param(call.from_user.id, "REG_STAGE", "start")
+    await call.message.edit_text(
+        "Обязательно возвращайтесь, если передумаете. До новых встреч! 👋",
+        reply_markup=kb,
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "start_over")
+async def start_over_handler(call: CallbackQuery):
+    await commands.delete_this_message(call.message)
+    await send_greeting(call.message)
+    await call.answer()
+
+
 @router.message(F.contact)
 async def contact_handler(message: Message):
-    """
-    Когда пользователь нажимает кнопку “Отправить номер телефона” (ReplyKeyboardMarkup → request_contact),
-    Telegram присылает Message.contact. Сохраняем phone в БД и убираем клавиатуру.
-    """
-
     phone_number = message.contact.phone_number
     await sql_mgt.update_user_async(message.from_user.id, {"phone": phone_number})
-
-    # Убираем клавиатуру, возвращаем обычную (или пустую) клавиатуру
-    answer_message = await message.answer(
-        "Спасибо! Ваш номер сохранён."
-    )
+    await sql_mgt.set_param(message.from_user.id, "REG_STAGE", "age")
+    answer_message = await message.answer("Спасибо! Ваш номер сохранён.")
     await commands.delete_answer_leater(answer_message)
-    await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', 'yes')
-
-
-    await commands.command_start_handler(message)
+    await sql_mgt.set_param(message.chat.id, "DELETE_LAST_MESSAGE", "yes")
+    await commands.delete_this_message(message)
+    await send_age_question(message)
 
 
 FILES_DIR = Path("files")
+
 
 class SaveIncomingFiles(BaseMiddleware):
     # было: base_dir: str | Path
@@ -209,7 +308,6 @@ class SaveIncomingFiles(BaseMiddleware):
 
         # 🦄 Стикер (обычный/анимированный)
         if m.sticker:
-            # *.webp, *.tgs или *.webm в зависимости от формата
             ext = {
                 "regular": ".webp",
                 "video": ".webm",
@@ -229,3 +327,4 @@ class SaveIncomingFiles(BaseMiddleware):
         # file_id подходит под FAT-32 (буквы/цифры/«_»), поэтому безопасен
         filename = f"{obj.file_id}{default_ext}"
         await bot.download(obj, destination=self.base_dir / filename)
+

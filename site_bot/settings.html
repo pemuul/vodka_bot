@@ -2478,20 +2478,28 @@
                         </div>
                         <div class="textareaInput">
                             <label for="min-order">Не меньше:</label>
-                            <input class="inpSt" type="text" id="min-order" name="settings_main_amount" placeholder="&#8381" value="${settings_site.min_amount}" style="width: 40%; padding: 3px 5px; font-size: 13px; border: 1px solid #ccc; border-radius: 4px;" required>
+                            <input class="inpSt" type="text" id="min-order" name="min_order" placeholder="&#8381" value="${settings_site.min_amount}" style="width: 40%; padding: 3px 5px; font-size: 13px; border: 1px solid #ccc; border-radius: 4px;" required>
                         </div>
                     </div>
                     <div style="margin-bottom: 20px;">
                         <div class="nameInput">
-                       
                             <img class="icon_arrow light_theme_arrow" src="icon/Line 15.png" alt="">
                             <img class="icon_arrow dark_theme_arrow" src="icon_white/Line 15.png" alt="">
                             <label for="payment-token">Токен оплаты</label>
                         </div>
                         <div class="textareaInput">
-                            <input class="inpSt" type="text" id="payment-token" name="settings_pyment"
+                            <input class="inpSt" type="text" id="payment-token" name="payment_token"
                                 style="width: 91%; padding: 10px; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; color: #acacac;"
                                 placeholder="Токен оплаты" value="${settings_site.PAYMENTS_TOKEN}" required>
+                        </div>
+                    </div>
+                    <div style="margin-bottom: 20px;">
+                        <div class="nameInput">
+                            <img class="icon_arrow" src="icon/Line 15.png" alt="">
+                            <label for="privacy-file">Файл с политикой конфиденциальности</label>
+                        </div>
+                        <div class="textareaInput">
+                            <input type="file" id="privacy-file" name="privacy_file">
                         </div>
                     </div>
 
@@ -2538,29 +2546,14 @@
         }
 
         async function updateSettingsSite() {
-            var data_site_settings = {};
             var form_settings_site = document.getElementById('form-settings-site');
-
-            // Получаем все элементы формы
-            var elements = form_settings_site.elements;
-
-            // Проходимся по каждому элементу формы
-            for (var i = 0; i < elements.length; i++) {
-                var element = elements[i];
-                // Проверяем, что элемент - текстовое поле (или другой тип поля ввода, который вам нужен)
-                if (element.tagName === 'INPUT' && element.type !== 'button') {
-                    // Добавляем значение поля в объект formData, используя имя поля в качестве ключа
-                    data_site_settings[element.name] = element.value;
-                }
-            }
+            var formData = new FormData(form_settings_site);
+            formData.append('user_id', tg_id);
 
             try {
                 const response = await fetch(urlTgParams + '/update_settings_site', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ user_id: tg_id, site_settings: data_site_settings })
+                    body: formData
                 });
                 const data = await response.json();
                 return data.success; // Предполагается, что ваш API возвращает массив товаров

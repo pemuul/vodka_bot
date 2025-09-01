@@ -48,7 +48,6 @@ from keys import MAIN_JSON_FILE
 from json_data_mgt import Tree_data, TreeObject, copy_or_rename_file, create_folder
 #from sql_mgt import sql_mgt.create_db_file, sql_mgt.upload_admins, sql_mgt.get_admins_id, sql_mgt.init_wallet
 import sql_mgt
-from pyment_bot_dir.pyment_mgt import monthly_payment_with_conn
 
 from heandlers import commands, answer_button_menu, import_files, text_heandler, admin_answer_button, media_heandler, pyments, order, answer_button_settings, answer_button_subscription, confirm_age_phone
 
@@ -494,12 +493,6 @@ async def main():
 
     # запускаем процесс, который будет удалять старые заказы
     run_order_delete_process()
-
-    # проверяем, не пора ли платить
-    #await pyments.monthly_payment()
-
-    monthly_payment_with_conn(global_objects.settings_bot.get('run_directory'))
-
 
     # Запускаем бота и пропускаем все накопленные входящие
     # Да, этот метод можно вызвать даже если у вас поллинг

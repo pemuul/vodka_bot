@@ -687,30 +687,37 @@ async def api_draw_stage_export(stage_id: int):
     }
     return Response(csv_data, media_type="text/csv", headers=headers)
 
+
 @app.get("/questions", response_class=HTMLResponse)
 async def questions(request: Request):
     rows = await database.fetch_all(
         questions_table.select().order_by(questions_table.c.create_dt.desc())
     )
-    user_ids = {r["user_tg_id"] for r in rows}
+    user_ids = set()
+    for r in rows:
+        row = dict(r)
+        uid = row.get("user_tg_id") or row.get("user_id")
+        if uid:
+            user_ids.add(uid)
     user_map = {}
     if user_ids:
         user_rows = await database.fetch_all(
             users_table.select().where(users_table.c.tg_id.in_(user_ids))
         )
-        user_map = {u["tg_id"]: u["name"] for u in user_rows}
+        # key by stringified tg_id to avoid mismatches between int/str types
+        user_map = {str(u["tg_id"]): u["name"] for u in user_rows}
 
     questions = []
-    for q in rows:
+    for r in rows:
+        row = dict(r)
+        user_id = row.get("user_tg_id") or row.get("user_id")
+        name = user_map.get(str(user_id)) or "Пользователь"
         questions.append({
-            "id": q["id"],
-            "text": q["text"],
-            "type": q["type"],
-            "status": q["status"],
-            "user": {
-                "id": q["user_tg_id"],
-                "name": user_map.get(q["user_tg_id"], f"Пользователь {q['user_tg_id']}")
-            }
+            "id": row.get("id"),
+            "text": row.get("text", ""),
+            "type": row.get("type", ""),
+            "status": row.get("status", ""),
+            "user": {"id": user_id, "name": name},
         })
     msgs = await database.fetch_all(
         question_messages_table.select().order_by(question_messages_table.c.timestamp)
@@ -736,7 +743,6 @@ async def questions(request: Request):
         },
     )
 
-
 @app.get("/api/questions")
 async def api_get_questions(status: Optional[str] = None):
     query = questions_table.select()
@@ -744,25 +750,30 @@ async def api_get_questions(status: Optional[str] = None):
         query = query.where(questions_table.c.status == status)
     query = query.order_by(questions_table.c.create_dt.desc())
     rows = await database.fetch_all(query)
-    user_ids = {r["user_tg_id"] for r in rows}
+    user_ids = set()
+    for r in rows:
+        rd = dict(r)
+        uid = rd.get("user_tg_id") or rd.get("user_id")
+        if uid:
+            user_ids.add(uid)
     user_map = {}
     if user_ids:
         user_rows = await database.fetch_all(
             users_table.select().where(users_table.c.tg_id.in_(user_ids))
         )
-        user_map = {u["tg_id"]: u["name"] for u in user_rows}
+        user_map = {str(u["tg_id"]): u["name"] for u in user_rows}
 
     questions = []
-    for q in rows:
+    for r in rows:
+        row = dict(r)
+        user_id = row.get("user_tg_id") or row.get("user_id")
+        name = user_map.get(str(user_id)) or "Пользователь"
         questions.append({
-            "id": q["id"],
-            "text": q["text"],
-            "type": q["type"],
-            "status": q["status"],
-            "user": {
-                "id": q["user_tg_id"],
-                "name": user_map.get(q["user_tg_id"], f"Пользователь {q['user_tg_id']}")
-            }
+            "id": row.get("id"),
+            "text": row.get("text", ""),
+            "type": row.get("type", ""),
+            "status": row.get("status", ""),
+            "user": {"id": user_id, "name": name},
         })
     return {"questions": questions}
 
@@ -983,19 +994,29 @@ async def settings(request: Request):
         .where(params_table.c.param_name == "product_keywords")
     )
     keywords = row["value"] if row else ""
+    row_file = await database.fetch_one(
+        params_table.select()
+        .where(params_table.c.user_tg_id == 0)
+        .where(params_table.c.param_name == "privacy_policy_file")
+    )
+    policy_url = row_file["value"] if row_file else ""
     return templates.TemplateResponse(
         "settings.html",
         {
             "request": request,
             "active_page": "settings",
             "keywords": keywords,
+            "policy_url": policy_url,
             "version": app.state.static_version,
         },
     )
 
 
 @app.post("/settings")
-async def save_settings(product_names: str = Form("")):
+async def save_settings(
+    product_names: str = Form(""),
+    privacy_file: UploadFile | None = File(None),
+):
     query = sqlite_insert(params_table).values(
         user_tg_id=0, param_name="product_keywords", value=product_names
     )
@@ -1004,6 +1025,20 @@ async def save_settings(product_names: str = Form("")):
         set_={"value": product_names},
     )
     await database.execute(query)
+    if privacy_file and privacy_file.filename:
+        fname = f"privacy_{uuid.uuid4().hex}{Path(privacy_file.filename).suffix}"
+        dest = UPLOAD_DIR / fname
+        with open(dest, "wb") as out:
+            out.write(await privacy_file.read())
+        rel = f"/static/uploads/{fname}"
+        query = sqlite_insert(params_table).values(
+            user_tg_id=0, param_name="privacy_policy_file", value=rel
+        )
+        query = query.on_conflict_do_update(
+            index_elements=[params_table.c.user_tg_id, params_table.c.param_name],
+            set_={"value": rel},
+        )
+        await database.execute(query)
     return RedirectResponse("/settings", status_code=303)
 
 @app.get("/participants", response_class=HTMLResponse)
@@ -1070,32 +1105,49 @@ async def update_participant(tg_id: int, data: ParticipantUpdate):
 @app.get("/receipts", response_class=HTMLResponse)
 async def receipts(request: Request):
     sel_columns = [receipts_table, users_table.c.name.label("user_name")]
-    join_clause = receipts_table.outerjoin(users_table, receipts_table.c.user_tg_id == users_table.c.tg_id)
+    join_clause = receipts_table.outerjoin(
+        users_table, receipts_table.c.user_tg_id == users_table.c.tg_id
+    )
     if has_receipt_draw_id():
         sel_columns.append(prize_draws_table.c.title.label("draw_title"))
-        join_clause = join_clause.outerjoin(prize_draws_table, receipts_table.c.draw_id == prize_draws_table.c.id)
+        join_clause = join_clause.outerjoin(
+            prize_draws_table, receipts_table.c.draw_id == prize_draws_table.c.id
+        )
     query = (
         sqlalchemy.select(*sel_columns)
         .select_from(join_clause)
         .order_by(receipts_table.c.id.desc())
     )
     rows = await database.fetch_all(query)
-    receipts = []
-    for r in rows:
+    receipts: list[dict] = []
+    for row in rows:
+        r = dict(row)
+        rid = r["id"]
+        # иногда в таблице могут остаться записи без ID из-за некорректных вставок
+        # такие записи нельзя корректно обрабатывать через API, поэтому пропускаем их
+        if rid is None:
+            continue
         file_path = r["file_path"]
-        if file_path and not file_path.startswith("/static"):
+        if file_path and not str(file_path).startswith("/static"):
             file_path = f"/static/uploads/{Path(file_path).name}"
-        receipts.append({
-            "id": r["id"],
-            "number": r["number"],
-            "created_at": r["create_dt"].isoformat() if r["create_dt"] else None,
-            "user_tg_id": r["user_tg_id"],
-            "user_name": r["user_name"],
-            "file_path": file_path,
-            "status": r["status"] if has_receipt_status() and "status" in r else None,
-            "draw_id": r["draw_id"] if has_receipt_draw_id() and "draw_id" in r else None,
-            "draw_title": r["draw_title"] if "draw_title" in r else None,
-        })
+        created_at = r.get("create_dt")
+        if isinstance(created_at, (datetime.date, datetime.datetime)):
+            created_at = created_at.isoformat()
+        elif created_at is not None:
+            created_at = str(created_at)
+        receipts.append(
+            {
+                "id": rid,
+                "number": r.get("number"),
+                "created_at": created_at,
+                "user_tg_id": r.get("user_tg_id"),
+                "user_name": r.get("user_name"),
+                "file_path": file_path,
+                "status": r.get("status") if has_receipt_status() else None,
+                "draw_id": r.get("draw_id") if has_receipt_draw_id() else None,
+                "draw_title": r.get("draw_title"),
+            }
+        )
     draw_query = sqlalchemy.select(prize_draws_table.c.id, prize_draws_table.c.title)
     draws_rows = await database.fetch_all(draw_query)
     draws = [{"id": d["id"], "title": d["title"]} for d in draws_rows]
@@ -1113,10 +1165,14 @@ async def receipts(request: Request):
 @app.get("/api/receipts/{receipt_id}")
 async def get_receipt(receipt_id: int):
     sel_cols = [receipts_table, users_table.c.name.label("user_name")]
-    join_clause = receipts_table.outerjoin(users_table, receipts_table.c.user_tg_id == users_table.c.tg_id)
+    join_clause = receipts_table.outerjoin(
+        users_table, receipts_table.c.user_tg_id == users_table.c.tg_id
+    )
     if has_receipt_draw_id():
         sel_cols.append(prize_draws_table.c.title.label("draw_title"))
-        join_clause = join_clause.outerjoin(prize_draws_table, receipts_table.c.draw_id == prize_draws_table.c.id)
+        join_clause = join_clause.outerjoin(
+            prize_draws_table, receipts_table.c.draw_id == prize_draws_table.c.id
+        )
     query = (
         sqlalchemy.select(*sel_cols)
         .select_from(join_clause)
@@ -1125,21 +1181,27 @@ async def get_receipt(receipt_id: int):
     r = await database.fetch_one(query)
     if not r:
         raise HTTPException(404, "Receipt not found")
+    r = dict(r)
     file_path = r["file_path"]
-    if file_path and not file_path.startswith("/static"):
+    if file_path and not str(file_path).startswith("/static"):
         file_path = f"/static/uploads/{Path(file_path).name}"
+    created_at = r.get("create_dt")
+    if isinstance(created_at, (datetime.date, datetime.datetime)):
+        created_at = created_at.isoformat()
+    elif created_at is not None:
+        created_at = str(created_at)
     return {
         "id": r["id"],
-        "number": r["number"],
-        "created_at": r["create_dt"].isoformat() if r["create_dt"] else None,
-        "amount": r["amount"],
-        "user_tg_id": r["user_tg_id"],
-        "user_name": r["user_name"],
+        "number": r.get("number"),
+        "created_at": created_at,
+        "amount": r.get("amount"),
+        "user_tg_id": r.get("user_tg_id"),
+        "user_name": r.get("user_name"),
         "file_path": file_path,
-        "status": r["status"] if has_receipt_status() and "status" in r else None,
-        "message_id": r["message_id"] if has_receipt_msg_id() and "message_id" in r else None,
-        "draw_id": r["draw_id"] if has_receipt_draw_id() and "draw_id" in r else None,
-        "draw_title": r["draw_title"] if "draw_title" in r else None,
+        "status": r.get("status") if has_receipt_status() else None,
+        "message_id": r.get("message_id") if has_receipt_msg_id() else None,
+        "draw_id": r.get("draw_id") if has_receipt_draw_id() else None,
+        "draw_title": r.get("draw_title"),
     }
 
 class ReceiptUpdate(BaseModel):
@@ -1159,8 +1221,13 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
         .where(receipts_table.c.id == receipt_id)
         .values(**update_values)
     )
-    if old_row and has_receipt_status() and old_row["status"] != upd.status and has_receipt_msg_id():
-        if old_row["message_id"] and old_row["user_tg_id"]:
+    if (
+        old_row
+        and has_receipt_status()
+        and old_row.get("status") != upd.status
+        and has_receipt_msg_id()
+    ):
+        if old_row.get("message_id") and old_row.get("user_tg_id"):
             text = None
             if upd.status == "Распознан":
                 text = "Чек принят!"
@@ -1191,6 +1258,30 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
 
 @app.delete("/api/receipts/{receipt_id}")
 async def delete_receipt(receipt_id: int):
+    row = await database.fetch_one(
+        receipts_table.select().where(receipts_table.c.id == receipt_id)
+    )
+    if not row:
+        raise HTTPException(404, "Receipt not found")
+    file_path = row["file_path"]
+    if file_path:
+        upload_dir = Path(__file__).resolve().parent / "static" / "uploads"
+        fpath = upload_dir / Path(str(file_path)).name
+        try:
+            fpath.unlink()
+        except FileNotFoundError:
+            pass
+    if HAS_PDW_RECEIPT_ID:
+        await database.execute(
+            prize_draw_winners_table.delete().where(
+                prize_draw_winners_table.c.receipt_id == receipt_id
+            )
+        )
+    await database.execute(
+        notifications_table.delete().where(
+            notifications_table.c.message.like(f"%{receipt_id}%")
+        )
+    )
     await database.execute(
         receipts_table.delete().where(receipts_table.c.id == receipt_id)
     )
@@ -1247,6 +1338,54 @@ async def api_delete_message(message_id: int):
     # можно проверить существование, но sqlite UPDATE без ошибок
     await mark_message_deleted(message_id)
     return {"success": True}
+
+@app.post("/get_settings_site_all")
+async def get_settings_site_all(request: Request):
+    rows = await database.fetch_all(
+        params_table.select().where(params_table.c.user_tg_id == 0)
+    )
+    data = {r["param_name"]: r["value"] for r in rows}
+    return {
+        "settings_site": {
+            "min_amount": data.get("min_amount", ""),
+            "PAYMENTS_TOKEN": data.get("PAYMENTS_TOKEN", ""),
+        }
+    }
+
+
+@app.post("/update_settings_site")
+async def update_settings_site(
+    user_id: int = Form(...),
+    min_order: str = Form(""),
+    payment_token: str = Form(""),
+    privacy_file: UploadFile | None = File(None),
+):
+    for name, value in (("min_amount", min_order), ("PAYMENTS_TOKEN", payment_token)):
+        if value:
+            query = sqlite_insert(params_table).values(
+                user_tg_id=0, param_name=name, value=value
+            )
+            query = query.on_conflict_do_update(
+                index_elements=[params_table.c.user_tg_id, params_table.c.param_name],
+                set_={"value": value},
+            )
+            await database.execute(query)
+    if privacy_file and privacy_file.filename:
+        fname = f"privacy_{uuid.uuid4().hex}{Path(privacy_file.filename).suffix}"
+        dest = UPLOAD_DIR / fname
+        with open(dest, "wb") as out:
+            out.write(await privacy_file.read())
+        rel = f"/static/uploads/{fname}"
+        query = sqlite_insert(params_table).values(
+            user_tg_id=0, param_name="privacy_policy_file", value=rel
+        )
+        query = query.on_conflict_do_update(
+            index_elements=[params_table.c.user_tg_id, params_table.c.param_name],
+            set_={"value": rel},
+        )
+        await database.execute(query)
+    return {"success": True}
+
 
 telegram_bot_token = globals().get("TG_BOT") or os.getenv("TG_BOT")
 if not telegram_bot_token:
@@ -1338,11 +1477,12 @@ async def proxy_file(file_id: str):
     if not file_id or file_id == "undefined":
         raise HTTPException(status_code=400, detail="File ID is required")
     
-    file = await bot.get_file(file_id)
-    # В file.file_path лежит, например, "photos/file_123.jpg"
-    file_path = file.file_path
+    bot = get_bot()
+    if not bot:
+        raise HTTPException(status_code=500, detail="Bot is not configured")
 
-    # Собираем ссылку на CDN:
+    file = await bot.get_file(file_id)
+    file_path = file.file_path  # например: "photos/file_123.jpg"
     url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
 
     # Перенаправляем браузер на этот URL
