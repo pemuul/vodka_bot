@@ -79,7 +79,7 @@
     <div class="d-flex justify-content-between align-items-center mb-3 px-3">
       <h1 class="h3 mb-0">Участники</h1>
       <button id="export-participants-btn" class="btn btn-primary">
-        Выгрузка
+        Выгрузить
       </button>
     </div>
 
@@ -328,7 +328,45 @@
           alert("Ошибка сохранения");
         }
       };
-      exportBtn.onclick = () => alert("Выгрузка участников");
+      exportBtn.onclick = async () => {
+        const originalHtml = exportBtn.innerHTML;
+        exportBtn.disabled = true;
+        exportBtn.innerHTML = `
+          <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+          Подготовка...
+        `;
+        try {
+          const res = await fetch("/participants/export");
+          if (!res.ok) {
+            throw new Error("Не удалось сформировать файл");
+          }
+          const blob = await res.blob();
+          let filename = "participants.csv";
+          const disposition = res.headers.get("Content-Disposition");
+          if (disposition) {
+            const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+            const quotedMatch = disposition.match(/filename="?([^";]+)"?/i);
+            const rawName = utf8Match ? decodeURIComponent(utf8Match[1]) : (quotedMatch ? quotedMatch[1] : null);
+            if (rawName) {
+              filename = rawName;
+            }
+          }
+          const url = window.URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          window.URL.revokeObjectURL(url);
+        } catch (err) {
+          console.error(err);
+          alert(err?.message || "Ошибка выгрузки файла");
+        } finally {
+          exportBtn.disabled = false;
+          exportBtn.innerHTML = originalHtml;
+        }
+      };
 
       // возвращаемся к списку
       backBtn.onclick = () => {

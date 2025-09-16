@@ -34,6 +34,7 @@ from pathlib import Path
 import random
 import csv
 import io
+from decimal import Decimal
 
 # aiogram is imported lazily when sending messages
 
@@ -1101,6 +1102,136 @@ async def update_participant(tg_id: int, data: ParticipantUpdate):
             )
         )
     return {"success": True}
+
+
+@app.get("/participants/export")
+async def export_participants():
+    users_rows = await database.fetch_all(
+        users_table.select().order_by(users_table.c.create_dt)
+    )
+    user_settings_rows = await database.fetch_all(user_settings_table.select())
+    participant_settings_rows = await database.fetch_all(participant_settings_table.select())
+    user_extended_rows = await database.fetch_all(user_extended_table.select())
+    user_params_rows = await database.fetch_all(user_params_table.select())
+    params_rows = await database.fetch_all(params_table.select())
+    params_site_rows = await database.fetch_all(params_site_table.select())
+
+    def normalize(value):
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "1" if value else "0"
+        if isinstance(value, datetime.datetime):
+            return value.replace(microsecond=0).isoformat(sep=" ")
+        if isinstance(value, datetime.date):
+            return value.isoformat()
+        if isinstance(value, datetime.time):
+            return value.isoformat()
+        if isinstance(value, Decimal):
+            return str(value)
+        if isinstance(value, bytes):
+            try:
+                return value.decode("utf-8")
+            except UnicodeDecodeError:
+                return value.hex()
+        return str(value)
+
+    def build_params_map(records, key_name):
+        result = {}
+        for record in records:
+            row = dict(record)
+            user_id = row.get(key_name)
+            if user_id is None:
+                continue
+            name = row.get("param_name")
+            value = normalize(row.get("value"))
+            entry = f"{name}={value}" if name else value
+            result.setdefault(user_id, []).append(entry)
+        return result
+
+    user_settings_map = {
+        row["tg_id"]: dict(row)
+        for row in user_settings_rows
+        if row["tg_id"] is not None
+    }
+    participant_settings_map = {
+        row["user_tg_id"]: dict(row)
+        for row in participant_settings_rows
+        if row["user_tg_id"] is not None
+    }
+    user_extended_map = {
+        row["tg_id"]: dict(row)
+        for row in user_extended_rows
+        if row["tg_id"] is not None
+    }
+    user_params_map = {
+        row["user_tg_id"]: dict(row)
+        for row in user_params_rows
+        if row["user_tg_id"] is not None
+    }
+    params_map = build_params_map(params_rows, "user_tg_id")
+    params_site_map = build_params_map(params_site_rows, "user_tg_id")
+
+    output = io.StringIO()
+    output.write("\ufeff")
+    writer = csv.writer(output)
+    writer.writerow([
+        "tg_id",
+        "name",
+        "age_18",
+        "phone",
+        "create_dt",
+        "subscription",
+        "username",
+        "extended_all_data",
+        "extended_create_dt",
+        "blocked",
+        "tester",
+        "participant_settings_create_dt",
+        "last_message_id",
+        "last_image_message_list",
+        "user_params_create_dt",
+        "params_site",
+        "params",
+    ])
+
+    for record in users_rows:
+        row = dict(record)
+        user_id = row.get("tg_id")
+        user_settings = user_settings_map.get(user_id, {})
+        participant_settings = participant_settings_map.get(user_id, {})
+        user_extended = user_extended_map.get(user_id, {})
+        user_params = user_params_map.get(user_id, {})
+        params_site_values = "; ".join(params_site_map.get(user_id, []))
+        params_values = "; ".join(params_map.get(user_id, []))
+
+        writer.writerow([
+            normalize(row.get("tg_id")),
+            normalize(row.get("name")),
+            normalize(row.get("age_18")),
+            normalize(row.get("phone")),
+            normalize(row.get("create_dt")),
+            normalize(user_settings.get("subscription")),
+            normalize(user_extended.get("username")),
+            normalize(user_extended.get("all_data")),
+            normalize(user_extended.get("create_dt")),
+            normalize(participant_settings.get("blocked")),
+            normalize(participant_settings.get("tester")),
+            normalize(participant_settings.get("create_dt")),
+            normalize(user_params.get("last_message_id")),
+            normalize(user_params.get("last_image_message_list")),
+            normalize(user_params.get("create_dt")),
+            normalize(params_site_values),
+            normalize(params_values),
+        ])
+
+    csv_data = output.getvalue()
+    output.close()
+    filename = f"participants_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    headers = {
+        "Content-Disposition": f"attachment; filename=\"{filename}\"; filename*=UTF-8''{filename}"
+    }
+    return Response(csv_data, media_type="text/csv; charset=utf-8", headers=headers)
 
 @app.get("/receipts", response_class=HTMLResponse)
 async def receipts(request: Request):
