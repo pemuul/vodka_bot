@@ -14,6 +14,7 @@ from keys import SPLITTER_STR, DELETE_MESSAGES
 
 global_objects = None
 
+
 def init_object(global_objects_inp):
     global global_objects
 
@@ -22,6 +23,23 @@ def init_object(global_objects_inp):
 
     init_object_mkb(global_objects_inp)
     init_object_akb(global_objects_inp)
+
+
+def is_root_menu(tree_item) -> bool:
+    """Return True if the tree item represents the root menu."""
+
+    if not tree_item:
+        return False
+
+    if tree_item.path == SPLITTER_STR:
+        return True
+
+    redirect_id = getattr(tree_item, "redirect", None)
+    if redirect_id is None or global_objects is None:
+        return False
+
+    redirect_path = global_objects.tree_data.id_dict.get(redirect_id)
+    return redirect_path == SPLITTER_STR
 
 async def get_message(message: Message, path=SPLITTER_STR, replace=False):
     await sql_mgt.insert_user(message)
@@ -45,6 +63,9 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
     await sql_mgt.set_param(message.chat.id, 'DELETE_ANSWER_LEATER', '')
 
     tree_item = global_objects.tree_data.get_obj_from_path(path)
+    if is_root_menu(tree_item) and tree_item.path != SPLITTER_STR:
+        path = SPLITTER_STR
+        tree_item = global_objects.tree_data.get_obj_from_path(path)
     path_id_current = global_objects.tree_data.get_path_to_id(tree_item.path)
     await sql_mgt.set_param(message.chat.id, 'CURRENT_PATH_ID', str(path_id_current))
 
