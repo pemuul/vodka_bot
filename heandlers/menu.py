@@ -180,12 +180,13 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
 
     if on_off_admin_panel == 'on':
         # update reply keyboard separately
-        tmp_msg = await message.answer('.', reply_markup=reply_kb, disable_notification=True)
+        tmp_msg = await message.answer(
+            "\u2063", reply_markup=reply_kb, disable_notification=True
+        )
         try:
-            if DELETE_MESSAGES:
-                await global_objects.bot.delete_message(chat_id=tmp_msg.chat.id, message_id=tmp_msg.message_id)
-        except Exception:
-            pass
+            await tmp_msg.delete()
+        except Exception as error:
+            print(f"Не удалось удалить служебное сообщение меню: {error}")
 
         if replace:
             await message.edit_text(text_message, reply_markup=inline_kb, parse_mode=ParseMode.HTML)

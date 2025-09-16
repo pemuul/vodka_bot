@@ -101,11 +101,15 @@ def item_edit_kb(path_id):
 
 def other_item_edit_kb(path_id):
     buttons = InlineKeyboardBuilder()
-    is_menu = path_id == 0
 
-    buttons.button(text='🔹 🔃 Изменить порядок элементов <🔑', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='MOVE_ELEMENT'))
-    if not is_menu: 
-        buttons.button(text='🔹 🆔 Изменить/Добавить id <🔑', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='EDIT_ID'))
+    buttons.button(
+        text='🔹 🔃 Изменить порядок элементов <🔑',
+        callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='MOVE_ELEMENT')
+    )
+    buttons.button(
+        text='🔹 🆔 Изменить/Добавить id <🔑',
+        callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='EDIT_ID')
+    )
 
     buttons.button(text='🔹 ↩️ Откатить последнее изменение <🔑', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='ROLL_BACK_CHANGE'))
     buttons.button(text='🔻 Рассылка  <🔑', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='MAILINGS'))
