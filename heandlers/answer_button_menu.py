@@ -62,7 +62,7 @@ async def menu_text_handler(message: Message):
         return
 
     # обработка кнопки Назад
-    if message.text == '>> ↩️ НАЗАД <<':
+    if message.text == 'Вернуться назад':
         previus_path = SPLITTER_STR.join(tree_item.path.split(SPLITTER_STR)[:-1])
         if not previus_path:
             previus_path = SPLITTER_STR

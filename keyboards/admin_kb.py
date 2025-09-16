@@ -46,7 +46,7 @@ def edit_menu_kb(message, path) -> ReplyKeyboardMarkup:
         #print(previus_path)
         path_id = global_objects.tree_data.get_path_to_id(previus_path)
         buttons.button(
-            text=f'>> ↩️ НАЗАД <<', callback_data=f"b_{path_id}"
+            text=f'Вернуться назад', callback_data=f"b_{path_id}"
         )
         
     if tree_item.path == SPLITTER_STR and message.chat.id in global_objects.admin_list:
@@ -93,7 +93,7 @@ def item_edit_kb(path_id):
         buttons.button(text='🔻 Добавить элемент <🔑', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='ADD_ELEMENT_SELECT'))
         buttons.button(text='🔻 + Дополнительно... <🔑', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='OTHER'))
     buttons.button(text='========================', callback_data='pass')
-    buttons.button(text='>> ↩️ НАЗАД <<', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='RETURN'))
+    buttons.button(text='Вернуться назад', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='RETURN'))
 
     buttons.adjust(1)
     return buttons.as_markup()
@@ -110,7 +110,7 @@ def other_item_edit_kb(path_id):
     buttons.button(text='🔹 ↩️ Откатить последнее изменение <🔑', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='ROLL_BACK_CHANGE'))
     buttons.button(text='🔻 Рассылка  <🔑', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='MAILINGS'))
     buttons.button(text='========================', callback_data='pass')
-    buttons.button(text='>> ↩️ НАЗАД <<', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='EDIT'))
+    buttons.button(text='Вернуться назад', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='EDIT'))
 
     buttons.adjust(1)
     return buttons.as_markup()
@@ -121,7 +121,7 @@ def mailing_kb(path_id):
 
     buttons.button(text='🔹 Отравить блок всем подписчикам <🔑', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='SEND_MAILING'))
     buttons.button(text='========================', callback_data='pass')
-    buttons.button(text='>> ↩️ НАЗАД <<', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='OTHER'))
+    buttons.button(text='Вернуться назад', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='OTHER'))
 
     buttons.adjust(1)
     return buttons.as_markup()
@@ -182,7 +182,7 @@ def move_item_kb(path_id):
             buttons.button(text='вниз ⬇️', callback_data=AdminMoveMenuCallbackFactory(path_id=path_id, path_id_move=path_id_move, direction='down')) 
 
     buttons.button(text='========================', callback_data='pass')
-    buttons.button(text='>> ↩️ НАЗАД <<', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='EDIT'))
+    buttons.button(text='Вернуться назад', callback_data=AdminMenuEditCallbackFactory(path_id=path_id, button='EDIT'))
 
     adjust_list = []
     if len(next_buttons) > 1:
@@ -205,7 +205,7 @@ def admin_buttons():
     buttons.button(text='🔹 Число посещений', callback_data=AdminCommandCallbackFactory(command='get_log_visit', params='10'))
     buttons.button(text='🔹 Добавить Админа', callback_data=AdminMenuEditCallbackFactory(path_id=0, button='ADD_ADMIN'))
     buttons.button(text='🔻 Удалить Админа', callback_data=AdminMenuEditCallbackFactory(path_id=0, button='DELETE_ADMIN'))
-    buttons.button(text='>> ↩️ НАЗАД <<', callback_data=f"b_{0}")
+    buttons.button(text='Вернуться назад', callback_data=f"b_{0}")
 
     buttons.adjust(1)
     return buttons.as_markup()
@@ -231,7 +231,7 @@ def wallet_kb():
     buttons = InlineKeyboardBuilder()
 
     buttons.button(text='🔹 Пополнить кошелёк', callback_data='fill_wallet')
-    buttons.button(text='>> ↩️ НАЗАД <<', callback_data=f"b_{0}")
+    buttons.button(text='Вернуться назад', callback_data=f"b_{0}")
 
     buttons.adjust(1)
     return buttons.as_markup()
@@ -242,7 +242,7 @@ def fill_wallet_kb():
 
     for amount in [60, 100, 500, 1000, 3000, 5000]:
         buttons.button(text=f'{amount} руб.', callback_data=AdminFillWallet(amount=amount))
-    buttons.button(text='>> ↩️ НАЗАД <<', callback_data="admin_wallet")
+    buttons.button(text='Вернуться назад', callback_data="admin_wallet")
 
     buttons.adjust(2)
     return buttons.as_markup()

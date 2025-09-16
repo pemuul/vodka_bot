@@ -10,6 +10,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     ReplyKeyboardMarkup,
     KeyboardButton,
+    ReplyKeyboardRemove,
     PhotoSize,
     Document,
     Audio,
@@ -127,8 +128,10 @@ async def send_phone_request(message: Message):
 async def send_age_question(message: Message):
     inline_kb_age = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Мне есть 18 лет", callback_data="age_yes")],
-            [InlineKeyboardButton(text="Мне нет 18 лет", callback_data="age_no")],
+            [
+                InlineKeyboardButton(text="Мне есть 18 лет", callback_data="age_yes"),
+                InlineKeyboardButton(text="Мне нет 18 лет", callback_data="age_no"),
+            ]
         ]
     )
     answer_message = await message.answer(
@@ -182,6 +185,10 @@ async def reg_continue_handler(call: CallbackQuery):
 async def age_yes_handler(call: CallbackQuery):
     await sql_mgt.update_user_async(call.from_user.id, {"age_18": True})
     await sql_mgt.set_param(call.from_user.id, "REG_STAGE", "privacy")
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
     await commands.delete_this_message(call.message)
     await send_privacy_policy(call.message)
     await call.answer()
@@ -249,7 +256,9 @@ async def contact_handler(message: Message):
     phone_number = message.contact.phone_number
     await sql_mgt.update_user_async(message.from_user.id, {"phone": phone_number})
     await sql_mgt.set_param(message.from_user.id, "REG_STAGE", "age")
-    answer_message = await message.answer("Спасибо! Ваш номер сохранён.")
+    answer_message = await message.answer(
+        "Спасибо! Ваш номер сохранён.", reply_markup=ReplyKeyboardRemove()
+    )
     await commands.delete_answer_leater(answer_message)
     await sql_mgt.set_param(message.chat.id, "DELETE_LAST_MESSAGE", "yes")
     await commands.delete_this_message(message)
