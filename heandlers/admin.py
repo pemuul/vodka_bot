@@ -87,10 +87,12 @@ async def except_message(message: Message, except_message_name: str):
         tree_data.redirect = set_id
 
         new_redirect_name = tree_redirect.key
+        if new_redirect_name == 'menu':
+            new_redirect_name = 'В меню'
         while tree_item.next_layers.get(new_redirect_name):
             name_use = tree_item.next_layers.get(new_redirect_name)
             new_redirect_name = name_use.key + '1'
-            
+
         tree_data.key = new_redirect_name
         tree_item.next_layers[new_redirect_name] = tree_data
 

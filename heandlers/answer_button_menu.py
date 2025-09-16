@@ -70,43 +70,51 @@ async def menu_text_handler(message: Message):
         await commands.delete_this_message(message)
         return
 
-    next_item = tree_item.next_layers.get(message.text)
+    selected_text = message.text
+    if (
+        selected_text == 'В меню'
+        and selected_text not in tree_item.next_layers
+        and 'menu' in tree_item.next_layers
+    ):
+        selected_text = 'menu'
+
+    next_item = tree_item.next_layers.get(selected_text)
     if next_item:
         await menu.get_message(message, path=next_item.path, replace=False)
         await commands.delete_this_message(message)
         return
 
-    if message.text == 'Закрепить 📌':
-        path_text = _build_menu_text(path)
-        pin_text = '📌\n\n' + path_text
-
-        await sql_mgt.set_param(message.chat.id, 'LAST_MEDIA_LIST', '')
-        await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', '')
-        await sql_mgt.set_param(message.chat.id, 'LAST_MESSAGE_ID', '0')
-
-        try:
-            # Try to remove any previously pinned message
-            try:
-                await global_objects.bot.unpin_chat_message(chat_id=message.chat.id)
-            except Exception as e:
-                # It's fine if there was nothing to unpin
-                print(f'Ошибка при откреплении: {e}')
-
-            pin_message = await message.answer(
-                pin_text,
-                disable_notification=True,
-            )
-            await global_objects.bot.pin_chat_message(
-                chat_id=message.chat.id,
-                message_id=pin_message.message_id,
-                disable_notification=True,
-            )
-        except Exception as e:
-            print(f'Ошибка при закреплении: {e}')
-
-        await menu.get_message(message, path=path, replace=False)
-        await commands.delete_this_message(message)
-        return
+    # if message.text == 'Закрепить 📌':
+    #     path_text = _build_menu_text(path)
+    #     pin_text = '📌\n\n' + path_text
+    #
+    #     await sql_mgt.set_param(message.chat.id, 'LAST_MEDIA_LIST', '')
+    #     await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', '')
+    #     await sql_mgt.set_param(message.chat.id, 'LAST_MESSAGE_ID', '0')
+    #
+    #     try:
+    #         # Try to remove any previously pinned message
+    #         try:
+    #             await global_objects.bot.unpin_chat_message(chat_id=message.chat.id)
+    #         except Exception as e:
+    #             # It's fine if there was nothing to unpin
+    #             print(f'Ошибка при откреплении: {e}')
+    #
+    #         pin_message = await message.answer(
+    #             pin_text,
+    #             disable_notification=True,
+    #         )
+    #         await global_objects.bot.pin_chat_message(
+    #             chat_id=message.chat.id,
+    #             message_id=pin_message.message_id,
+    #             disable_notification=True,
+    #         )
+    #     except Exception as e:
+    #         print(f'Ошибка при закреплении: {e}')
+    #
+    #     await menu.get_message(message, path=path, replace=False)
+    #     await commands.delete_this_message(message)
+    #     return
 
     # If message wasn't recognized as a menu command, delegate to generic text handler
     await text_heandler.set_text(message)
