@@ -17,7 +17,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from databases import Database
 import sqlalchemy
-from sqlalchemy import MetaData, Table, create_engine
+from sqlalchemy import MetaData, Table, create_engine, text
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import sessionmaker
 from typing import List, Optional, Dict, Any, Tuple
@@ -86,6 +86,13 @@ HAS_QM_IS_ANSWER = 'is_answer' in question_messages_table.c
 HAS_SM_MEDIA = 'media' in scheduled_messages_table.c
 HAS_PDW_RECEIPT_ID = 'receipt_id' in prize_draw_winners_table.c
 receipts_table             = Table("receipts", metadata, autoload_with=engine)
+if "comment" not in receipts_table.c:
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE receipts ADD COLUMN comment TEXT"))
+    except Exception:
+        pass
+    receipts_table = Table("receipts", metadata, autoload_with=engine, extend_existing=True)
 images_table               = Table("images", metadata, autoload_with=engine)
 deleted_images_table       = Table("deleted_images", metadata, autoload_with=engine)
 notifications_table        = Table("notifications", metadata, autoload_with=engine)
@@ -101,6 +108,10 @@ def has_receipt_msg_id() -> bool:
 def has_receipt_draw_id() -> bool:
     """Return True if the receipts table has a 'draw_id' column."""
     return 'draw_id' in receipts_table.c
+
+def has_receipt_comment() -> bool:
+    """Return True if the receipts table has a 'comment' column."""
+    return 'comment' in receipts_table.c
 
 # Подготовка automap для ORM-классов
 Base = automap_base(metadata=metadata)
@@ -1289,6 +1300,7 @@ async def receipts(request: Request):
                 "user_name": r.get("user_name"),
                 "file_path": file_path,
                 "status": r.get("status") if has_receipt_status() else None,
+                "comment": r.get("comment") if has_receipt_comment() else None,
                 "draw_id": r.get("draw_id") if has_receipt_draw_id() else None,
                 "draw_title": r.get("draw_title"),
             }
@@ -1345,6 +1357,7 @@ async def get_receipt(receipt_id: int):
         "file_path": file_path,
         "status": r.get("status") if has_receipt_status() else None,
         "message_id": r.get("message_id") if has_receipt_msg_id() else None,
+        "comment": r.get("comment") if has_receipt_comment() else None,
         "draw_id": r.get("draw_id") if has_receipt_draw_id() else None,
         "draw_title": r.get("draw_title"),
     }
@@ -1352,6 +1365,7 @@ async def get_receipt(receipt_id: int):
 class ReceiptUpdate(BaseModel):
     status: str
     draw_id: Optional[int] = None
+    comment: Optional[str] = None
 
 @app.post("/api/receipts/{receipt_id}")
 async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
@@ -1361,6 +1375,8 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
     update_values = {"status": upd.status}
     if has_receipt_draw_id():
         update_values["draw_id"] = upd.draw_id
+    if has_receipt_comment() and upd.comment is not None:
+        update_values["comment"] = upd.comment
     await database.execute(
         receipts_table.update()
         .where(receipts_table.c.id == receipt_id)
@@ -1377,11 +1393,6 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
             status_messages = {
                 "Подтверждён": "Чек подтверждён",
                 "Нет товара в чеке": "В чеке не найден нужный товар",
-                "Ошибка": "Ошибка при обработке чека",
-                "Чек уже загружен": "Чек уже был загружен",
-                "Отменён": "Чек отклонён",
-                "Распознан": "Чек принят!",
-                "Не распознан": "Чек не распознан",
             }
             text = status_messages.get(upd.status)
             if text:

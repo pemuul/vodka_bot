@@ -1203,6 +1203,35 @@ async def update_receipt_status(receipt_id: int, status: str, conn=None) -> str 
 
 
 @with_connection
+async def ensure_receipt_comment_column(conn=None) -> bool:
+    """Make sure the receipts table has a comment column."""
+    schema = await get_table_info(conn, "receipts")
+    if "comment" in schema:
+        return True
+    try:
+        await conn.execute("ALTER TABLE receipts ADD COLUMN comment TEXT")
+        await conn.commit()
+    except Exception:
+        # The column may already exist or ALTER TABLE might not be supported.
+        pass
+    schema = await get_table_info(conn, "receipts")
+    return "comment" in schema
+
+
+@with_connection
+async def update_receipt_comment(receipt_id: int, comment: Optional[str], conn=None) -> None:
+    """Update the comment column for a receipt if the schema supports it."""
+    if not await ensure_receipt_comment_column(conn=conn):
+        return
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "UPDATE receipts SET comment = ? WHERE id = ?",
+        (comment, receipt_id),
+    )
+    await conn.commit()
+
+
+@with_connection
 async def update_receipt_qr(receipt_id: int, qr: str, conn=None) -> None:
     """Set QR code string for a receipt."""
     cursor = await conn.cursor()
