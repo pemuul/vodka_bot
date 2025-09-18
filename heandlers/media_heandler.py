@@ -36,32 +36,40 @@ def init_object(global_objects_inp):
     sql_mgt.init_object(global_objects_inp)
 
 
-def _analyze_check(path: str, keywords: list[str]):
-    """Detect QR code and run OCR to see if keywords are present."""
+def _detect_qr(path: str) -> str | None:
+    """Detect QR code, returning its payload if any."""
     img = cv2.imread(path)
     if img is None:
-        return None, False
+        return None
 
-    qr_data = None
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     decoded_objects = decode(gray, symbols=[ZBarSymbol.QRCODE])
     if decoded_objects:
-        qr_data = decoded_objects[0].data.decode("utf-8")
-    else:
-        detector = cv2.QRCodeDetector()
-        data, points, _ = detector.detectAndDecode(gray)
-        if points is not None and data:
-            qr_data = data.strip()
-    if qr_data is None:
-        qr_data = _enhanced_qr(gray)
+        return decoded_objects[0].data.decode("utf-8")
 
+    detector = cv2.QRCodeDetector()
+    data, points, _ = detector.detectAndDecode(gray)
+    if points is not None and data:
+        return data.strip()
+
+    return _enhanced_qr(gray)
+
+
+def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str | None]:
+    """Use OCR to search for configured keywords inside receipt image."""
+    img = cv2.imread(path)
+    if img is None:
+        return False, "изображение не прочитано"
+    if not keywords:
+        return False, "ключевые слова не настроены"
     try:
         text = extract_text(img)
     except Exception:
-        text = ""
+        return False, "ошибка OCR"
+
     lower = text.casefold()
     vodka = any(k in lower for k in keywords)
-    return qr_data, vodka
+    return vodka, None
 
 
 def _enhanced_qr(gray):
@@ -131,12 +139,12 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
             parts.append(" – " + "; ".join(extras))
         return "".join(parts)
 
-    qr_data, vodka = await loop.run_in_executor(
+    qr_data = await loop.run_in_executor(
         global_objects.ocr_pool,
-        _analyze_check,
+        _detect_qr,
         str(dest),
-        keywords,
     )
+    ocr_result: tuple[bool, str | None] | None = None
     final_status = None
     comment_text: str | None = None
     notify_messages = {
@@ -180,12 +188,25 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
         vision_extra = "QR не распознан"
 
     if use_vision:
-        if vodka:
+        if ocr_result is None:
+            ocr_result = await loop.run_in_executor(
+                global_objects.ocr_pool,
+                _check_keywords_with_ocr,
+                str(dest),
+                keywords,
+            )
+        vodka_by_vision, vision_issue = ocr_result
+        if vodka_by_vision:
             final_status = "Подтверждён"
             comment_text = build_comment("Подтверждён", "по распознаванию чека", vision_extra)
         else:
+            details = ["по распознаванию чека", vision_extra]
+            if vision_issue:
+                details.append(vision_issue)
+            else:
+                details.append("товар не найден")
             final_status = "Ошибка"
-            comment_text = build_comment("Ошибка", "по распознаванию чека", vision_extra, "товар не найден")
+            comment_text = build_comment("Ошибка", *details)
 
     if final_status is None:
         final_status = "Ошибка"
