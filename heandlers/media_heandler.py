@@ -132,13 +132,6 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     keywords_raw = await sql_mgt.get_param(0, 'product_keywords') or ''
     keywords = [k.strip().casefold() for k in keywords_raw.split(';') if k.strip()]
 
-    def build_comment(status: str, *details: str | None) -> str:
-        parts = [f"Бот: {status}"]
-        extras = [detail for detail in details if detail]
-        if extras:
-            parts.append(" – " + "; ".join(extras))
-        return "".join(parts)
-
     qr_data = await loop.run_in_executor(
         global_objects.ocr_pool,
         _detect_qr,
@@ -146,20 +139,16 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     )
     ocr_result: tuple[bool, str | None] | None = None
     final_status = None
-    comment_text: str | None = None
     notify_messages = {
         "Подтверждён": "✅ Чек подтверждён",
         "Нет товара в чеке": "❌ Нет товара в чеке",
     }
     use_vision = False
-    vision_extra: str | None = None
     if qr_data:
         existing = await sql_mgt.find_receipt_by_qr(qr_data)
         if existing and existing != receipt_id:
             await sql_mgt.update_receipt_qr(receipt_id, qr_data)
             await sql_mgt.update_receipt_status(receipt_id, "Чек уже загружен")
-            duplicate_comment = build_comment("Чек уже загружен", "найден дубликат по QR")
-            await sql_mgt.update_receipt_comment(receipt_id, duplicate_comment)
             await global_objects.bot.send_message(
                 chat_id,
                 "❌ Чек уже загружен",
@@ -176,16 +165,12 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
             vodka_found = None
         if vodka_found is None:
             use_vision = True
-            vision_extra = "ФНС вернула ошибку"
         elif vodka_found:
             final_status = "Подтверждён"
-            comment_text = build_comment("Подтверждён", "по данным ФНС")
         else:
             final_status = "Нет товара в чеке"
-            comment_text = build_comment("Нет товара в чеке", "по данным ФНС")
     else:
         use_vision = True
-        vision_extra = "QR не распознан"
 
     if use_vision:
         if ocr_result is None:
@@ -195,26 +180,16 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
                 str(dest),
                 keywords,
             )
-        vodka_by_vision, vision_issue = ocr_result
+        vodka_by_vision, _ = ocr_result
         if vodka_by_vision:
             final_status = "Подтверждён"
-            comment_text = build_comment("Подтверждён", "по распознаванию чека", vision_extra)
         else:
-            details = ["по распознаванию чека", vision_extra]
-            if vision_issue:
-                details.append(vision_issue)
-            else:
-                details.append("товар не найден")
             final_status = "Ошибка"
-            comment_text = build_comment("Ошибка", *details)
 
     if final_status is None:
         final_status = "Ошибка"
-    if comment_text is None:
-        comment_text = build_comment(final_status, vision_extra)
 
     await sql_mgt.update_receipt_status(receipt_id, final_status)
-    await sql_mgt.update_receipt_comment(receipt_id, comment_text)
 
     user_message = notify_messages.get(final_status)
     if user_message:

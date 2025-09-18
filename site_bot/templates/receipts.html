@@ -46,7 +46,7 @@
               <th>Пользователь</th>
               <th>Статус</th>
               <th>Розыгрыш</th>
-              <th>Комментарий</th>
+              <!-- <th>Комментарий</th> -->
               <th>Действия</th>
             </tr>
           </thead>
@@ -106,10 +106,12 @@
                 <option value="Ошибка">Ошибка</option>
               </select>
             </li>
+            <!--
             <li class="list-group-item">
               <strong>Комментарий:</strong>
               <textarea id="receipt-comment" class="form-control form-control-sm mt-2" rows="3"></textarea>
             </li>
+            -->
             <li class="list-group-item">
               <strong>Розыгрыш:</strong>
               <select id="receipt-draw" class="form-select form-select-sm d-inline-block w-auto ms-2"></select>
@@ -138,7 +140,7 @@
       const paginationUl = document.getElementById("pagination-ul");
       const receiptImg = document.getElementById("receipt-img");
       const statusSelect = document.getElementById('receipt-status');
-      const commentInput = document.getElementById('receipt-comment');
+      // const commentInput = document.getElementById('receipt-comment');
       const drawSelect = document.getElementById('receipt-draw');
 
       const allowedStatuses = [
@@ -159,7 +161,7 @@
           .replace(/'/g, '&#39;');
       };
 
-      const formatComment = (value) => escapeHtml(value).replace(/\n/g, '<br>');
+      // const formatComment = (value) => escapeHtml(value).replace(/\n/g, '<br>');
 
       const ensureStatusOption = (value) => {
         if (!value || allowedStatuses.includes(value)) {
@@ -280,7 +282,7 @@
             <td>${userLink}</td>
             <td>${r.status ?? ''}</td>
             <td>${r.draw_title ?? ''}</td>
-            <td>${formatComment(r.comment)}</td>
+            <!-- <td>${formatComment(r.comment)}</td> -->
             <td><button class="btn btn-sm btn-outline-danger btn-del">Удалить</button></td>`;
           tr.onclick = () => {
             if (r.id == null || r.id === 'null') return;
@@ -302,7 +304,7 @@
                 }
                 drawSelect.innerHTML = '<option value="">---</option>' + draws.map(d=>`<option value="${d.id}">${d.title}</option>`).join('');
                 drawSelect.value = rec.draw_id ?? '';
-                commentInput.value = rec.comment ?? '';
+                // commentInput.value = rec.comment ?? '';
                 document.getElementById('go-dialog').onclick = () => {
                   window.location.href = `/participants?open=${rec.user_tg_id}`;
                 };
@@ -334,11 +336,11 @@
         if (currentReceiptId === null) return;
         const status = statusSelect.value;
         const drawId = drawSelect.value || null;
-        const comment = commentInput.value;
+        // const comment = commentInput.value;
         fetch(`/api/receipts/${currentReceiptId}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status, draw_id: drawId, comment })
+          body: JSON.stringify({ status, draw_id: drawId })
         }).then(() => {
           const idx = data.findIndex(x => x.id === currentReceiptId);
           if (idx !== -1) {
@@ -346,7 +348,7 @@
             data[idx].draw_id = drawId ? parseInt(drawId) : null;
             const draw = draws.find(d => String(d.id) === drawId);
             data[idx].draw_title = draw ? draw.title : '';
-            data[idx].comment = comment;
+            // data[idx].comment = comment;
           }
           applyFilter();
           render();
@@ -381,7 +383,7 @@
               }
               drawSelect.innerHTML = '<option value="">---</option>' + draws.map(d => `<option value="${d.id}">${d.title}</option>`).join('');
               drawSelect.value = recData.draw_id ?? '';
-              commentInput.value = recData.comment ?? '';
+              // commentInput.value = recData.comment ?? '';
               document.getElementById('go-dialog').onclick = () => {
                 window.location.href = `/participants?open=${recData.user_tg_id}`;
               };
