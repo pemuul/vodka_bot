@@ -161,7 +161,10 @@
           .replace(/'/g, '&#39;');
       };
 
-      // const formatComment = (value) => escapeHtml(value).replace(/\n/g, '<br>');
+      const formatComment = (value) => {
+        if (value === null || value === undefined) return '';
+        return escapeHtml(value).replace(/\n/g, '<br>');
+      };
 
       const ensureStatusOption = (value) => {
         if (!value || allowedStatuses.includes(value)) {
