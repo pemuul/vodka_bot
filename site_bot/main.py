@@ -24,6 +24,7 @@ from typing import List, Optional, Dict, Any, Tuple
 import datetime
 from pydantic import BaseModel
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+import logging
 
 # Админ-панель через SQLAdmin
 from sqladmin import Admin, ModelView
@@ -46,6 +47,27 @@ DATABASE_URL = "sqlite:///../../tg_base.sqlite"
 database = Database(DATABASE_URL)
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 metadata = MetaData()
+logger = logging.getLogger(__name__)
+
+
+def _ensure_receipts_comment_column() -> None:
+    """Ensure the receipts table contains the comment column."""
+    try:
+        with engine.begin() as conn:
+            table_exists = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='receipts'")
+            ).fetchone()
+            if not table_exists:
+                return
+            columns = conn.execute(text("PRAGMA table_info(receipts)")).fetchall()
+            if any(col[1] == "comment" for col in columns):
+                return
+            conn.execute(text("ALTER TABLE receipts ADD COLUMN comment TEXT"))
+    except Exception:
+        logger.exception("Failed to ensure receipts.comment column exists")
+
+
+_ensure_receipts_comment_column()
 
 # Рефлексия всех таблиц
 metadata.reflect(bind=engine)
@@ -86,14 +108,6 @@ HAS_QM_IS_ANSWER = 'is_answer' in question_messages_table.c
 HAS_SM_MEDIA = 'media' in scheduled_messages_table.c
 HAS_PDW_RECEIPT_ID = 'receipt_id' in prize_draw_winners_table.c
 receipts_table             = Table("receipts", metadata, autoload_with=engine)
-# Временно отключаем поддержку поля comment для чеков.
-# if "comment" not in receipts_table.c:
-#     try:
-#         with engine.begin() as conn:
-#             conn.execute(text("ALTER TABLE receipts ADD COLUMN comment TEXT"))
-#     except Exception:
-#         pass
-#     receipts_table = Table("receipts", metadata, autoload_with=engine, extend_existing=True)
 images_table               = Table("images", metadata, autoload_with=engine)
 deleted_images_table       = Table("deleted_images", metadata, autoload_with=engine)
 notifications_table        = Table("notifications", metadata, autoload_with=engine)
