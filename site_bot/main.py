@@ -478,7 +478,9 @@ async def api_determine_winners(stage_id: int, req: DetermineReq):
         )
     )
     if has_receipt_status():
-        query = query.where(receipts_table.c.status == "Распознан")
+        query = query.where(
+            receipts_table.c.status.in_(["Подтверждён", "Распознан"])
+        )
 
     receipts_rows = await database.fetch_all(query)
     if not receipts_rows:
@@ -591,18 +593,30 @@ async def api_draw_stage_test_mailing(stage_id: int):
 
 @app.get("/api/notifications")
 async def api_notifications():
-    """Return receipts with status 'Не распознан' and unanswered questions."""
+    """Return receipts with problem receipts and unanswered questions."""
     notifications = []
 
     if has_receipt_status():
+        problematic_statuses = [
+            "Нет товара в чеке",
+            "Ошибка",
+            "Не распознан",
+        ]
         rec_rows = await database.fetch_all(
             sqlalchemy.select(
                 receipts_table.c.id,
                 receipts_table.c.number,
-            ).where(receipts_table.c.status == "Не распознан")
+                receipts_table.c.status,
+            ).where(receipts_table.c.status.in_(problematic_statuses))
         )
+        status_text = {
+            "Нет товара в чеке": "нет нужного товара",
+            "Ошибка": "ошибка обработки",
+            "Не распознан": "не распознан",
+        }
         for r in rec_rows:
-            text = f"Чек {r['number'] or r['id']} не распознан"
+            descr = status_text.get(r["status"], r["status"].lower())
+            text = f"Чек {r['number'] or r['id']} – {descr}"
             notifications.append({
                 "type": "receipt",
                 "id": r["id"],
@@ -1360,10 +1374,16 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
     ):
         if old_row.get("message_id") and old_row.get("user_tg_id"):
             text = None
-            if upd.status == "Распознан":
-                text = "Чек принят!"
-            elif upd.status == "Отменён":
-                text = "Чек отклонён"
+            status_messages = {
+                "Подтверждён": "Чек подтверждён",
+                "Нет товара в чеке": "В чеке не найден нужный товар",
+                "Ошибка": "Ошибка при обработке чека",
+                "Чек уже загружен": "Чек уже был загружен",
+                "Отменён": "Чек отклонён",
+                "Распознан": "Чек принят!",
+                "Не распознан": "Чек не распознан",
+            }
+            text = status_messages.get(upd.status)
             if text:
                 try:
                     await bot.send_message(

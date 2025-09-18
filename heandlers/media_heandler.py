@@ -37,7 +37,7 @@ def init_object(global_objects_inp):
 
 
 def _analyze_check(path: str, keywords: list[str]):
-    """Detect QR code first; fall back to OCR for keyword search."""
+    """Detect QR code and run OCR to see if keywords are present."""
     img = cv2.imread(path)
     if img is None:
         return None, False
@@ -55,12 +55,10 @@ def _analyze_check(path: str, keywords: list[str]):
     if qr_data is None:
         qr_data = _enhanced_qr(gray)
 
-    text = ""
-    if qr_data is None:
-        try:
-            text = extract_text(img)
-        except Exception:
-            text = ""
+    try:
+        text = extract_text(img)
+    except Exception:
+        text = ""
     lower = text.casefold()
     vodka = any(k in lower for k in keywords)
     return qr_data, vodka
@@ -104,11 +102,11 @@ def _enhanced_qr(gray):
     return None
 
 
-def _check_vodka_in_receipt(qr_data: str, keywords: list[str]) -> bool:
+def _check_vodka_in_receipt(qr_data: str, keywords: list[str]) -> bool | None:
     """Call FNS service and search receipt items for configured products."""
     data = get_receipt_by_qr(qr_data)
     if not data:
-        return False
+        return None
     items = (
         data.get("items")
         or data.get("content", {}).get("items")
@@ -123,39 +121,67 @@ def _check_vodka_in_receipt(qr_data: str, keywords: list[str]) -> bool:
 
 async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int):
     loop = asyncio.get_running_loop()
-    keywords_raw = await sql_mgt.get_param(0, 'product_keywords')
+    keywords_raw = await sql_mgt.get_param(0, 'product_keywords') or ''
     keywords = [k.strip().casefold() for k in keywords_raw.split(';') if k.strip()]
-    qr_data, vodka = await loop.run_in_executor(global_objects.ocr_pool, _analyze_check, str(dest), keywords)
-    vodka_found = False
+    qr_data, vodka = await loop.run_in_executor(
+        global_objects.ocr_pool,
+        _analyze_check,
+        str(dest),
+        keywords,
+    )
+    final_status = None
+    user_message = None
+    use_vision = False
     if qr_data:
         existing = await sql_mgt.find_receipt_by_qr(qr_data)
         if existing and existing != receipt_id:
             await sql_mgt.update_receipt_qr(receipt_id, qr_data)
-            await sql_mgt.update_receipt_status(receipt_id, "Этот чек уже принят!")
+            await sql_mgt.update_receipt_status(receipt_id, "Чек уже загружен")
             await global_objects.bot.send_message(
                 chat_id,
-                "❌ Уже участвует",
+                "❌ Чек уже загружен",
                 reply_to_message_id=msg_id,
             )
             return
         await sql_mgt.update_receipt_qr(receipt_id, qr_data)
         try:
-            vodka_found = await loop.run_in_executor(None, _check_vodka_in_receipt, qr_data, keywords)
-        except Exception as e:
-            await global_objects.bot.send_message(
-                chat_id,
-                f"Ошибка при проверке QR через ФНС: {e}",
-                reply_to_message_id=msg_id,
+            vodka_found = await loop.run_in_executor(
+                None, _check_vodka_in_receipt, qr_data, keywords
             )
-            vodka_found = False
-    elif vodka:
-        vodka_found = True
-    if vodka_found:
-        await global_objects.bot.send_message(chat_id, "Чек принят!", reply_to_message_id=msg_id)
-        status = "Распознан"
+        except Exception as exc:
+            print(f"FNS check failed for receipt {receipt_id}: {exc}")
+            vodka_found = None
+        if vodka_found is None:
+            use_vision = True
+        elif vodka_found:
+            final_status = "Подтверждён"
+            user_message = "✅ Чек подтверждён"
+        else:
+            final_status = "Нет товара в чеке"
+            user_message = "❌ Нет товара в чеке"
     else:
-        status = "Не распознан"
-    await sql_mgt.update_receipt_status(receipt_id, status)
+        use_vision = True
+
+    if use_vision:
+        if vodka:
+            final_status = "Подтверждён"
+            user_message = "✅ Чек подтверждён"
+        else:
+            final_status = "Ошибка"
+            user_message = "❌ Ошибка при обработке чека"
+
+    if final_status is None:
+        final_status = "Ошибка"
+        if user_message is None:
+            user_message = "❌ Ошибка при обработке чека"
+
+    await sql_mgt.update_receipt_status(receipt_id, final_status)
+    if user_message:
+        await global_objects.bot.send_message(
+            chat_id,
+            user_message,
+            reply_to_message_id=msg_id,
+        )
 
 
 @router.message(F.photo)
