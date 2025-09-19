@@ -1249,17 +1249,67 @@ def _build_receipts_table_sql(table_name: str) -> str:
     return f"CREATE TABLE {table_name} ({columns_definition})"
 
 
+def _normalise_receipt_id_value(raw_id, used_ids: set[int]) -> Optional[int]:
+    """Return a positive, unused integer id or None to autogenerate."""
+    normalized_id: Optional[int] = None
+    if isinstance(raw_id, int) and not isinstance(raw_id, bool):
+        normalized_id = raw_id if raw_id > 0 else None
+    elif isinstance(raw_id, (str, bytes)):
+        text = raw_id.decode() if isinstance(raw_id, bytes) else raw_id
+        text = text.strip()
+        if text:
+            try:
+                candidate = int(text)
+            except ValueError:
+                candidate = None
+            else:
+                normalized_id = candidate if candidate > 0 else None
+    else:
+        try:
+            candidate = int(raw_id)
+        except (TypeError, ValueError):
+            candidate = None
+        else:
+            normalized_id = candidate if candidate > 0 else None
+
+    if normalized_id is None or normalized_id in used_ids:
+        return None
+    used_ids.add(normalized_id)
+    return normalized_id
+
+
+def _prepare_receipt_rows(rows: Iterable[Iterable]) -> list[tuple]:
+    used_ids: set[int] = set()
+    sanitized_rows: list[tuple] = []
+    for row in rows:
+        mutable_row = list(row)
+        mutable_row[0] = _normalise_receipt_id_value(mutable_row[0], used_ids)
+        sanitized_rows.append(tuple(mutable_row))
+    return sanitized_rows
+
+
 def _rebuild_receipts_table_sync(
     conn: sqlite3.Connection, existing_columns: Iterable[str]
 ) -> None:
     conn.execute("DROP TABLE IF EXISTS receipts_new")
     conn.execute(_build_receipts_table_sql("receipts_new"))
     select_parts = _receipt_select_columns(existing_columns)
-    insert_sql = (
-        f"INSERT INTO receipts_new ({', '.join(RECEIPT_COLUMN_NAMES)}) "
+    cursor = conn.execute(
         f"SELECT {', '.join(select_parts)} FROM receipts"
     )
-    conn.execute(insert_sql)
+    rows = cursor.fetchall()
+    cursor.close()
+
+    sanitized_rows = _prepare_receipt_rows(rows)
+
+    if sanitized_rows:
+        placeholders = ", ".join(["?"] * len(RECEIPT_COLUMN_NAMES))
+        insert_sql = (
+            f"INSERT INTO receipts_new ({', '.join(RECEIPT_COLUMN_NAMES)}) "
+            f"VALUES ({placeholders})"
+        )
+        conn.executemany(insert_sql, sanitized_rows)
+
     conn.execute("DROP TABLE receipts")
     conn.execute("ALTER TABLE receipts_new RENAME TO receipts")
     conn.commit()
@@ -1269,11 +1319,22 @@ async def _rebuild_receipts_table_async(conn, existing_columns: Iterable[str]) -
     await conn.execute("DROP TABLE IF EXISTS receipts_new")
     await conn.execute(_build_receipts_table_sql("receipts_new"))
     select_parts = _receipt_select_columns(existing_columns)
-    insert_sql = (
-        f"INSERT INTO receipts_new ({', '.join(RECEIPT_COLUMN_NAMES)}) "
+    cursor = await conn.execute(
         f"SELECT {', '.join(select_parts)} FROM receipts"
     )
-    await conn.execute(insert_sql)
+    rows = await cursor.fetchall()
+    await cursor.close()
+
+    sanitized_rows = _prepare_receipt_rows(rows)
+
+    if sanitized_rows:
+        placeholders = ", ".join(["?"] * len(RECEIPT_COLUMN_NAMES))
+        insert_sql = (
+            f"INSERT INTO receipts_new ({', '.join(RECEIPT_COLUMN_NAMES)}) "
+            f"VALUES ({placeholders})"
+        )
+        await conn.executemany(insert_sql, sanitized_rows)
+
     await conn.execute("DROP TABLE receipts")
     await conn.execute("ALTER TABLE receipts_new RENAME TO receipts")
     await conn.commit()
