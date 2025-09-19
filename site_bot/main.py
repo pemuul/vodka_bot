@@ -17,7 +17,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from databases import Database
 import sqlalchemy
-from sqlalchemy import MetaData, Table, create_engine, text
+from sqlalchemy import MetaData, Table, create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import sessionmaker
 from typing import List, Optional, Dict, Any, Tuple
@@ -37,6 +38,8 @@ import csv
 import io
 from decimal import Decimal
 
+from sql_mgt import ensure_receipt_comment_column_sync
+
 # aiogram is imported lazily when sending messages
 
 # ==============================
@@ -50,24 +53,19 @@ metadata = MetaData()
 logger = logging.getLogger(__name__)
 
 
-def _ensure_receipts_comment_column() -> None:
-    """Ensure the receipts table contains the comment column."""
+def _ensure_receipts_schema() -> None:
+    """Ensure the receipts table has the expected primary key and comment column."""
     try:
-        with engine.begin() as conn:
-            table_exists = conn.execute(
-                text("SELECT name FROM sqlite_master WHERE type='table' AND name='receipts'")
-            ).fetchone()
-            if not table_exists:
-                return
-            columns = conn.execute(text("PRAGMA table_info(receipts)")).fetchall()
-            if any(col[1] == "comment" for col in columns):
-                return
-            conn.execute(text("ALTER TABLE receipts ADD COLUMN comment TEXT"))
+        db_path = make_url(DATABASE_URL).database or ""
+        db_file = Path(db_path)
+        if not db_file.is_absolute():
+            db_file = (Path(__file__).resolve().parent / db_file).resolve()
+        ensure_receipt_comment_column_sync(str(db_file))
     except Exception:
-        logger.exception("Failed to ensure receipts.comment column exists")
+        logger.exception("Failed to ensure receipts schema")
 
 
-_ensure_receipts_comment_column()
+_ensure_receipts_schema()
 
 # Рефлексия всех таблиц
 metadata.reflect(bind=engine)

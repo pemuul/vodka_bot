@@ -1183,6 +1183,7 @@ async def add_receipt(
 ) -> int:
     """Сохранить чек пользователя."""
     cursor = await conn.cursor()
+    await ensure_receipt_comment_column(conn=conn)
     schema = await get_table_info(conn, "receipts")
     fields = ["number", "date", "amount", "user_tg_id"]
     values = [number, date, amount, user_tg_id]
@@ -1208,6 +1209,7 @@ async def add_receipt(
 @with_connection
 async def update_receipt_status(receipt_id: int, status: str, conn=None) -> str | None:
     """Update status field for a receipt. Returns previous status."""
+    await ensure_receipt_comment_column(conn=conn)
     cursor = await conn.cursor()
     await cursor.execute(
         "SELECT status FROM receipts WHERE id = ?",
