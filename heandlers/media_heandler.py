@@ -1,5 +1,6 @@
 from aiogram import Router,  F
 import asyncio
+import logging
 from aiogram.types import Message
 import time
 import random
@@ -22,6 +23,7 @@ from ocr import extract_text
 
 
 router = Router()
+logger = logging.getLogger(__name__)
 global_objects = None
 UPLOAD_DIR_CHECKS = Path(__file__).resolve().parent.parent / "site_bot" / "static" / "uploads"
 UPLOAD_DIR_CHECKS.mkdir(parents=True, exist_ok=True)
@@ -38,19 +40,25 @@ def init_object(global_objects_inp):
 
 def _detect_qr(path: str) -> str | None:
     """Detect QR code, returning its payload if any."""
+    logger.info("[QR] Starting detection for %s", path)
     img = cv2.imread(path)
     if img is None:
+        logger.warning("[QR] Failed to read image %s", path)
         return None
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     decoded_objects = decode(gray, symbols=[ZBarSymbol.QRCODE])
     if decoded_objects:
-        return decoded_objects[0].data.decode("utf-8")
+        data = decoded_objects[0].data.decode("utf-8")
+        logger.info("[QR] Found QR via pyzbar: %s", data)
+        return data
 
     detector = cv2.QRCodeDetector()
     data, points, _ = detector.detectAndDecode(gray)
     if points is not None and data:
-        return data.strip()
+        decoded = data.strip()
+        logger.info("[QR] Found QR via cv2.QRCodeDetector: %s", decoded)
+        return decoded
 
     return _enhanced_qr(gray)
 
@@ -75,6 +83,7 @@ def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str 
 def _enhanced_qr(gray):
     """Attempt to decode difficult QR codes by rotating, scaling,
     thresholding, and using optional ZXing-based readers."""
+    logger.info("[QR] Entering enhanced QR detection")
     detector = cv2.QRCodeDetector()
     rotate_codes = [None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE]
     for rc in rotate_codes:
@@ -88,15 +97,21 @@ def _enhanced_qr(gray):
         ):
             decoded = decode(processed, symbols=[ZBarSymbol.QRCODE])
             if decoded:
-                return decoded[0].data.decode("utf-8")
+                data = decoded[0].data.decode("utf-8")
+                logger.info("[QR] Enhanced pyzbar success (rotation=%s): %s", rc, data)
+                return data
             data, points, _ = detector.detectAndDecode(processed)
             if points is not None and data:
-                return data.strip()
+                decoded = data.strip()
+                logger.info("[QR] Enhanced cv2 detector success (rotation=%s): %s", rc, decoded)
+                return decoded
     try:
         import zxingcpp  # type: ignore
         results = zxingcpp.read_barcodes(gray)
         if results:
-            return results[0].text
+            data = results[0].text
+            logger.info("[QR] ZXingCPP success: %s", data)
+            return data
     except Exception:
         pass
     try:
@@ -104,9 +119,12 @@ def _enhanced_qr(gray):
         reader = BarCodeReader()
         res = reader.decode_array(gray)
         if res and 'parsed' in res[0]:
-            return res[0]['parsed']
+            data = res[0]['parsed']
+            logger.info("[QR] pyzxing success: %s", data)
+            return data
     except Exception:
         pass
+    logger.info("[QR] QR not detected by any method")
     return None
 
 
@@ -132,11 +150,16 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     keywords_raw = await sql_mgt.get_param(0, 'product_keywords') or ''
     keywords = [k.strip().casefold() for k in keywords_raw.split(';') if k.strip()]
 
+    logger.info("[QR] Processing receipt %s from %s", receipt_id, dest)
     qr_data = await loop.run_in_executor(
         global_objects.ocr_pool,
         _detect_qr,
         str(dest),
     )
+    if qr_data:
+        logger.info("[QR] Receipt %s QR detected: %s", receipt_id, qr_data)
+    else:
+        logger.info("[QR] Receipt %s QR not detected", receipt_id)
     ocr_result: tuple[bool, str | None] | None = None
     final_status: str | None = None
     comment_text: str | None = None
@@ -148,6 +171,7 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     use_vision = False
     if qr_data:
         existing = await sql_mgt.find_receipt_by_qr(qr_data)
+        logger.info("[QR] Receipt %s checking duplicate status: %s", receipt_id, existing)
         if existing and existing != receipt_id:
             await sql_mgt.update_receipt_qr(receipt_id, qr_data)
             comment_text = "Бот: чек с таким QR уже загружен"
@@ -170,6 +194,7 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
         except Exception as exc:
             print(f"FNS check failed for receipt {receipt_id}: {exc}")
             vodka_found = None
+        logger.info("[QR] Receipt %s FNS result: %s", receipt_id, vodka_found)
         if vodka_found is None:
             fns_result = "error"
             use_vision = True
@@ -193,6 +218,12 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
                 keywords,
             )
         vodka_by_vision, vision_error = ocr_result
+        logger.info(
+            "[QR] Receipt %s OCR fallback result: vodka_by_vision=%s error=%s",
+            receipt_id,
+            vodka_by_vision,
+            vision_error,
+        )
         if vodka_by_vision:
             final_status = "Подтверждён"
             if qr_data:
@@ -231,6 +262,12 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     if comment_text is None:
         comment_text = f"Бот: автоматическая обработка завершилась со статусом \"{final_status}\""
 
+    logger.info(
+        "[QR] Receipt %s final status: %s (comment=%s)",
+        receipt_id,
+        final_status,
+        comment_text,
+    )
     await sql_mgt.update_receipt_status(receipt_id, final_status, comment=comment_text)
 
     user_message = notify_messages.get(final_status)
