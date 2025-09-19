@@ -1,5 +1,6 @@
 from aiogram import Router,  F
 import asyncio
+import logging
 from aiogram.types import Message
 import time
 import random
@@ -22,6 +23,7 @@ from ocr import extract_text
 
 
 router = Router()
+logger = logging.getLogger(__name__)
 global_objects = None
 UPLOAD_DIR_CHECKS = Path(__file__).resolve().parent.parent / "site_bot" / "static" / "uploads"
 UPLOAD_DIR_CHECKS.mkdir(parents=True, exist_ok=True)
@@ -36,39 +38,52 @@ def init_object(global_objects_inp):
     sql_mgt.init_object(global_objects_inp)
 
 
-def _analyze_check(path: str, keywords: list[str]):
-    """Detect QR code first; fall back to OCR for keyword search."""
+def _detect_qr(path: str) -> str | None:
+    """Detect QR code, returning its payload if any."""
+    logger.info("[QR] Starting detection for %s", path)
     img = cv2.imread(path)
     if img is None:
-        return None, False
+        logger.warning("[QR] Failed to read image %s", path)
+        return None
 
-    qr_data = None
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     decoded_objects = decode(gray, symbols=[ZBarSymbol.QRCODE])
     if decoded_objects:
-        qr_data = decoded_objects[0].data.decode("utf-8")
-    else:
-        detector = cv2.QRCodeDetector()
-        data, points, _ = detector.detectAndDecode(gray)
-        if points is not None and data:
-            qr_data = data.strip()
-    if qr_data is None:
-        qr_data = _enhanced_qr(gray)
+        data = decoded_objects[0].data.decode("utf-8")
+        logger.info("[QR] Found QR via pyzbar: %s", data)
+        return data
 
-    text = ""
-    if qr_data is None:
-        try:
-            text = extract_text(img)
-        except Exception:
-            text = ""
+    detector = cv2.QRCodeDetector()
+    data, points, _ = detector.detectAndDecode(gray)
+    if points is not None and data:
+        decoded = data.strip()
+        logger.info("[QR] Found QR via cv2.QRCodeDetector: %s", decoded)
+        return decoded
+
+    return _enhanced_qr(gray)
+
+
+def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str | None]:
+    """Use OCR to search for configured keywords inside receipt image."""
+    img = cv2.imread(path)
+    if img is None:
+        return False, "изображение не прочитано"
+    if not keywords:
+        return False, "ключевые слова не настроены"
+    try:
+        text = extract_text(img)
+    except Exception:
+        return False, "ошибка OCR"
+
     lower = text.casefold()
     vodka = any(k in lower for k in keywords)
-    return qr_data, vodka
+    return vodka, None
 
 
 def _enhanced_qr(gray):
     """Attempt to decode difficult QR codes by rotating, scaling,
     thresholding, and using optional ZXing-based readers."""
+    logger.info("[QR] Entering enhanced QR detection")
     detector = cv2.QRCodeDetector()
     rotate_codes = [None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE]
     for rc in rotate_codes:
@@ -82,15 +97,21 @@ def _enhanced_qr(gray):
         ):
             decoded = decode(processed, symbols=[ZBarSymbol.QRCODE])
             if decoded:
-                return decoded[0].data.decode("utf-8")
+                data = decoded[0].data.decode("utf-8")
+                logger.info("[QR] Enhanced pyzbar success (rotation=%s): %s", rc, data)
+                return data
             data, points, _ = detector.detectAndDecode(processed)
             if points is not None and data:
-                return data.strip()
+                decoded = data.strip()
+                logger.info("[QR] Enhanced cv2 detector success (rotation=%s): %s", rc, decoded)
+                return decoded
     try:
         import zxingcpp  # type: ignore
         results = zxingcpp.read_barcodes(gray)
         if results:
-            return results[0].text
+            data = results[0].text
+            logger.info("[QR] ZXingCPP success: %s", data)
+            return data
     except Exception:
         pass
     try:
@@ -98,17 +119,20 @@ def _enhanced_qr(gray):
         reader = BarCodeReader()
         res = reader.decode_array(gray)
         if res and 'parsed' in res[0]:
-            return res[0]['parsed']
+            data = res[0]['parsed']
+            logger.info("[QR] pyzxing success: %s", data)
+            return data
     except Exception:
         pass
+    logger.info("[QR] QR not detected by any method")
     return None
 
 
-def _check_vodka_in_receipt(qr_data: str, keywords: list[str]) -> bool:
+def _check_vodka_in_receipt(qr_data: str, keywords: list[str]) -> bool | None:
     """Call FNS service and search receipt items for configured products."""
     data = get_receipt_by_qr(qr_data)
     if not data:
-        return False
+        return None
     items = (
         data.get("items")
         or data.get("content", {}).get("items")
@@ -123,39 +147,136 @@ def _check_vodka_in_receipt(qr_data: str, keywords: list[str]) -> bool:
 
 async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int):
     loop = asyncio.get_running_loop()
-    keywords_raw = await sql_mgt.get_param(0, 'product_keywords')
+    keywords_raw = await sql_mgt.get_param(0, 'product_keywords') or ''
     keywords = [k.strip().casefold() for k in keywords_raw.split(';') if k.strip()]
-    qr_data, vodka = await loop.run_in_executor(global_objects.ocr_pool, _analyze_check, str(dest), keywords)
-    vodka_found = False
+
+    logger.info("[QR] Processing receipt %s from %s", receipt_id, dest)
+    qr_data = await loop.run_in_executor(
+        global_objects.ocr_pool,
+        _detect_qr,
+        str(dest),
+    )
+    if qr_data:
+        logger.info("[QR] Receipt %s QR detected: %s", receipt_id, qr_data)
+    else:
+        logger.info("[QR] Receipt %s QR not detected", receipt_id)
+    ocr_result: tuple[bool, str | None] | None = None
+    final_status: str | None = None
+    comment_text: str | None = None
+    fns_result: str | None = None  # "success", "no_goods", "error"
+    notify_messages = {
+        "Подтверждён": "✅ Чек подтверждён",
+        "Нет товара в чеке": "❌ Нет товара в чеке",
+    }
+    use_vision = False
     if qr_data:
         existing = await sql_mgt.find_receipt_by_qr(qr_data)
+        logger.info("[QR] Receipt %s checking duplicate status: %s", receipt_id, existing)
         if existing and existing != receipt_id:
             await sql_mgt.update_receipt_qr(receipt_id, qr_data)
-            await sql_mgt.update_receipt_status(receipt_id, "Этот чек уже принят!")
+            comment_text = "Бот: чек с таким QR уже загружен"
+            await sql_mgt.update_receipt_status(
+                receipt_id,
+                "Чек уже загружен",
+                comment=comment_text,
+            )
             await global_objects.bot.send_message(
                 chat_id,
-                "❌ Уже участвует",
+                "❌ Чек уже загружен",
                 reply_to_message_id=msg_id,
             )
             return
         await sql_mgt.update_receipt_qr(receipt_id, qr_data)
         try:
-            vodka_found = await loop.run_in_executor(None, _check_vodka_in_receipt, qr_data, keywords)
-        except Exception as e:
-            await global_objects.bot.send_message(
-                chat_id,
-                f"Ошибка при проверке QR через ФНС: {e}",
-                reply_to_message_id=msg_id,
+            vodka_found = await loop.run_in_executor(
+                None, _check_vodka_in_receipt, qr_data, keywords
             )
-            vodka_found = False
-    elif vodka:
-        vodka_found = True
-    if vodka_found:
-        await global_objects.bot.send_message(chat_id, "Чек принят!", reply_to_message_id=msg_id)
-        status = "Распознан"
+        except Exception as exc:
+            print(f"FNS check failed for receipt {receipt_id}: {exc}")
+            vodka_found = None
+        logger.info("[QR] Receipt %s FNS result: %s", receipt_id, vodka_found)
+        if vodka_found is None:
+            fns_result = "error"
+            use_vision = True
+        elif vodka_found:
+            fns_result = "success"
+            final_status = "Подтверждён"
+            comment_text = "Бот: товар найден в данных по QR"
+        else:
+            fns_result = "no_goods"
+            final_status = "Нет товара в чеке"
+            comment_text = "Бот: товар не найден в данных по QR"
     else:
-        status = "Не распознан"
-    await sql_mgt.update_receipt_status(receipt_id, status)
+        use_vision = True
+
+    if use_vision:
+        if ocr_result is None:
+            ocr_result = await loop.run_in_executor(
+                global_objects.ocr_pool,
+                _check_keywords_with_ocr,
+                str(dest),
+                keywords,
+            )
+        vodka_by_vision, vision_error = ocr_result
+        logger.info(
+            "[QR] Receipt %s OCR fallback result: vodka_by_vision=%s error=%s",
+            receipt_id,
+            vodka_by_vision,
+            vision_error,
+        )
+        if vodka_by_vision:
+            final_status = "Подтверждён"
+            if qr_data:
+                if fns_result == "error":
+                    comment_text = (
+                        "Бот: товар найден через распознавание изображения (ФНС недоступна)"
+                    )
+                else:
+                    comment_text = "Бот: товар найден через распознавание изображения"
+            else:
+                comment_text = (
+                    "Бот: товар найден через распознавание изображения (QR не распознан)"
+                )
+        else:
+            final_status = "Ошибка"
+            if vision_error == "изображение не прочитано":
+                comment_text = "Бот: не удалось прочитать изображение чека"
+            elif vision_error == "ключевые слова не настроены":
+                comment_text = "Бот: не настроены ключевые слова для проверки чека"
+            elif vision_error == "ошибка OCR":
+                comment_text = "Бот: произошла ошибка распознавания текста"
+            else:
+                if not qr_data:
+                    comment_text = (
+                        "Бот: QR-код не распознан и распознавание не подтвердило чек"
+                    )
+                elif fns_result == "error":
+                    comment_text = (
+                        "Бот: не удалось получить данные по QR и распознавание не подтвердило чек"
+                    )
+                else:
+                    comment_text = "Бот: распознавание не подтвердило чек"
+
+    if final_status is None:
+        final_status = "Ошибка"
+    if comment_text is None:
+        comment_text = f"Бот: автоматическая обработка завершилась со статусом \"{final_status}\""
+
+    logger.info(
+        "[QR] Receipt %s final status: %s (comment=%s)",
+        receipt_id,
+        final_status,
+        comment_text,
+    )
+    await sql_mgt.update_receipt_status(receipt_id, final_status, comment=comment_text)
+
+    user_message = notify_messages.get(final_status)
+    if user_message:
+        await global_objects.bot.send_message(
+            chat_id,
+            user_message,
+            reply_to_message_id=msg_id,
+        )
 
 
 @router.message(F.photo)

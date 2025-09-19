@@ -18,12 +18,14 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from databases import Database
 import sqlalchemy
 from sqlalchemy import MetaData, Table, create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import sessionmaker
 from typing import List, Optional, Dict, Any, Tuple
 import datetime
 from pydantic import BaseModel
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+import logging
 
 # Админ-панель через SQLAdmin
 from sqladmin import Admin, ModelView
@@ -34,6 +36,15 @@ from pathlib import Path
 import random
 import csv
 import io
+from decimal import Decimal
+import sys
+
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from sql_mgt import ensure_receipt_comment_column_sync
 
 # aiogram is imported lazily when sending messages
 
@@ -45,6 +56,22 @@ DATABASE_URL = "sqlite:///../../tg_base.sqlite"
 database = Database(DATABASE_URL)
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 metadata = MetaData()
+logger = logging.getLogger(__name__)
+
+
+def _ensure_receipts_schema() -> None:
+    """Ensure the receipts table has the expected primary key and comment column."""
+    try:
+        db_path = make_url(DATABASE_URL).database or ""
+        db_file = Path(db_path)
+        if not db_file.is_absolute():
+            db_file = (Path(__file__).resolve().parent / db_file).resolve()
+        ensure_receipt_comment_column_sync(str(db_file))
+    except Exception:
+        logger.exception("Failed to ensure receipts schema")
+
+
+_ensure_receipts_schema()
 
 # Рефлексия всех таблиц
 metadata.reflect(bind=engine)
@@ -100,6 +127,11 @@ def has_receipt_msg_id() -> bool:
 def has_receipt_draw_id() -> bool:
     """Return True if the receipts table has a 'draw_id' column."""
     return 'draw_id' in receipts_table.c
+
+
+def has_receipt_comment() -> bool:
+    """Return True if the receipts table has a 'comment' column."""
+    return 'comment' in receipts_table.c
 
 # Подготовка automap для ORM-классов
 Base = automap_base(metadata=metadata)
@@ -477,7 +509,9 @@ async def api_determine_winners(stage_id: int, req: DetermineReq):
         )
     )
     if has_receipt_status():
-        query = query.where(receipts_table.c.status == "Распознан")
+        query = query.where(
+            receipts_table.c.status.in_(["Подтверждён", "Распознан"])
+        )
 
     receipts_rows = await database.fetch_all(query)
     if not receipts_rows:
@@ -590,18 +624,30 @@ async def api_draw_stage_test_mailing(stage_id: int):
 
 @app.get("/api/notifications")
 async def api_notifications():
-    """Return receipts with status 'Не распознан' and unanswered questions."""
+    """Return receipts with problem receipts and unanswered questions."""
     notifications = []
 
     if has_receipt_status():
+        problematic_statuses = [
+            "Нет товара в чеке",
+            "Ошибка",
+            "Не распознан",
+        ]
         rec_rows = await database.fetch_all(
             sqlalchemy.select(
                 receipts_table.c.id,
                 receipts_table.c.number,
-            ).where(receipts_table.c.status == "Не распознан")
+                receipts_table.c.status,
+            ).where(receipts_table.c.status.in_(problematic_statuses))
         )
+        status_text = {
+            "Нет товара в чеке": "нет нужного товара",
+            "Ошибка": "ошибка обработки",
+            "Не распознан": "не распознан",
+        }
         for r in rec_rows:
-            text = f"Чек {r['number'] or r['id']} не распознан"
+            descr = status_text.get(r["status"], r["status"].lower())
+            text = f"Чек {r['number'] or r['id']} – {descr}"
             notifications.append({
                 "type": "receipt",
                 "id": r["id"],
@@ -1102,6 +1148,136 @@ async def update_participant(tg_id: int, data: ParticipantUpdate):
         )
     return {"success": True}
 
+
+@app.get("/participants/export")
+async def export_participants():
+    users_rows = await database.fetch_all(
+        users_table.select().order_by(users_table.c.create_dt)
+    )
+    user_settings_rows = await database.fetch_all(user_settings_table.select())
+    participant_settings_rows = await database.fetch_all(participant_settings_table.select())
+    user_extended_rows = await database.fetch_all(user_extended_table.select())
+    user_params_rows = await database.fetch_all(user_params_table.select())
+    params_rows = await database.fetch_all(params_table.select())
+    params_site_rows = await database.fetch_all(params_site_table.select())
+
+    def normalize(value):
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "1" if value else "0"
+        if isinstance(value, datetime.datetime):
+            return value.replace(microsecond=0).isoformat(sep=" ")
+        if isinstance(value, datetime.date):
+            return value.isoformat()
+        if isinstance(value, datetime.time):
+            return value.isoformat()
+        if isinstance(value, Decimal):
+            return str(value)
+        if isinstance(value, bytes):
+            try:
+                return value.decode("utf-8")
+            except UnicodeDecodeError:
+                return value.hex()
+        return str(value)
+
+    def build_params_map(records, key_name):
+        result = {}
+        for record in records:
+            row = dict(record)
+            user_id = row.get(key_name)
+            if user_id is None:
+                continue
+            name = row.get("param_name")
+            value = normalize(row.get("value"))
+            entry = f"{name}={value}" if name else value
+            result.setdefault(user_id, []).append(entry)
+        return result
+
+    user_settings_map = {
+        row["tg_id"]: dict(row)
+        for row in user_settings_rows
+        if row["tg_id"] is not None
+    }
+    participant_settings_map = {
+        row["user_tg_id"]: dict(row)
+        for row in participant_settings_rows
+        if row["user_tg_id"] is not None
+    }
+    user_extended_map = {
+        row["tg_id"]: dict(row)
+        for row in user_extended_rows
+        if row["tg_id"] is not None
+    }
+    user_params_map = {
+        row["user_tg_id"]: dict(row)
+        for row in user_params_rows
+        if row["user_tg_id"] is not None
+    }
+    params_map = build_params_map(params_rows, "user_tg_id")
+    params_site_map = build_params_map(params_site_rows, "user_tg_id")
+
+    output = io.StringIO()
+    output.write("\ufeff")
+    writer = csv.writer(output)
+    writer.writerow([
+        "tg_id",
+        "name",
+        "age_18",
+        "phone",
+        "create_dt",
+        "subscription",
+        "username",
+        "extended_all_data",
+        "extended_create_dt",
+        "blocked",
+        "tester",
+        "participant_settings_create_dt",
+        "last_message_id",
+        "last_image_message_list",
+        "user_params_create_dt",
+        "params_site",
+        "params",
+    ])
+
+    for record in users_rows:
+        row = dict(record)
+        user_id = row.get("tg_id")
+        user_settings = user_settings_map.get(user_id, {})
+        participant_settings = participant_settings_map.get(user_id, {})
+        user_extended = user_extended_map.get(user_id, {})
+        user_params = user_params_map.get(user_id, {})
+        params_site_values = "; ".join(params_site_map.get(user_id, []))
+        params_values = "; ".join(params_map.get(user_id, []))
+
+        writer.writerow([
+            normalize(row.get("tg_id")),
+            normalize(row.get("name")),
+            normalize(row.get("age_18")),
+            normalize(row.get("phone")),
+            normalize(row.get("create_dt")),
+            normalize(user_settings.get("subscription")),
+            normalize(user_extended.get("username")),
+            normalize(user_extended.get("all_data")),
+            normalize(user_extended.get("create_dt")),
+            normalize(participant_settings.get("blocked")),
+            normalize(participant_settings.get("tester")),
+            normalize(participant_settings.get("create_dt")),
+            normalize(user_params.get("last_message_id")),
+            normalize(user_params.get("last_image_message_list")),
+            normalize(user_params.get("create_dt")),
+            normalize(params_site_values),
+            normalize(params_values),
+        ])
+
+    csv_data = output.getvalue()
+    output.close()
+    filename = f"participants_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    headers = {
+        "Content-Disposition": f"attachment; filename=\"{filename}\"; filename*=UTF-8''{filename}"
+    }
+    return Response(csv_data, media_type="text/csv; charset=utf-8", headers=headers)
+
 @app.get("/receipts", response_class=HTMLResponse)
 async def receipts(request: Request):
     sel_columns = [receipts_table, users_table.c.name.label("user_name")]
@@ -1146,6 +1322,7 @@ async def receipts(request: Request):
                 "status": r.get("status") if has_receipt_status() else None,
                 "draw_id": r.get("draw_id") if has_receipt_draw_id() else None,
                 "draw_title": r.get("draw_title"),
+                "comment": r.get("comment") if has_receipt_comment() else None,
             }
         )
     draw_query = sqlalchemy.select(prize_draws_table.c.id, prize_draws_table.c.title)
@@ -1202,11 +1379,13 @@ async def get_receipt(receipt_id: int):
         "message_id": r.get("message_id") if has_receipt_msg_id() else None,
         "draw_id": r.get("draw_id") if has_receipt_draw_id() else None,
         "draw_title": r.get("draw_title"),
+        "comment": r.get("comment") if has_receipt_comment() else None,
     }
 
 class ReceiptUpdate(BaseModel):
     status: str
     draw_id: Optional[int] = None
+    comment: Optional[str] = None
 
 @app.post("/api/receipts/{receipt_id}")
 async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
@@ -1216,6 +1395,8 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
     update_values = {"status": upd.status}
     if has_receipt_draw_id():
         update_values["draw_id"] = upd.draw_id
+    if has_receipt_comment():
+        update_values["comment"] = upd.comment
     await database.execute(
         receipts_table.update()
         .where(receipts_table.c.id == receipt_id)
@@ -1229,10 +1410,11 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
     ):
         if old_row.get("message_id") and old_row.get("user_tg_id"):
             text = None
-            if upd.status == "Распознан":
-                text = "Чек принят!"
-            elif upd.status == "Отменён":
-                text = "Чек отклонён"
+            status_messages = {
+                "Подтверждён": "Чек подтверждён",
+                "Нет товара в чеке": "В чеке не найден нужный товар",
+            }
+            text = status_messages.get(upd.status)
             if text:
                 try:
                     await bot.send_message(

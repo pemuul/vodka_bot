@@ -31,18 +31,27 @@ def get_menu_kb(message, path, extra_rows: list[str] | None = None) -> ReplyKeyb
     keyboard: list[list[KeyboardButton]] = []
     if extra_rows:
         _add_paired_rows(keyboard, extra_rows)
-    _add_paired_rows(keyboard, next_buttons)
+    display_buttons: list[str] = []
+    has_custom_menu_label = 'В меню' in next_layers
+    for button in next_buttons:
+        if button == 'menu' and has_custom_menu_label:
+            continue
+        if button == 'menu':
+            display_buttons.append('В меню')
+        else:
+            display_buttons.append(button)
+    _add_paired_rows(keyboard, display_buttons)
 
     path_id = global_objects.tree_data.get_path_to_id(tree_item.path)
-    if len(next_buttons) == 0:
-        keyboard.append([KeyboardButton(text='Закрепить 📌')])
+    # if len(next_buttons) == 0:
+    #     keyboard.append([KeyboardButton(text='Закрепить 📌')])
 
     if tree_item.path != SPLITTER_STR:
         previus_path = SPLITTER_STR.join(tree_item.path.split(SPLITTER_STR)[:-1])
         if not previus_path:
             previus_path = SPLITTER_STR
 
-        keyboard.append([KeyboardButton(text='>> ↩️ НАЗАД <<')])
+        keyboard.append([KeyboardButton(text='Вернуться назад')])
     
     if tree_item.path == SPLITTER_STR:
         if global_objects.settings_bot.get('site').get('site_on'):

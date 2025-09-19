@@ -46,6 +46,7 @@
               <th>Пользователь</th>
               <th>Статус</th>
               <th>Розыгрыш</th>
+              <th>Комментарий</th>
               <th>Действия</th>
             </tr>
           </thead>
@@ -99,11 +100,15 @@
               <strong>Статус:</strong>
               <select id="receipt-status" class="form-select form-select-sm d-inline-block w-auto ms-2">
                 <option value="В авто обработке">В авто обработке</option>
-                <option value="Распознан">Распознан</option>
-                <option value="Не распознан">Не распознан</option>
-                <option value="Отменён">Отменён</option>
-                <option value="не подтвержден">не подтвержден</option>
+                <option value="Подтверждён">Подтверждён</option>
+                <option value="Чек уже загружен">Чек уже загружен</option>
+                <option value="Нет товара в чеке">Нет товара в чеке</option>
+                <option value="Ошибка">Ошибка</option>
               </select>
+            </li>
+            <li class="list-group-item">
+              <strong>Комментарий:</strong>
+              <textarea id="receipt-comment" class="form-control form-control-sm mt-2" rows="3"></textarea>
             </li>
             <li class="list-group-item">
               <strong>Розыгрыш:</strong>
@@ -132,6 +137,48 @@
       const statusFilter = document.getElementById("status-filter");
       const paginationUl = document.getElementById("pagination-ul");
       const receiptImg = document.getElementById("receipt-img");
+      const statusSelect = document.getElementById('receipt-status');
+      const commentInput = document.getElementById('receipt-comment');
+      const drawSelect = document.getElementById('receipt-draw');
+
+      const allowedStatuses = [
+        "В авто обработке",
+        "Подтверждён",
+        "Чек уже загружен",
+        "Нет товара в чеке",
+        "Ошибка",
+      ];
+
+      const escapeHtml = (input) => {
+        if (input === null || input === undefined) return '';
+        return String(input)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      };
+
+      const formatComment = (value) => {
+        if (value === null || value === undefined) return '';
+        return escapeHtml(value).replace(/\n/g, '<br>');
+      };
+
+      const ensureStatusOption = (value) => {
+        if (!value || allowedStatuses.includes(value)) {
+          return;
+        }
+        const exists = Array.from(statusSelect.options).some(opt => opt.value === value);
+        if (!exists) {
+          const opt = new Option(value, value);
+          opt.disabled = true;
+          statusSelect.appendChild(opt);
+        }
+      };
+
+      statusSelect.innerHTML = allowedStatuses.map(s => `<option value="${s}">${s}</option>`).join('');
+      statusSelect.value = allowedStatuses[0];
+      statusFilter.innerHTML += allowedStatuses.map(s => `<option value="${s}">${s}</option>`).join('');
 
       receiptImg.onclick = () => {
         const fullEl = document.getElementById('modal-image-full');
@@ -146,9 +193,6 @@
       let filtered = [...data];
       let currentPage = 1;
       let currentReceiptId = null;
-
-      const allStatuses = Array.from(new Set(data.map(r => r.status).filter(Boolean)));
-      statusFilter.innerHTML += allStatuses.map(s => `<option value="${s}">${s}</option>`).join('');
 
       function applyFilter() {
         const statusVal = statusFilter.value;
@@ -239,6 +283,7 @@
             <td>${userLink}</td>
             <td>${r.status ?? ''}</td>
             <td>${r.draw_title ?? ''}</td>
+            <td>${formatComment(r.comment)}</td>
             <td><button class="btn btn-sm btn-outline-danger btn-del">Удалить</button></td>`;
           tr.onclick = () => {
             if (r.id == null || r.id === 'null') return;
@@ -252,10 +297,15 @@
                 const userLinkEl = document.getElementById('view-user');
                 userLinkEl.textContent = rec.user_name ?? rec.user_tg_id;
                 userLinkEl.href = `/participants?open=${rec.user_tg_id}`;
-                document.getElementById('receipt-status').value = rec.status ?? '';
-                const drawSel = document.getElementById('receipt-draw');
-                drawSel.innerHTML = '<option value="">---</option>' + draws.map(d=>`<option value="${d.id}">${d.title}</option>`).join('');
-                drawSel.value = rec.draw_id ?? '';
+                ensureStatusOption(rec.status);
+                if (rec.status) {
+                  statusSelect.value = rec.status;
+                } else {
+                  statusSelect.value = allowedStatuses[0];
+                }
+                drawSelect.innerHTML = '<option value="">---</option>' + draws.map(d=>`<option value="${d.id}">${d.title}</option>`).join('');
+                drawSelect.value = rec.draw_id ?? '';
+                commentInput.value = rec.comment ?? '';
                 document.getElementById('go-dialog').onclick = () => {
                   window.location.href = `/participants?open=${rec.user_tg_id}`;
                 };
@@ -285,12 +335,13 @@
       statusFilter.onchange = () => { applyFilter(); render(); };
       document.getElementById('save-receipt').onclick = () => {
         if (currentReceiptId === null) return;
-        const status = document.getElementById('receipt-status').value;
-        const drawId = document.getElementById('receipt-draw').value || null;
+        const status = statusSelect.value;
+        const drawId = drawSelect.value || null;
+        const comment = commentInput.value;
         fetch(`/api/receipts/${currentReceiptId}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status, draw_id: drawId })
+          body: JSON.stringify({ status, draw_id: drawId, comment })
         }).then(() => {
           const idx = data.findIndex(x => x.id === currentReceiptId);
           if (idx !== -1) {
@@ -298,6 +349,7 @@
             data[idx].draw_id = drawId ? parseInt(drawId) : null;
             const draw = draws.find(d => String(d.id) === drawId);
             data[idx].draw_title = draw ? draw.title : '';
+            data[idx].comment = comment;
           }
           applyFilter();
           render();
@@ -324,10 +376,15 @@
               const userLinkEl = document.getElementById('view-user');
               userLinkEl.textContent = recData.user_name ?? recData.user_tg_id;
               userLinkEl.href = `/participants?open=${recData.user_tg_id}`;
-              document.getElementById('receipt-status').value = recData.status ?? '';
-              const drawSel = document.getElementById('receipt-draw');
-              drawSel.innerHTML = '<option value="">---</option>' + draws.map(d => `<option value="${d.id}">${d.title}</option>`).join('');
-              drawSel.value = recData.draw_id ?? '';
+              ensureStatusOption(recData.status);
+              if (recData.status) {
+                statusSelect.value = recData.status;
+              } else {
+                statusSelect.value = allowedStatuses[0];
+              }
+              drawSelect.innerHTML = '<option value="">---</option>' + draws.map(d => `<option value="${d.id}">${d.title}</option>`).join('');
+              drawSelect.value = recData.draw_id ?? '';
+              commentInput.value = recData.comment ?? '';
               document.getElementById('go-dialog').onclick = () => {
                 window.location.href = `/participants?open=${recData.user_tg_id}`;
               };

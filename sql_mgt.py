@@ -4,13 +4,33 @@ import os
 import datetime
 import sqlite3
 import json
+import logging
+
+from typing import Iterable, Dict, Any, Optional, List
 
 from keys import DB_NAME
-from typing import Dict, Any, Optional, List
 
 
 global_objects = None
 db_name = None
+logger = logging.getLogger(__name__)
+
+RECEIPT_COLUMNS_ORDER: list[tuple[str, str]] = [
+    ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+    ("number", "TEXT"),
+    ("date", "DATE"),
+    ("amount", "REAL"),
+    ("user_tg_id", "INTEGER"),
+    ("draw_id", "INTEGER"),
+    ("message_id", "INTEGER"),
+    ("qr", "TEXT"),
+    ("file_path", "TEXT"),
+    ("status", "TEXT DEFAULT 'не подтвержден'"),
+    ("comment", "TEXT"),
+    ("create_dt", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+]
+
+RECEIPT_COLUMN_NAMES: tuple[str, ...] = tuple(col for col, _ in RECEIPT_COLUMNS_ORDER)
 
 def init_object(global_objects_inp):
     global global_objects
@@ -20,6 +40,7 @@ def init_object(global_objects_inp):
 
     #print('dirname -> ', global_objects.settings_bot['run_directory'])
     db_name = f"{global_objects.settings_bot['run_directory']}/{DB_NAME}"
+    ensure_receipt_comment_column_sync()
 
 
 ''' Созадём таблицы '''
@@ -1162,6 +1183,7 @@ async def add_receipt(
 ) -> int:
     """Сохранить чек пользователя."""
     cursor = await conn.cursor()
+    await ensure_receipt_comment_column(conn=conn)
     schema = await get_table_info(conn, "receipts")
     fields = ["number", "date", "amount", "user_tg_id"]
     values = [number, date, amount, user_tg_id]
@@ -1185,8 +1207,14 @@ async def add_receipt(
     return cursor.lastrowid
 
 @with_connection
-async def update_receipt_status(receipt_id: int, status: str, conn=None) -> str | None:
-    """Update status field for a receipt. Returns previous status."""
+async def update_receipt_status(
+    receipt_id: int,
+    status: str,
+    comment: Optional[str] = None,
+    conn=None,
+) -> str | None:
+    """Update status (and optionally comment) for a receipt. Returns previous status."""
+    await ensure_receipt_comment_column(conn=conn)
     cursor = await conn.cursor()
     await cursor.execute(
         "SELECT status FROM receipts WHERE id = ?",
@@ -1194,12 +1222,243 @@ async def update_receipt_status(receipt_id: int, status: str, conn=None) -> str 
     )
     row = await cursor.fetchone()
     old_status = row[0] if row else None
-    await cursor.execute(
-        "UPDATE receipts SET status = ? WHERE id = ?",
-        (status, receipt_id),
-    )
+    if comment is None:
+        await cursor.execute(
+            "UPDATE receipts SET status = ? WHERE id = ?",
+            (status, receipt_id),
+        )
+    else:
+        await cursor.execute(
+            "UPDATE receipts SET status = ?, comment = ? WHERE id = ?",
+            (status, comment, receipt_id),
+        )
     await conn.commit()
     return old_status
+
+
+def _receipt_select_columns(existing_columns: Iterable[str]) -> list[str]:
+    existing = {name.lower(): name for name in existing_columns}
+    select_parts: list[str] = []
+    for column in RECEIPT_COLUMN_NAMES:
+        lower = column.lower()
+        if column == "id":
+            if lower in existing:
+                select_parts.append(f"COALESCE(NULLIF({existing[lower]}, ''), rowid)")
+            else:
+                select_parts.append("rowid")
+        elif lower in existing:
+            select_parts.append(existing[lower])
+        else:
+            select_parts.append("NULL")
+    return select_parts
+
+
+def _build_receipts_table_sql(table_name: str) -> str:
+    columns_definition = ", ".join(
+        f"{name} {definition}" for name, definition in RECEIPT_COLUMNS_ORDER
+    )
+    return f"CREATE TABLE {table_name} ({columns_definition})"
+
+
+def _normalise_receipt_id_value(raw_id, used_ids: set[int]) -> Optional[int]:
+    """Return a positive, unused integer id or None to autogenerate."""
+    normalized_id: Optional[int] = None
+    if isinstance(raw_id, int) and not isinstance(raw_id, bool):
+        normalized_id = raw_id if raw_id > 0 else None
+    elif isinstance(raw_id, (str, bytes)):
+        text = raw_id.decode() if isinstance(raw_id, bytes) else raw_id
+        text = text.strip()
+        if text:
+            try:
+                candidate = int(text)
+            except ValueError:
+                candidate = None
+            else:
+                normalized_id = candidate if candidate > 0 else None
+    else:
+        try:
+            candidate = int(raw_id)
+        except (TypeError, ValueError):
+            candidate = None
+        else:
+            normalized_id = candidate if candidate > 0 else None
+
+    if normalized_id is None or normalized_id in used_ids:
+        return None
+    used_ids.add(normalized_id)
+    return normalized_id
+
+
+def _prepare_receipt_rows(rows: Iterable[Iterable]) -> list[tuple]:
+    used_ids: set[int] = set()
+    sanitized_rows: list[tuple] = []
+    for row in rows:
+        mutable_row = list(row)
+        mutable_row[0] = _normalise_receipt_id_value(mutable_row[0], used_ids)
+        sanitized_rows.append(tuple(mutable_row))
+    return sanitized_rows
+
+
+def _rebuild_receipts_table_sync(
+    conn: sqlite3.Connection, existing_columns: Iterable[str]
+) -> None:
+    conn.execute("DROP TABLE IF EXISTS receipts_new")
+    conn.execute(_build_receipts_table_sql("receipts_new"))
+    select_parts = _receipt_select_columns(existing_columns)
+    cursor = conn.execute(
+        f"SELECT {', '.join(select_parts)} FROM receipts"
+    )
+    rows = cursor.fetchall()
+    cursor.close()
+
+    sanitized_rows = _prepare_receipt_rows(rows)
+
+    if sanitized_rows:
+        placeholders = ", ".join(["?"] * len(RECEIPT_COLUMN_NAMES))
+        insert_sql = (
+            f"INSERT INTO receipts_new ({', '.join(RECEIPT_COLUMN_NAMES)}) "
+            f"VALUES ({placeholders})"
+        )
+        conn.executemany(insert_sql, sanitized_rows)
+
+    conn.execute("DROP TABLE receipts")
+    conn.execute("ALTER TABLE receipts_new RENAME TO receipts")
+    conn.commit()
+
+
+async def _rebuild_receipts_table_async(conn, existing_columns: Iterable[str]) -> None:
+    await conn.execute("DROP TABLE IF EXISTS receipts_new")
+    await conn.execute(_build_receipts_table_sql("receipts_new"))
+    select_parts = _receipt_select_columns(existing_columns)
+    cursor = await conn.execute(
+        f"SELECT {', '.join(select_parts)} FROM receipts"
+    )
+    rows = await cursor.fetchall()
+    await cursor.close()
+
+    sanitized_rows = _prepare_receipt_rows(rows)
+
+    if sanitized_rows:
+        placeholders = ", ".join(["?"] * len(RECEIPT_COLUMN_NAMES))
+        insert_sql = (
+            f"INSERT INTO receipts_new ({', '.join(RECEIPT_COLUMN_NAMES)}) "
+            f"VALUES ({placeholders})"
+        )
+        await conn.executemany(insert_sql, sanitized_rows)
+
+    await conn.execute("DROP TABLE receipts")
+    await conn.execute("ALTER TABLE receipts_new RENAME TO receipts")
+    await conn.commit()
+
+
+def ensure_receipt_comment_column_sync(db_path: Optional[str] = None) -> bool:
+    """Ensure the receipts table contains the comment column and a proper PK."""
+    path = db_path or db_name
+    if not path:
+        return False
+    try:
+        with sqlite3.connect(path) as conn:
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='receipts'"
+            )
+            if cursor.fetchone() is None:
+                return False
+
+            columns_info = conn.execute("PRAGMA table_info(receipts)").fetchall()
+            column_names = [row[1] for row in columns_info]
+            has_comment = "comment" in column_names
+            pk_columns = [row for row in columns_info if row[5]]
+            needs_rebuild = len(pk_columns) != 1 or pk_columns[0][1] != "id"
+
+            if not has_comment:
+                try:
+                    conn.execute("ALTER TABLE receipts ADD COLUMN comment TEXT")
+                    conn.commit()
+                    column_names.append("comment")
+                    has_comment = True
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column name" in str(exc).lower():
+                        has_comment = True
+                    else:
+                        logger.error(
+                            "Failed to add comment column to receipts: %s", exc
+                        )
+
+            if needs_rebuild:
+                try:
+                    _rebuild_receipts_table_sync(conn, column_names)
+                except Exception:
+                    logger.exception(
+                        "Failed to rebuild receipts table to restore primary key"
+                    )
+                    return False
+
+            return has_comment or needs_rebuild
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" in str(exc).lower():
+            return True
+        logger.error("Failed to ensure receipts schema: %s", exc)
+    except Exception:
+        logger.exception("Unexpected error while ensuring receipts schema")
+    return False
+
+
+@with_connection
+async def ensure_receipt_comment_column(conn=None) -> bool:
+    """Ensure the receipts table contains a comment column."""
+    cursor = await conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='receipts'"
+    )
+    table_exists = await cursor.fetchone()
+    await cursor.close()
+    if not table_exists:
+        return False
+    cursor = await conn.execute("PRAGMA table_info(receipts)")
+    columns_info = await cursor.fetchall()
+    await cursor.close()
+
+    column_names = [row[1] for row in columns_info]
+    has_comment = "comment" in column_names
+    pk_columns = [row for row in columns_info if row[5]]
+    needs_rebuild = len(pk_columns) != 1 or pk_columns[0][1] != "id"
+
+    if not has_comment:
+        try:
+            await conn.execute("ALTER TABLE receipts ADD COLUMN comment TEXT")
+            await conn.commit()
+            column_names.append("comment")
+            has_comment = True
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" in str(exc).lower():
+                has_comment = True
+            else:
+                logger.error(
+                    "Failed to add comment column to receipts asynchronously: %s",
+                    exc,
+                )
+
+    if needs_rebuild:
+        try:
+            await _rebuild_receipts_table_async(conn, column_names)
+        except Exception:
+            logger.exception(
+                "Failed to rebuild receipts table asynchronously to restore primary key"
+            )
+            return False
+
+    return has_comment or needs_rebuild
+
+
+@with_connection
+async def update_receipt_comment(receipt_id: int, comment: Optional[str], conn=None) -> None:
+    """Update the comment column for a receipt if the schema supports it."""
+    if not await ensure_receipt_comment_column(conn=conn):
+        return
+    await conn.execute(
+        "UPDATE receipts SET comment = ? WHERE id = ?",
+        (comment, receipt_id),
+    )
+    await conn.commit()
 
 
 @with_connection
