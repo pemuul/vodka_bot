@@ -138,7 +138,9 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
         str(dest),
     )
     ocr_result: tuple[bool, str | None] | None = None
-    final_status = None
+    final_status: str | None = None
+    comment_text: str | None = None
+    fns_result: str | None = None  # "success", "no_goods", "error"
     notify_messages = {
         "Подтверждён": "✅ Чек подтверждён",
         "Нет товара в чеке": "❌ Нет товара в чеке",
@@ -148,7 +150,12 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
         existing = await sql_mgt.find_receipt_by_qr(qr_data)
         if existing and existing != receipt_id:
             await sql_mgt.update_receipt_qr(receipt_id, qr_data)
-            await sql_mgt.update_receipt_status(receipt_id, "Чек уже загружен")
+            comment_text = "Бот: чек с таким QR уже загружен"
+            await sql_mgt.update_receipt_status(
+                receipt_id,
+                "Чек уже загружен",
+                comment=comment_text,
+            )
             await global_objects.bot.send_message(
                 chat_id,
                 "❌ Чек уже загружен",
@@ -164,11 +171,16 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
             print(f"FNS check failed for receipt {receipt_id}: {exc}")
             vodka_found = None
         if vodka_found is None:
+            fns_result = "error"
             use_vision = True
         elif vodka_found:
+            fns_result = "success"
             final_status = "Подтверждён"
+            comment_text = "Бот: товар найден в данных по QR"
         else:
+            fns_result = "no_goods"
             final_status = "Нет товара в чеке"
+            comment_text = "Бот: товар не найден в данных по QR"
     else:
         use_vision = True
 
@@ -180,16 +192,46 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
                 str(dest),
                 keywords,
             )
-        vodka_by_vision, _ = ocr_result
+        vodka_by_vision, vision_error = ocr_result
         if vodka_by_vision:
             final_status = "Подтверждён"
+            if qr_data:
+                if fns_result == "error":
+                    comment_text = (
+                        "Бот: товар найден через распознавание изображения (ФНС недоступна)"
+                    )
+                else:
+                    comment_text = "Бот: товар найден через распознавание изображения"
+            else:
+                comment_text = (
+                    "Бот: товар найден через распознавание изображения (QR не распознан)"
+                )
         else:
             final_status = "Ошибка"
+            if vision_error == "изображение не прочитано":
+                comment_text = "Бот: не удалось прочитать изображение чека"
+            elif vision_error == "ключевые слова не настроены":
+                comment_text = "Бот: не настроены ключевые слова для проверки чека"
+            elif vision_error == "ошибка OCR":
+                comment_text = "Бот: произошла ошибка распознавания текста"
+            else:
+                if not qr_data:
+                    comment_text = (
+                        "Бот: QR-код не распознан и распознавание не подтвердило чек"
+                    )
+                elif fns_result == "error":
+                    comment_text = (
+                        "Бот: не удалось получить данные по QR и распознавание не подтвердило чек"
+                    )
+                else:
+                    comment_text = "Бот: распознавание не подтвердило чек"
 
     if final_status is None:
         final_status = "Ошибка"
+    if comment_text is None:
+        comment_text = f"Бот: автоматическая обработка завершилась со статусом \"{final_status}\""
 
-    await sql_mgt.update_receipt_status(receipt_id, final_status)
+    await sql_mgt.update_receipt_status(receipt_id, final_status, comment=comment_text)
 
     user_message = notify_messages.get(final_status)
     if user_message:

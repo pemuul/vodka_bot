@@ -1207,8 +1207,13 @@ async def add_receipt(
     return cursor.lastrowid
 
 @with_connection
-async def update_receipt_status(receipt_id: int, status: str, conn=None) -> str | None:
-    """Update status field for a receipt. Returns previous status."""
+async def update_receipt_status(
+    receipt_id: int,
+    status: str,
+    comment: Optional[str] = None,
+    conn=None,
+) -> str | None:
+    """Update status (and optionally comment) for a receipt. Returns previous status."""
     await ensure_receipt_comment_column(conn=conn)
     cursor = await conn.cursor()
     await cursor.execute(
@@ -1217,10 +1222,16 @@ async def update_receipt_status(receipt_id: int, status: str, conn=None) -> str 
     )
     row = await cursor.fetchone()
     old_status = row[0] if row else None
-    await cursor.execute(
-        "UPDATE receipts SET status = ? WHERE id = ?",
-        (status, receipt_id),
-    )
+    if comment is None:
+        await cursor.execute(
+            "UPDATE receipts SET status = ? WHERE id = ?",
+            (status, receipt_id),
+        )
+    else:
+        await cursor.execute(
+            "UPDATE receipts SET status = ?, comment = ? WHERE id = ?",
+            (status, comment, receipt_id),
+        )
     await conn.commit()
     return old_status
 

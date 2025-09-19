@@ -128,9 +128,10 @@ def has_receipt_draw_id() -> bool:
     """Return True if the receipts table has a 'draw_id' column."""
     return 'draw_id' in receipts_table.c
 
-# def has_receipt_comment() -> bool:
-#     """Return True if the receipts table has a 'comment' column."""
-#     return 'comment' in receipts_table.c
+
+def has_receipt_comment() -> bool:
+    """Return True if the receipts table has a 'comment' column."""
+    return 'comment' in receipts_table.c
 
 # Подготовка automap для ORM-классов
 Base = automap_base(metadata=metadata)
@@ -1321,6 +1322,7 @@ async def receipts(request: Request):
                 "status": r.get("status") if has_receipt_status() else None,
                 "draw_id": r.get("draw_id") if has_receipt_draw_id() else None,
                 "draw_title": r.get("draw_title"),
+                "comment": r.get("comment") if has_receipt_comment() else None,
             }
         )
     draw_query = sqlalchemy.select(prize_draws_table.c.id, prize_draws_table.c.title)
@@ -1377,11 +1379,13 @@ async def get_receipt(receipt_id: int):
         "message_id": r.get("message_id") if has_receipt_msg_id() else None,
         "draw_id": r.get("draw_id") if has_receipt_draw_id() else None,
         "draw_title": r.get("draw_title"),
+        "comment": r.get("comment") if has_receipt_comment() else None,
     }
 
 class ReceiptUpdate(BaseModel):
     status: str
     draw_id: Optional[int] = None
+    comment: Optional[str] = None
 
 @app.post("/api/receipts/{receipt_id}")
 async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
@@ -1391,6 +1395,8 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
     update_values = {"status": upd.status}
     if has_receipt_draw_id():
         update_values["draw_id"] = upd.draw_id
+    if has_receipt_comment():
+        update_values["comment"] = upd.comment
     await database.execute(
         receipts_table.update()
         .where(receipts_table.c.id == receipt_id)
