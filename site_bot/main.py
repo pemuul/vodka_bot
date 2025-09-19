@@ -37,6 +37,12 @@ import random
 import csv
 import io
 from decimal import Decimal
+import sys
+
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from sql_mgt import ensure_receipt_comment_column_sync
 
