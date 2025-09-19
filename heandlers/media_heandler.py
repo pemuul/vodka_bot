@@ -1,11 +1,13 @@
 from aiogram import Router,  F
 import asyncio
 import logging
+import threading
 from aiogram.types import Message
 import time
 import random
 import uuid
 from pathlib import Path
+from typing import Any
 from fns_api import get_receipt_by_qr
 
 #from sql_mgt import sql_mgt.get_param, sql_mgt.set_param, sql_mgt.append_param_get_old
@@ -27,6 +29,10 @@ logger = logging.getLogger(__name__)
 global_objects = None
 UPLOAD_DIR_CHECKS = Path(__file__).resolve().parent.parent / "site_bot" / "static" / "uploads"
 UPLOAD_DIR_CHECKS.mkdir(parents=True, exist_ok=True)
+WECHAT_MODELS_DIR = Path(__file__).resolve().parent.parent / "wechat_qrcode"
+_WECHAT_LOCK = threading.Lock()
+_WECHAT_DETECTOR: Any | None = None
+_WECHAT_INIT_FAILED = False
 
 
 def init_object(global_objects_inp):
@@ -59,6 +65,10 @@ def _detect_qr(path: str) -> str | None:
         decoded = data.strip()
         logger.info("[QR] Found QR via cv2.QRCodeDetector: %s", decoded)
         return decoded
+
+    wechat_decoded = _decode_with_wechat(img)
+    if wechat_decoded:
+        return wechat_decoded
 
     return _enhanced_qr(gray)
 
@@ -126,6 +136,127 @@ def _enhanced_qr(gray):
         pass
     logger.info("[QR] QR not detected by any method")
     return None
+
+
+def _init_wechat_detector_locked() -> Any | None:
+    """Initialize and cache the WeChat QR detector inside the lock."""
+    global _WECHAT_DETECTOR, _WECHAT_INIT_FAILED
+    if _WECHAT_INIT_FAILED:
+        return None
+    if _WECHAT_DETECTOR is not None:
+        return _WECHAT_DETECTOR
+    ctor = getattr(cv2, "wechat_qrcode_WeChatQRCode", None)
+    if ctor is None:
+        logger.info("[QR] OpenCV contrib module 'wechat_qrcode' is not available")
+        _WECHAT_INIT_FAILED = True
+        return None
+    models = {
+        "detect.prototxt": WECHAT_MODELS_DIR / "detect.prototxt",
+        "detect.caffemodel": WECHAT_MODELS_DIR / "detect.caffemodel",
+        "sr.prototxt": WECHAT_MODELS_DIR / "sr.prototxt",
+        "sr.caffemodel": WECHAT_MODELS_DIR / "sr.caffemodel",
+    }
+    missing = [name for name, path in models.items() if not path.exists()]
+    if missing:
+        logger.warning("[QR] Missing WeChat QR models: %s", ", ".join(missing))
+        _WECHAT_INIT_FAILED = True
+        return None
+    try:
+        _WECHAT_DETECTOR = ctor(
+            str(models["detect.prototxt"]),
+            str(models["detect.caffemodel"]),
+            str(models["sr.prototxt"]),
+            str(models["sr.caffemodel"]),
+        )
+    except Exception as exc:  # pragma: no cover - OpenCV specific failures
+        logger.warning("[QR] Failed to initialize WeChat QR detector: %s", exc)
+        _WECHAT_INIT_FAILED = True
+        return None
+    return _WECHAT_DETECTOR
+
+
+def _decode_with_wechat(img) -> str | None:
+    """Try to decode a QR code using the WeChat QR detector."""
+    global _WECHAT_INIT_FAILED
+    if _WECHAT_INIT_FAILED:
+        return None
+
+    with _WECHAT_LOCK:
+        if _init_wechat_detector_locked() is None:
+            return None
+
+    rotations = [("original", img)]
+    for rc, label in (
+        (cv2.ROTATE_90_CLOCKWISE, "rot90"),
+        (cv2.ROTATE_180, "rot180"),
+        (cv2.ROTATE_90_COUNTERCLOCKWISE, "rot270"),
+    ):
+        try:
+            rotations.append((label, cv2.rotate(img, rc)))
+        except Exception:
+            continue
+
+    scales = (1.0, 1.3, 1.6, 2.0)
+    for label, frame in rotations:
+        for scale in scales:
+            with _WECHAT_LOCK:
+                detector = _init_wechat_detector_locked()
+                if detector is None:
+                    return None
+                try:
+                    detector.setScaleFactor(float(scale))
+                except Exception:
+                    pass
+                try:
+                    decoded, _points = detector.detectAndDecode(frame)
+                except Exception:
+                    decoded = []
+            value = _first_wechat_result(decoded)
+            if value:
+                logger.info(
+                    "[QR] Found QR via WeChat detector (%s, scaleFactor=%s): %s",
+                    label,
+                    scale,
+                    value,
+                )
+                return value
+
+        try:
+            upscaled = cv2.resize(frame, None, fx=1.8, fy=1.8, interpolation=cv2.INTER_CUBIC)
+        except Exception:
+            continue
+        with _WECHAT_LOCK:
+            detector = _init_wechat_detector_locked()
+            if detector is None:
+                return None
+            try:
+                detector.setScaleFactor(1.0)
+            except Exception:
+                pass
+            try:
+                decoded, _points = detector.detectAndDecode(upscaled)
+            except Exception:
+                decoded = []
+        value = _first_wechat_result(decoded)
+        if value:
+            logger.info(
+                "[QR] Found QR via WeChat detector (upscaled %s): %s", label, value
+            )
+            return value
+
+    return None
+
+
+def _first_wechat_result(decoded) -> str | None:
+    """Return the first non-empty decoded value as a stripped string."""
+    if not decoded:
+        return None
+    if isinstance(decoded, (list, tuple)):
+        for candidate in decoded:
+            if candidate:
+                return str(candidate).strip()
+        return None
+    return str(decoded).strip()
 
 
 def _check_vodka_in_receipt(qr_data: str, keywords: list[str]) -> bool | None:

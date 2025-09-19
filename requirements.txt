@@ -8,7 +8,7 @@ sqladmin
 pydantic
 pillow
 pyzbar
-opencv-python-headless
+opencv-contrib-python-headless
 easyocr
 numpy==1.23.5
 pandas==1.5.3
