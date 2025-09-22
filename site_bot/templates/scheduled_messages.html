@@ -59,10 +59,6 @@
               <textarea id="message-content" class="form-control" rows="5" required></textarea>
             </div>
             <div class="mb-3">
-              <label for="message-schedule" class="form-label">Время отправки</label>
-              <input type="datetime-local" id="message-schedule" class="form-control" />
-            </div>
-            <div class="mb-3">
               <label class="form-label">Медиафайлы</label>
               <div id="media-list"></div>
               <button type="button" class="btn btn-outline-secondary btn-sm mt-1" id="add-media-btn">Добавить медиа</button>
@@ -121,10 +117,7 @@
           tr.innerHTML = `
             <td>${i+1}</td>
             <td>${msg.name}</td>
-            <td>${new Date(msg.schedule).toLocaleString("ru-RU", {
-              year:"numeric",month:"2-digit",day:"2-digit",
-              hour:"2-digit",minute:"2-digit"
-            }).replace(",", "")}</td>
+            <td>${msg.schedule_display ? msg.schedule_display : ""}</td>
             <td>
               <span class="badge ${
                 msg.status==="Новый"?"bg-primary":
@@ -161,7 +154,9 @@
             idInput.value = msg.id;
             nameInput.value = msg.name;
             contentInput.value = msg.content;
-            scheduleInput.value = msg.schedule;
+            if (scheduleInput) {
+              scheduleInput.value = msg.schedule || "";
+            }
             statusGroup.classList.remove("d-none");
             statusInput.value = msg.status;
             mediaArr = msg.media ? msg.media.map(m=>({type:m.type,file:m.file||m.file_id||''})) : [];
@@ -175,7 +170,9 @@
             formTitle.textContent = "Копия рассылки";
             nameInput.value = msg.name + " (копия)";
             contentInput.value = msg.content;
-            scheduleInput.value = msg.schedule;
+            if (scheduleInput) {
+              scheduleInput.value = msg.schedule || "";
+            }
             statusGroup.classList.add("d-none");
             mediaArr = msg.media ? msg.media.map(m=>({type:m.type,file:m.file||m.file_id||''})) : [];
             renderMediaFields();
@@ -267,10 +264,12 @@
           id: idInput.value ? parseInt(idInput.value) : null,
           name: nameInput.value.trim(),
           content: contentInput.value.trim(),
-          schedule: scheduleInput.value ? new Date(scheduleInput.value) : null,
           status: statusInput.value,
           media: mediaArr.filter(m=>m.file)
         };
+        if (scheduleInput && scheduleInput.value) {
+          payload.schedule = new Date(scheduleInput.value);
+        }
         const res = await fetch("/scheduled-messages", {
           method: "POST",
           headers: {"Content-Type":"application/json"},

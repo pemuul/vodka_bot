@@ -58,6 +58,9 @@ engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 metadata = MetaData()
 logger = logging.getLogger(__name__)
 
+UTC = datetime.timezone.utc
+MSK_TZ = datetime.timezone(datetime.timedelta(hours=3), name="MSK")
+
 
 def _ensure_receipts_schema() -> None:
     """Ensure the receipts table has the expected primary key and comment column."""
@@ -868,10 +871,17 @@ async def scheduled_messages(request: Request):
     messages = []
     for r in rows:
         schedule_val = r["schedule_dt"]
-        if schedule_val is not None:
-            schedule_str = schedule_val.strftime("%Y-%m-%dT%H:%M")
-        else:
-            schedule_str = ""
+        schedule_iso = ""
+        schedule_display = ""
+        if isinstance(schedule_val, str):
+            try:
+                schedule_val = datetime.datetime.fromisoformat(schedule_val)
+            except ValueError:
+                schedule_val = None
+        if isinstance(schedule_val, datetime.datetime):
+            aware = schedule_val if schedule_val.tzinfo else schedule_val.replace(tzinfo=UTC)
+            schedule_iso = aware.astimezone(UTC).strftime("%Y-%m-%dT%H:%M")
+            schedule_display = aware.astimezone(MSK_TZ).strftime("%d.%m.%Y %H:%M")
         try:
             media = json.loads(r["media"]) if HAS_SM_MEDIA and r["media"] else []
         except Exception:
@@ -880,7 +890,8 @@ async def scheduled_messages(request: Request):
             "id": r["id"],
             "name": r["name"],
             "content": r["content"],
-            "schedule": schedule_str,
+            "schedule": schedule_iso,
+            "schedule_display": schedule_display,
             "status": r["status"],
             "media": media,
         })
@@ -896,6 +907,14 @@ class ScheduledMessageIn(BaseModel):
     schedule: Optional[datetime.datetime] = None
     status: Optional[str] = "Новый"
     media: Optional[List[Dict[str, str]]] = None
+
+
+def _to_utc_naive(value: Optional[datetime.datetime]) -> Optional[datetime.datetime]:
+    if value is None:
+        return None
+    if value.tzinfo is not None:
+        return value.astimezone(UTC).replace(tzinfo=None)
+    return value
 
 @app.post("/scheduled-messages")
 async def save_scheduled_message(msg: ScheduledMessageIn):
@@ -913,7 +932,7 @@ async def save_scheduled_message(msg: ScheduledMessageIn):
             scheduled_messages_table.insert().values(
                 name=msg.name,
                 content=msg.content,
-                schedule_dt=msg.schedule or datetime.datetime.utcnow(),
+                schedule_dt=_to_utc_naive(msg.schedule) or datetime.datetime.utcnow(),
                 status=msg.status,
                 **({"media": media_json} if HAS_SM_MEDIA else {})
             )
@@ -925,16 +944,19 @@ async def save_scheduled_message(msg: ScheduledMessageIn):
         )
         if not existing:
             raise HTTPException(404, "Message not found")
+        fields_set = getattr(msg, "__fields_set__", set())
+        update_values = {
+            "name": msg.name,
+            "content": msg.content,
+            "status": msg.status,
+            **({"media": media_json} if HAS_SM_MEDIA else {})
+        }
+        if "schedule" in fields_set:
+            update_values["schedule_dt"] = _to_utc_naive(msg.schedule) or datetime.datetime.utcnow()
         await database.execute(
             scheduled_messages_table.update()
             .where(scheduled_messages_table.c.id == msg.id)
-            .values(
-                name=msg.name,
-                content=msg.content,
-                schedule_dt=msg.schedule or datetime.datetime.utcnow(),
-                status=msg.status,
-                **({"media": media_json} if HAS_SM_MEDIA else {})
-            )
+            .values(**update_values)
         )
         return {"success": True, "id": msg.id}
 
