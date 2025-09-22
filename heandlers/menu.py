@@ -227,8 +227,11 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                 if pdf_path:
                     local = Path(__file__).resolve().parent.parent / 'site_bot' / pdf_path.lstrip('/')
                     if local.exists():
+                        ext = local.suffix
+                        filename = f"Правила акции{ext}" if ext else "Правила акции"
                         doc = await message.answer_document(
-                            FSInputFile(local, filename="Правила.pdf")
+                            FSInputFile(local, filename=filename),
+                            caption="Правила акции",
                         )
                         await sql_mgt.append_param_get_old(
                             message.chat.id, 'LAST_MEDIA_LIST', str(doc.message_id)
@@ -251,8 +254,11 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                 if pdf_path:
                     local = Path(__file__).resolve().parent.parent / 'site_bot' / pdf_path.lstrip('/')
                     if local.exists():
+                        ext = local.suffix
+                        filename = f"Правила акции{ext}" if ext else "Правила акции"
                         doc = await message.answer_document(
-                            FSInputFile(local, filename="Правила.pdf")
+                            FSInputFile(local, filename=filename),
+                            caption="Правила акции",
                         )
                         await sql_mgt.append_param_get_old(
                             message.chat.id, 'LAST_MEDIA_LIST', str(doc.message_id)

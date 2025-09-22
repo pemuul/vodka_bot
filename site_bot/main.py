@@ -1046,6 +1046,12 @@ async def settings(request: Request):
         .where(params_table.c.param_name == "privacy_policy_file")
     )
     policy_url = row_file["value"] if row_file else ""
+    row_rules = await database.fetch_one(
+        params_table.select()
+        .where(params_table.c.user_tg_id == 0)
+        .where(params_table.c.param_name == "RULE_PDF")
+    )
+    rules_url = row_rules["value"] if row_rules else ""
     return templates.TemplateResponse(
         "settings.html",
         {
@@ -1053,6 +1059,7 @@ async def settings(request: Request):
             "active_page": "settings",
             "keywords": keywords,
             "policy_url": policy_url,
+            "rules_url": rules_url,
             "version": app.state.static_version,
         },
     )
@@ -1062,6 +1069,7 @@ async def settings(request: Request):
 async def save_settings(
     product_names: str = Form(""),
     privacy_file: UploadFile | None = File(None),
+    rules_file: UploadFile | None = File(None),
 ):
     query = sqlite_insert(params_table).values(
         user_tg_id=0, param_name="product_keywords", value=product_names
@@ -1071,20 +1079,26 @@ async def save_settings(
         set_={"value": product_names},
     )
     await database.execute(query)
-    if privacy_file and privacy_file.filename:
-        fname = f"privacy_{uuid.uuid4().hex}{Path(privacy_file.filename).suffix}"
+    async def _save_upload(upload: UploadFile, prefix: str, param_name: str) -> None:
+        suffix = Path(upload.filename).suffix
+        fname = f"{prefix}_{uuid.uuid4().hex}{suffix}"
         dest = UPLOAD_DIR / fname
         with open(dest, "wb") as out:
-            out.write(await privacy_file.read())
+            out.write(await upload.read())
         rel = f"/static/uploads/{fname}"
         query = sqlite_insert(params_table).values(
-            user_tg_id=0, param_name="privacy_policy_file", value=rel
+            user_tg_id=0, param_name=param_name, value=rel
         )
         query = query.on_conflict_do_update(
             index_elements=[params_table.c.user_tg_id, params_table.c.param_name],
             set_={"value": rel},
         )
         await database.execute(query)
+
+    if privacy_file and privacy_file.filename:
+        await _save_upload(privacy_file, "privacy", "privacy_policy_file")
+    if rules_file and rules_file.filename:
+        await _save_upload(rules_file, "rules", "RULE_PDF")
     return RedirectResponse("/settings", status_code=303)
 
 @app.get("/participants", response_class=HTMLResponse)
@@ -1531,6 +1545,8 @@ async def get_settings_site_all(request: Request):
         "settings_site": {
             "min_amount": data.get("min_amount", ""),
             "PAYMENTS_TOKEN": data.get("PAYMENTS_TOKEN", ""),
+            "privacy_policy_file": data.get("privacy_policy_file", ""),
+            "RULE_PDF": data.get("RULE_PDF", ""),
         }
     }
 
@@ -1541,6 +1557,7 @@ async def update_settings_site(
     min_order: str = Form(""),
     payment_token: str = Form(""),
     privacy_file: UploadFile | None = File(None),
+    rules_file: UploadFile | None = File(None),
 ):
     for name, value in (("min_amount", min_order), ("PAYMENTS_TOKEN", payment_token)):
         if value:
@@ -1552,20 +1569,26 @@ async def update_settings_site(
                 set_={"value": value},
             )
             await database.execute(query)
-    if privacy_file and privacy_file.filename:
-        fname = f"privacy_{uuid.uuid4().hex}{Path(privacy_file.filename).suffix}"
+    async def _save_upload(upload: UploadFile, prefix: str, param_name: str) -> None:
+        suffix = Path(upload.filename).suffix
+        fname = f"{prefix}_{uuid.uuid4().hex}{suffix}"
         dest = UPLOAD_DIR / fname
         with open(dest, "wb") as out:
-            out.write(await privacy_file.read())
+            out.write(await upload.read())
         rel = f"/static/uploads/{fname}"
         query = sqlite_insert(params_table).values(
-            user_tg_id=0, param_name="privacy_policy_file", value=rel
+            user_tg_id=0, param_name=param_name, value=rel
         )
         query = query.on_conflict_do_update(
             index_elements=[params_table.c.user_tg_id, params_table.c.param_name],
             set_={"value": rel},
         )
         await database.execute(query)
+
+    if privacy_file and privacy_file.filename:
+        await _save_upload(privacy_file, "privacy", "privacy_policy_file")
+    if rules_file and rules_file.filename:
+        await _save_upload(rules_file, "rules", "RULE_PDF")
     return {"success": True}
 
 
