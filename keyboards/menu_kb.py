@@ -51,7 +51,7 @@ def get_menu_kb(message, path, extra_rows: list[str] | None = None) -> ReplyKeyb
         if not previus_path:
             previus_path = SPLITTER_STR
 
-        keyboard.append([KeyboardButton(text='Вернуться назад')])
+        keyboard.append([KeyboardButton(text='Вернуться назад ↩️')])
     
     if tree_item.path == SPLITTER_STR:
         if global_objects.settings_bot.get('site').get('site_on'):
