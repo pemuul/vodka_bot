@@ -6,7 +6,7 @@ import sqlite3
 import json
 import logging
 
-from typing import Iterable, Dict, Any, Optional, List
+from typing import Iterable, Dict, Any, Optional, List, Tuple
 
 from keys import DB_NAME
 
@@ -1205,6 +1205,119 @@ async def add_receipt(
     )
     await conn.commit()
     return cursor.lastrowid
+
+
+@with_connection
+async def enqueue_receipt_ocr(receipt_id: int, conn=None) -> None:
+    """Add a receipt to the OCR processing queue."""
+    await conn.execute(
+        """
+        INSERT INTO receipt_ocr_queue (receipt_id, status, attempts, last_error, locked_at, updated_at, available_at)
+        VALUES (?, 'pending', 0, NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(receipt_id) DO UPDATE SET
+            status = 'pending',
+            attempts = 0,
+            last_error = NULL,
+            locked_at = NULL,
+            updated_at = CURRENT_TIMESTAMP,
+            available_at = CURRENT_TIMESTAMP
+        """,
+        (receipt_id,),
+    )
+    await conn.commit()
+
+
+@with_connection
+async def acquire_next_receipt_for_ocr(
+    lock_timeout_seconds: int = 300,
+    conn=None,
+) -> Tuple[int, int, int] | None:
+    """Reserve the next available OCR job and return (queue_id, receipt_id, attempts)."""
+    await conn.execute("BEGIN IMMEDIATE")
+    cursor = await conn.execute(
+        """
+        SELECT id, receipt_id, attempts
+        FROM receipt_ocr_queue
+        WHERE (
+                status = 'pending'
+                AND (available_at IS NULL OR available_at <= CURRENT_TIMESTAMP)
+            )
+            OR (
+                status = 'processing'
+                AND (
+                    locked_at IS NULL
+                    OR locked_at <= datetime('now', ?)
+                )
+            )
+        ORDER BY
+            CASE WHEN status = 'processing' THEN 0 ELSE 1 END,
+            updated_at ASC,
+            id ASC
+        LIMIT 1
+        """,
+        (f"-{lock_timeout_seconds} seconds",),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        await conn.rollback()
+        return None
+
+    queue_id, receipt_id, attempts = row
+    await conn.execute(
+        """
+        UPDATE receipt_ocr_queue
+        SET status = 'processing',
+            attempts = ?,
+            locked_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (attempts + 1, queue_id),
+    )
+    await conn.commit()
+    return queue_id, receipt_id, attempts + 1
+
+
+@with_connection
+async def mark_receipt_queue_complete(queue_id: int, conn=None) -> None:
+    """Mark an OCR queue job as completed."""
+    await conn.execute(
+        """
+        UPDATE receipt_ocr_queue
+        SET status = 'done',
+            last_error = NULL,
+            locked_at = NULL,
+            updated_at = CURRENT_TIMESTAMP,
+            available_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (queue_id,),
+    )
+    await conn.commit()
+
+
+@with_connection
+async def mark_receipt_queue_failed(
+    queue_id: int,
+    error_message: str,
+    retry_delay_seconds: int = 60,
+    conn=None,
+) -> None:
+    """Return a queue job back to pending state with error description."""
+    await conn.execute(
+        """
+        UPDATE receipt_ocr_queue
+        SET status = 'pending',
+            last_error = ?,
+            locked_at = NULL,
+            updated_at = CURRENT_TIMESTAMP,
+            available_at = datetime('now', ?)
+        WHERE id = ?
+        """,
+        (error_message[:512], f"+{retry_delay_seconds} seconds", queue_id),
+    )
+    await conn.commit()
+
 
 @with_connection
 async def update_receipt_status(

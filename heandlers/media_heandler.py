@@ -436,8 +436,8 @@ async def set_photo(message: Message) -> None:
                 message_id=message.message_id,
                 draw_id=draw_id,
             )
-            await message.reply('Чек получен, идёт обработка...')
-            asyncio.create_task(process_receipt(dest, message.chat.id, message.message_id, receipt_id))
+            await sql_mgt.enqueue_receipt_ocr(receipt_id)
+            await message.reply('Чек получен, чек поставлен в очередь на обработку...')
             return
         except Exception:
             await message.reply('Ошибка при обработке чека. Попробуйте ещё раз.')
