@@ -20,7 +20,7 @@
 
 Скрипт обрабатывает очередь последовательно (по одному чеку) и гарантирует,
 что незавершённые задания после падения процесса не теряются и будут
-обработаны повторно. Проверка очереди выполняется каждые 3 секунды.
+обработаны повторно. Проверка очереди выполняется каждую секунду.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ from aiogram.enums import ParseMode
 import sql_mgt
 from heandlers import media_heandler
 
-IDLE_SLEEP_SECONDS = 3
+IDLE_SLEEP_SECONDS = 1
 LOCK_TIMEOUT_SECONDS = 300
 RETRY_DELAY_SECONDS = 60
 SETTINGS_ENV_VAR = "RECEIPT_WORKER_SETTINGS_PATH"
