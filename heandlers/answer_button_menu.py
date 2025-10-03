@@ -4,7 +4,7 @@ from aiogram.types import Message, CallbackQuery
 from heandlers import menu, commands, admin, text_heandler
 #from sql_mgt import sql_mgt.set_param
 import sql_mgt
-from keys import SPLITTER_STR
+from keys import SPLITTER_STR, SHOW_SECTION_NAME
 
 
 router = Router()
@@ -25,12 +25,14 @@ def _build_menu_text(path: str) -> str:
 
     tree_name = tree_item.path.split(SPLITTER_STR)[-1]
     text_message = ""
-    if tree_name:
+    if SHOW_SECTION_NAME and tree_name:
         text_message = f'"{tree_name}"'
 
     tree_item_text = tree_item.text
     if tree_item_text:
-        text_message += "\n\n" + tree_item_text
+        if text_message:
+            text_message += "\n\n"
+        text_message += tree_item_text
 
     return text_message
 
@@ -62,7 +64,7 @@ async def menu_text_handler(message: Message):
         return
 
     # обработка кнопки Назад
-    if message.text == 'Вернуться назад':
+    if message.text == 'Вернуться назад ↩️':
         previus_path = SPLITTER_STR.join(tree_item.path.split(SPLITTER_STR)[:-1])
         if not previus_path:
             previus_path = SPLITTER_STR
