@@ -6,11 +6,16 @@
    (например, через ``environment=`` в supervisor), либо в файле
    ``new_bot_file/settings.json``. По умолчанию скрипт использует каталог
    ``new_bot_file`` как ``run_directory``.
-2. Перед первым запуском выполните ``python receipt_queue_worker.py --migrate``
+2. При необходимости задайте путь к ``settings.json`` через переменную
+   окружения ``RECEIPT_WORKER_SETTINGS_PATH`` или параметр ``--settings`` —
+   это пригодится, если запуск происходит из другого каталога (например,
+   аналогично ``new_bot_file/run_bot.py``).
+3. Перед первым запуском выполните ``python receipt_queue_worker.py --migrate``
    либо запустите основной бот, чтобы создать/обновить базу данных.
-3. Запустите сервис командой ``python receipt_queue_worker.py`` в том же
-   окружении, что и основной бот. Скрипт можно добавить в supervisor как
-   отдельный процесс; при сбое задания возвращаются в очередь автоматически.
+4. Запустите сервис командой ``python receipt_queue_worker.py`` (или через
+   обёртку ``new_bot_file/run_receipt_worker.py``) в том же окружении, что и
+   основной бот. Скрипт можно добавить в supervisor как отдельный процесс;
+   при сбое задания возвращаются в очередь автоматически.
 
 Скрипт обрабатывает очередь последовательно (по одному чеку) и гарантирует,
 что незавершённые задания после падения процесса не теряются и будут
@@ -40,6 +45,7 @@ from heandlers import media_heandler
 IDLE_SLEEP_SECONDS = 3
 LOCK_TIMEOUT_SECONDS = 300
 RETRY_DELAY_SECONDS = 60
+SETTINGS_ENV_VAR = "RECEIPT_WORKER_SETTINGS_PATH"
 SETTINGS_PATH = Path(__file__).resolve().parent / "new_bot_file" / "settings.json"
 
 
@@ -53,6 +59,14 @@ class WorkerContext:
     tree_data: Any | None = None
     ocr_pool: concurrent.futures.Executor | None = None
 
+def _resolve_settings_path(explicit_path: str | os.PathLike[str] | None) -> Path:
+    if explicit_path:
+        return Path(explicit_path).expanduser().resolve()
+    env_path = os.getenv(SETTINGS_ENV_VAR)
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+    return SETTINGS_PATH
+
 
 def _load_settings(settings_path: Path) -> dict[str, Any]:
     if not settings_path.exists():
@@ -63,8 +77,11 @@ def _load_settings(settings_path: Path) -> dict[str, Any]:
     return settings
 
 
-def create_context(settings_path: Path = SETTINGS_PATH) -> WorkerContext:
-    settings = _load_settings(settings_path)
+def create_context(
+    settings_path: str | os.PathLike[str] | Path | None = None,
+) -> WorkerContext:
+    settings_file = _resolve_settings_path(settings_path)
+    settings = _load_settings(settings_file)
     token = os.getenv("TELEGRAM_BOT_TOKEN") or settings.get("TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError(
@@ -194,12 +211,16 @@ async def run_worker(migrate_only: bool) -> None:
         logging.info("Сервис очереди распознавания остановлен")
 
 
-def main() -> None:
+def main(settings_path: str | os.PathLike[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Очередь распознавания чеков")
     parser.add_argument(
         "--migrate",
         action="store_true",
         help="Только применить миграции базы данных и завершиться",
+    )
+    parser.add_argument(
+        "--settings",
+        help="Путь к settings.json (по умолчанию определяется автоматически)",
     )
     args = parser.parse_args()
 
@@ -208,7 +229,7 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    context = create_context()
+    context = create_context(args.settings or settings_path)
 
     try:
         asyncio.run(run_worker(args.migrate))
