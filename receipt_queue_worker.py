@@ -14,7 +14,7 @@
 
 Скрипт обрабатывает очередь последовательно (по одному чеку) и гарантирует,
 что незавершённые задания после падения процесса не теряются и будут
-обработаны повторно.
+обработаны повторно. Проверка очереди выполняется каждые 3 секунды.
 """
 
 from __future__ import annotations
@@ -98,21 +98,28 @@ async def _migrate_database() -> None:
     await sql_mgt.create_db()
 
 
-async def _process_queue(stop_event: asyncio.Event) -> None:
-    while True:
-        if stop_event.is_set():
-            break
+async def _wait_with_stop(stop_event: asyncio.Event, timeout: float) -> bool:
+    """Wait for ``timeout`` seconds or until the stop event is set.
 
+    Returns ``True`` if the stop event was set, ``False`` if the timeout expired.
+    """
+
+    try:
+        await asyncio.wait_for(stop_event.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        return False
+    return True
+
+
+async def _process_queue(stop_event: asyncio.Event) -> None:
+    while not stop_event.is_set():
         job = await sql_mgt.acquire_next_receipt_for_ocr(
             lock_timeout_seconds=LOCK_TIMEOUT_SECONDS
         )
         if job is None:
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=IDLE_SLEEP_SECONDS)
-            except asyncio.TimeoutError:
-                continue
-            else:
+            if await _wait_with_stop(stop_event, IDLE_SLEEP_SECONDS):
                 break
+            continue
 
         queue_id, receipt_id, attempt = job
         logging.info(
@@ -151,10 +158,8 @@ async def _process_queue(stop_event: asyncio.Event) -> None:
                 str(exc),
                 retry_delay_seconds=RETRY_DELAY_SECONDS,
             )
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=IDLE_SLEEP_SECONDS)
-            except asyncio.TimeoutError:
-                continue
+        if await _wait_with_stop(stop_event, IDLE_SLEEP_SECONDS):
+            break
 
 
 async def run_worker(migrate_only: bool) -> None:
