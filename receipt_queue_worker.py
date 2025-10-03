@@ -2,9 +2,10 @@
 
 Инструкция по запуску
 ----------------------
-1. Убедитесь, что в файле ``new_bot_file/settings.json`` указан актуальный
-   ``TELEGRAM_BOT_TOKEN`` и остальные настройки совпадают с основным ботом.
-   По умолчанию скрипт использует каталог ``new_bot_file`` как ``run_directory``.
+1. Укажите токен бота либо в переменной окружения ``TELEGRAM_BOT_TOKEN``
+   (например, через ``environment=`` в supervisor), либо в файле
+   ``new_bot_file/settings.json``. По умолчанию скрипт использует каталог
+   ``new_bot_file`` как ``run_directory``.
 2. Перед первым запуском выполните ``python receipt_queue_worker.py --migrate``
    либо запустите основной бот, чтобы создать/обновить базу данных.
 3. Запустите сервис командой ``python receipt_queue_worker.py`` в том же
@@ -23,6 +24,7 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import os
 import signal
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,11 +65,13 @@ def _load_settings(settings_path: Path) -> dict[str, Any]:
 
 def create_context(settings_path: Path = SETTINGS_PATH) -> WorkerContext:
     settings = _load_settings(settings_path)
-    token = settings.get("TELEGRAM_BOT_TOKEN")
+    token = os.getenv("TELEGRAM_BOT_TOKEN") or settings.get("TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError(
-            "В settings.json не указан TELEGRAM_BOT_TOKEN — сервис не сможет уведомлять пользователей"
+            "Не удалось получить TELEGRAM_BOT_TOKEN из переменной окружения или settings.json"
         )
+
+    settings["TELEGRAM_BOT_TOKEN"] = token
 
     bot = Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
