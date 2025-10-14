@@ -188,6 +188,10 @@ async def _process_queue(stop_event: asyncio.Event) -> None:
             )
         finally:
             last_job_completed_at = time.monotonic()
+            # EasyOCR может удерживать значительные объёмы памяти даже после
+            # завершения задачи. Принудительно освобождаем ресурсы после
+            # каждого чека, чтобы предотвратить рост потребления памяти.
+            media_heandler.release_ocr_resources()
         if await _wait_with_stop(stop_event, IDLE_SLEEP_SECONDS):
             break
 
