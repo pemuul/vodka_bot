@@ -9,7 +9,7 @@ import json
 import sql_mgt
 from keyboards.menu_kb import get_menu_kb, init_object as init_object_mkb
 from keyboards.admin_kb import edit_menu_kb, init_object as init_object_akb
-from keys import SPLITTER_STR, DELETE_MESSAGES
+from keys import SPLITTER_STR, DELETE_MESSAGES, SHOW_SECTION_NAME
 
 
 global_objects = None
@@ -70,12 +70,12 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
     await sql_mgt.set_param(message.chat.id, 'CURRENT_PATH_ID', str(path_id_current))
 
     tree_name = tree_item.path.split(SPLITTER_STR)[-1]
-    #print(tree_item) 
+    #print(tree_item)
     text_message = ''
     #if not tree_name:
     #    tree_name = 'Меню'
-    if tree_name:
-        text_message = f'"{tree_name}"' 
+    if SHOW_SECTION_NAME and tree_name:
+        text_message = f'"{tree_name}"'
     
     tree_item_text = tree_item.text
     if tree_item.path == SPLITTER_STR and await sql_mgt.is_user_blocked(message.chat.id):
@@ -85,7 +85,8 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
         )
         text_message = blocked_note + text_message
     if tree_item_text:
-        text_message += '\n\n'
+        if text_message:
+            text_message += '\n\n'
         text_message += tree_item_text
 
     # получаем параметры данного юзера
@@ -226,8 +227,11 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                 if pdf_path:
                     local = Path(__file__).resolve().parent.parent / 'site_bot' / pdf_path.lstrip('/')
                     if local.exists():
+                        ext = local.suffix
+                        filename = f"Правила акции{ext}" if ext else "Правила акции"
                         doc = await message.answer_document(
-                            FSInputFile(local, filename="Правила.pdf")
+                            FSInputFile(local, filename=filename),
+                            caption="Правила акции",
                         )
                         await sql_mgt.append_param_get_old(
                             message.chat.id, 'LAST_MEDIA_LIST', str(doc.message_id)
@@ -250,8 +254,11 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                 if pdf_path:
                     local = Path(__file__).resolve().parent.parent / 'site_bot' / pdf_path.lstrip('/')
                     if local.exists():
+                        ext = local.suffix
+                        filename = f"Правила акции{ext}" if ext else "Правила акции"
                         doc = await message.answer_document(
-                            FSInputFile(local, filename="Правила.pdf")
+                            FSInputFile(local, filename=filename),
+                            caption="Правила акции",
                         )
                         await sql_mgt.append_param_get_old(
                             message.chat.id, 'LAST_MEDIA_LIST', str(doc.message_id)

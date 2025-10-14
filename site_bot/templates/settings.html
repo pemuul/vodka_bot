@@ -24,6 +24,13 @@
         {% endif %}
         <input type="file" class="form-control" id="privacy-file" name="privacy_file" />
       </div>
+      <div class="mb-3">
+        <label for="rules-file" class="form-label">Файл с правилами акции</label>
+        {% if rules_url %}
+        <p><a href="{{ rules_url }}" target="_blank">Текущий файл</a></p>
+        {% endif %}
+        <input type="file" class="form-control" id="rules-file" name="rules_file" />
+      </div>
       <button type="submit" class="btn btn-primary">Сохранить</button>
     </form>
   </div>

@@ -1745,6 +1745,15 @@ async function openSettingsSite() {
                         <input type="file" id="privacy-file" name="privacy_file">
                     </div>
                 </div>
+                <div style="margin-bottom: 20px;">
+                    <div class="nameInput">
+                        <img class="icon_arrow" src="icon/Line 15.png" alt="">
+                        <label for="rules-file">Правила акции</label>
+                    </div>
+                    <div class="textareaInput">
+                        <input type="file" id="rules-file" name="rules_file">
+                    </div>
+                </div>
                 <button id="save-settings-site" class="btn btnGreen">Сохранить</button>
             </form>
         `;
