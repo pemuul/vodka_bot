@@ -20,7 +20,7 @@ import cv2
 from pyzbar.pyzbar import decode, ZBarSymbol
 # optional ZXing libraries may provide more robust QR reading
 # OCR helper based on Tesseract with Russian and English models
-from ocr import extract_text
+from ocr import extract_text, release_reader
 
 
 
@@ -42,6 +42,15 @@ def init_object(global_objects_inp):
     import_files.init_object(global_objects_inp)
     admin.init_object(global_objects_inp)
     sql_mgt.init_object(global_objects_inp)
+
+
+def release_ocr_resources() -> None:
+    """Release cached OCR models to lower the process memory footprint."""
+
+    try:
+        release_reader()
+    except Exception:
+        logger.exception("[QR] Failed to release OCR resources")
 
 
 def _detect_qr(path: str) -> str | None:

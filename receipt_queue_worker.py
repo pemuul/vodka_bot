@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import signal
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -46,6 +47,7 @@ from heandlers import media_heandler
 IDLE_SLEEP_SECONDS = 1
 LOCK_TIMEOUT_SECONDS = 300
 RETRY_DELAY_SECONDS = 60
+OCR_IDLE_RELEASE_SECONDS = 60
 SETTINGS_ENV_VAR = "RECEIPT_WORKER_SETTINGS_PATH"
 SETTINGS_PATH = Path(__file__).resolve().parent / "new_bot_file" / "settings.json"
 
@@ -130,11 +132,19 @@ async def _wait_with_stop(stop_event: asyncio.Event, timeout: float) -> bool:
 
 
 async def _process_queue(stop_event: asyncio.Event) -> None:
+    last_job_completed_at: float | None = None
+
     while not stop_event.is_set():
         job = await sql_mgt.acquire_next_receipt_for_ocr(
             lock_timeout_seconds=LOCK_TIMEOUT_SECONDS
         )
         if job is None:
+            if (
+                last_job_completed_at is not None
+                and time.monotonic() - last_job_completed_at >= OCR_IDLE_RELEASE_SECONDS
+            ):
+                media_heandler.release_ocr_resources()
+                last_job_completed_at = None
             if await _wait_with_stop(stop_event, IDLE_SLEEP_SECONDS):
                 break
             continue
@@ -176,6 +186,8 @@ async def _process_queue(stop_event: asyncio.Event) -> None:
                 str(exc),
                 retry_delay_seconds=RETRY_DELAY_SECONDS,
             )
+        finally:
+            last_job_completed_at = time.monotonic()
         if await _wait_with_stop(stop_event, IDLE_SLEEP_SECONDS):
             break
 
@@ -237,6 +249,7 @@ def main(settings_path: str | os.PathLike[str] | None = None) -> None:
     finally:
         if context.ocr_pool:
             context.ocr_pool.shutdown(wait=False)
+        media_heandler.release_ocr_resources()
         asyncio.run(_close_bot_session(context.bot))
 
 
