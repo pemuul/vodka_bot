@@ -21,12 +21,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Language to use (can be specified multiple times)",
     )
+    parser.add_argument("--output", required=True, help="Path to JSON file for results")
     return parser
 
 
-def _emit(payload: dict[str, object]) -> None:
-    json.dump(payload, sys.stdout, ensure_ascii=False)
-    sys.stdout.write("\n")
+def _emit(payload: dict[str, object], output_path: Path) -> None:
+    output_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -34,27 +34,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     languages = list(args.languages) if args.languages else list(_DEFAULT_LANGUAGES)
+    output_path = Path(args.output)
 
     image_path = Path(args.image)
     if not image_path.exists():
-        _emit({"success": False, "error": f"image not found: {image_path}"})
+        _emit({"success": False, "error": f"image not found: {image_path}"}, output_path)
         return 0
 
     try:
-        import cv2  # type: ignore
         import easyocr  # type: ignore
 
-        image = cv2.imread(str(image_path))
-        if image is None:
-            _emit({"success": False, "error": "image not readable"})
-            return 0
-
         reader = easyocr.Reader(languages, gpu=False, verbose=False)
-        lines = reader.readtext(image, detail=0)
-        _emit({"success": True, "text": "\n".join(lines)})
+        lines = reader.readtext(str(image_path), detail=0)
+        _emit({"success": True, "text": "\n".join(lines)}, output_path)
         return 0
     except Exception as exc:  # pragma: no cover - native libs safety net
-        _emit({"success": False, "error": f"{exc.__class__.__name__}: {exc}"})
+        _emit({"success": False, "error": f"{exc.__class__.__name__}: {exc}"}, output_path)
         return 0
 
 

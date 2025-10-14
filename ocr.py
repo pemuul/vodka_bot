@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 __all__ = ["extract_text", "release_reader", "OCRWorkerError"]
@@ -32,7 +33,16 @@ def _spawn_worker(image_path: str, timeout: float) -> tuple[bool, str]:
     if not worker_path.exists():  # pragma: no cover - deployment guard
         raise OCRWorkerError("worker helper script not found")
 
-    cmd: list[str] = [sys.executable, str(worker_path), "--image", image_path]
+    output_file: Path | None = None
+    tmp_handle = None
+    try:
+        tmp_handle = tempfile.NamedTemporaryFile("w", delete=False, suffix=".json")
+        output_file = Path(tmp_handle.name)
+        tmp_handle.close()
+    except OSError as exc:  # pragma: no cover - filesystem safety
+        raise OCRWorkerError(f"failed to prepare worker output file: {exc}") from exc
+
+    cmd: list[str] = [sys.executable, "-u", str(worker_path), "--image", image_path, "--output", str(output_file)]
     for lang in _DEFAULT_LANGUAGES:
         cmd.extend(["--lang", lang])
 
@@ -45,19 +55,27 @@ def _spawn_worker(image_path: str, timeout: float) -> tuple[bool, str]:
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
+        if output_file is not None:
+            output_file.unlink(missing_ok=True)
         raise TimeoutError(f"timeout after {timeout} seconds") from exc
 
     stdout = completed.stdout.strip()
-    if not stdout:
-        if completed.stderr:
-            stderr = completed.stderr.strip()
-            raise OCRWorkerError(f"worker produced no output: {stderr}")
-        raise OCRWorkerError("worker produced no output")
+    stderr = completed.stderr.strip()
+
+    if output_file is None or not output_file.exists():
+        message = stderr or stdout or f"exit code {completed.returncode}"
+        raise OCRWorkerError(f"worker produced no output: {message}")
 
     try:
-        payload = json.loads(stdout)
+        payload = json.loads(output_file.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:  # pragma: no cover - defensive
         raise OCRWorkerError("invalid worker response") from exc
+    finally:
+        if output_file is not None:
+            output_file.unlink(missing_ok=True)
+
+    if not payload:
+        raise OCRWorkerError("worker returned empty payload")
 
     success = bool(payload.get("success"))
     message = payload.get("text") if success else payload.get("error", "unknown error")
