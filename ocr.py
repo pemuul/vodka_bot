@@ -11,21 +11,21 @@ exits.
 from __future__ import annotations
 
 import multiprocessing as mp
+from multiprocessing.connection import Connection
 import os
-import queue
 from pathlib import Path
 from typing import Sequence
 
 __all__ = ["extract_text", "release_reader", "OCRWorkerError"]
 
 _DEFAULT_LANGUAGES: tuple[str, ...] = ("ru", "en")
-_DEFAULT_TIMEOUT: float = float(os.getenv("OCR_WORKER_TIMEOUT", "90"))
+_DEFAULT_TIMEOUT: float = float(os.getenv("OCR_WORKER_TIMEOUT", "25"))
 
 
 class OCRWorkerError(RuntimeError):
     """Raised when the OCR worker fails to return a successful result."""
 
-def _run_worker(image_path: str, languages: Sequence[str], result_queue: mp.Queue) -> None:
+def _run_worker(image_path: str, languages: Sequence[str], conn: Connection) -> None:
     """Worker entry point executed inside a spawned process."""
 
     try:
@@ -34,46 +34,43 @@ def _run_worker(image_path: str, languages: Sequence[str], result_queue: mp.Queu
 
         image = cv2.imread(image_path)
         if image is None:
-            result_queue.put((False, "image not readable"))
+            conn.send((False, "image not readable"))
             return
 
         reader = easyocr.Reader(list(languages), gpu=False, verbose=False)
         lines = reader.readtext(image, detail=0)
-        result_queue.put((True, "\n".join(lines)))
+        conn.send((True, "\n".join(lines)))
     except Exception as exc:  # pragma: no cover - safety net for native libs
-        result_queue.put((False, f"{exc.__class__.__name__}: {exc}"))
+        conn.send((False, f"{exc.__class__.__name__}: {exc}"))
     finally:
         try:
-            result_queue.close()
+            conn.close()
         except Exception:
             pass
 
 
 def _spawn_worker(image_path: str, timeout: float) -> tuple[bool, str]:
     ctx = mp.get_context("spawn")
-    # ``SimpleQueue`` does not provide ``get(timeout=...)`` on Python 3.10, so
-    # we fall back to the regular ``Queue`` implementation which supports it
-    # while still giving us a simple cross-process channel.
-    result_queue: mp.Queue = ctx.Queue(maxsize=1)
+    parent_conn, child_conn = ctx.Pipe(duplex=False)
     process = ctx.Process(
         target=_run_worker,
-        args=(image_path, _DEFAULT_LANGUAGES, result_queue),
+        args=(image_path, _DEFAULT_LANGUAGES, child_conn),
         name="easyocr-worker",
         daemon=True,
     )
     process.start()
+    child_conn.close()
 
     try:
-        success, payload = result_queue.get(timeout=timeout)
-    except queue.Empty as exc:
-        success, payload = False, f"timeout after {timeout} seconds"
-        raise TimeoutError(payload) from exc
+        if not parent_conn.poll(timeout):
+            raise TimeoutError(f"timeout after {timeout} seconds")
+        success, payload = parent_conn.recv()
     except EOFError as exc:  # Worker exited without writing a result
         success, payload = False, "worker finished without result"
         raise OCRWorkerError(payload) from exc
     finally:
         try:
-            result_queue.close()
+            parent_conn.close()
         except Exception:
             pass
         process.join(timeout=1)
