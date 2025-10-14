@@ -37,6 +37,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+try:
+    import psutil  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    psutil = None
+
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -61,6 +66,53 @@ class WorkerContext:
     dp: Any | None = None
     tree_data: Any | None = None
     ocr_pool: concurrent.futures.Executor | None = None
+
+
+def _collect_memory_usage() -> dict[str, int] | None:
+    """Return memory statistics for the current process in bytes."""
+
+    if psutil is not None:  # pragma: no branch - simple guard
+        try:
+            process = psutil.Process()
+            with process.oneshot():
+                mem_info = process.memory_info()
+            return {"rss": mem_info.rss, "vms": mem_info.vms}
+        except Exception:
+            logging.exception("Не удалось получить информацию о памяти через psutil")
+
+    try:
+        import resource  # type: ignore
+
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        rss_bytes = usage.ru_maxrss
+        if os.name != "nt":
+            rss_bytes *= 1024
+        return {"rss": int(rss_bytes)}
+    except Exception:
+        logging.exception("Не удалось получить информацию о памяти через resource")
+    return None
+
+
+def _format_bytes(num_bytes: int) -> str:
+    return f"{num_bytes / (1024 * 1024):.2f} МБ"
+
+
+def _log_memory_usage(context: str) -> None:
+    stats = _collect_memory_usage()
+    if not stats:
+        return
+    rss = _format_bytes(stats["rss"])
+    vms = stats.get("vms")
+    if vms is not None:
+        logging.info(
+            "Использование памяти (%s): RSS=%s, VMS=%s",
+            context,
+            rss,
+            _format_bytes(vms),
+        )
+    else:
+        logging.info("Использование памяти (%s): RSS=%s", context, rss)
+
 
 def _resolve_settings_path(explicit_path: str | os.PathLike[str] | None) -> Path:
     if explicit_path:
@@ -133,6 +185,7 @@ async def _wait_with_stop(stop_event: asyncio.Event, timeout: float) -> bool:
 
 async def _process_queue(stop_event: asyncio.Event) -> None:
     last_job_completed_at: float | None = None
+    _log_memory_usage("startup")
 
     while not stop_event.is_set():
         job = await sql_mgt.acquire_next_receipt_for_ocr(
@@ -144,12 +197,14 @@ async def _process_queue(stop_event: asyncio.Event) -> None:
                 and time.monotonic() - last_job_completed_at >= OCR_IDLE_RELEASE_SECONDS
             ):
                 media_heandler.release_ocr_resources()
+                _log_memory_usage("idle-release")
                 last_job_completed_at = None
             if await _wait_with_stop(stop_event, IDLE_SLEEP_SECONDS):
                 break
             continue
 
         queue_id, receipt_id, attempt = job
+        _log_memory_usage(f"before receipt_id={receipt_id}")
         logging.info(
             "Получена задача распознавания: queue_id=%s receipt_id=%s attempt=%s",
             queue_id,
@@ -192,6 +247,7 @@ async def _process_queue(stop_event: asyncio.Event) -> None:
             # завершения задачи. Принудительно освобождаем ресурсы после
             # каждого чека, чтобы предотвратить рост потребления памяти.
             media_heandler.release_ocr_resources()
+            _log_memory_usage(f"after receipt_id={receipt_id}")
         if await _wait_with_stop(stop_event, IDLE_SLEEP_SECONDS):
             break
 
@@ -225,6 +281,7 @@ async def run_worker(migrate_only: bool) -> None:
     finally:
         for sig in registered_signals:
             loop.remove_signal_handler(sig)
+        _log_memory_usage("shutdown")
         logging.info("Сервис очереди распознавания остановлен")
 
 
