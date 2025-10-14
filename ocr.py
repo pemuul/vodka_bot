@@ -1,20 +1,19 @@
 """OCR helper that runs EasyOCR in an isolated subprocess.
 
 The EasyOCR models are quite heavy and tend to increase the memory usage of the
-current process every time they are loaded.  To keep the main bot and receipt
-worker lightweight we execute the recognition inside a short lived
-``multiprocessing`` child that is terminated after the text is extracted.  This
-ensures all allocations are reclaimed by the operating system once the child
-exits.
+current process every time they are loaded. To keep the main bot and receipt
+worker lightweight we execute the recognition inside a short-lived helper
+process that is terminated after the text is extracted. This ensures all
+allocations are reclaimed by the operating system once the child exits.
 """
 
 from __future__ import annotations
 
-import multiprocessing as mp
-from multiprocessing.connection import Connection
+import json
 import os
+import subprocess
+import sys
 from pathlib import Path
-from typing import Sequence
 
 __all__ = ["extract_text", "release_reader", "OCRWorkerError"]
 
@@ -25,60 +24,44 @@ _DEFAULT_TIMEOUT: float = float(os.getenv("OCR_WORKER_TIMEOUT", "25"))
 class OCRWorkerError(RuntimeError):
     """Raised when the OCR worker fails to return a successful result."""
 
-def _run_worker(image_path: str, languages: Sequence[str], conn: Connection) -> None:
-    """Worker entry point executed inside a spawned process."""
-
-    try:
-        import cv2  # Local import keeps the parent process light-weight
-        import easyocr
-
-        image = cv2.imread(image_path)
-        if image is None:
-            conn.send((False, "image not readable"))
-            return
-
-        reader = easyocr.Reader(list(languages), gpu=False, verbose=False)
-        lines = reader.readtext(image, detail=0)
-        conn.send((True, "\n".join(lines)))
-    except Exception as exc:  # pragma: no cover - safety net for native libs
-        conn.send((False, f"{exc.__class__.__name__}: {exc}"))
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
 
 def _spawn_worker(image_path: str, timeout: float) -> tuple[bool, str]:
-    ctx = mp.get_context("spawn")
-    parent_conn, child_conn = ctx.Pipe(duplex=False)
-    process = ctx.Process(
-        target=_run_worker,
-        args=(image_path, _DEFAULT_LANGUAGES, child_conn),
-        name="easyocr-worker",
-        daemon=True,
-    )
-    process.start()
-    child_conn.close()
+    """Execute the helper script that performs OCR inside a clean process."""
+
+    worker_path = Path(__file__).with_name("ocr_worker_cli.py")
+    if not worker_path.exists():  # pragma: no cover - deployment guard
+        raise OCRWorkerError("worker helper script not found")
+
+    cmd: list[str] = [sys.executable, str(worker_path), "--image", image_path]
+    for lang in _DEFAULT_LANGUAGES:
+        cmd.extend(["--lang", lang])
 
     try:
-        if not parent_conn.poll(timeout):
-            raise TimeoutError(f"timeout after {timeout} seconds")
-        success, payload = parent_conn.recv()
-    except EOFError as exc:  # Worker exited without writing a result
-        success, payload = False, "worker finished without result"
-        raise OCRWorkerError(payload) from exc
-    finally:
-        try:
-            parent_conn.close()
-        except Exception:
-            pass
-        process.join(timeout=1)
-        if process.is_alive():
-            process.terminate()
-            process.join()
+        completed = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(f"timeout after {timeout} seconds") from exc
 
-    return success, payload
+    stdout = completed.stdout.strip()
+    if not stdout:
+        if completed.stderr:
+            stderr = completed.stderr.strip()
+            raise OCRWorkerError(f"worker produced no output: {stderr}")
+        raise OCRWorkerError("worker produced no output")
+
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as exc:  # pragma: no cover - defensive
+        raise OCRWorkerError("invalid worker response") from exc
+
+    success = bool(payload.get("success"))
+    message = payload.get("text") if success else payload.get("error", "unknown error")
+    return success, message or ""
 
 
 def extract_text(image_path: str, timeout: float | None = None) -> str:
