@@ -27,7 +27,7 @@ except Exception:  # pragma: no cover - optional dependency
 from pyzbar.pyzbar import decode, ZBarSymbol
 # optional ZXing libraries may provide more robust QR reading
 # OCR helper based on Tesseract with Russian and English models
-from ocr import extract_text, release_reader
+from ocr import OCRWorkerError, extract_text, release_reader
 
 
 
@@ -147,15 +147,23 @@ def _detect_qr(path: str) -> str | None:
 
 def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str | None]:
     """Use OCR to search for configured keywords inside receipt image."""
-    img = cv2.imread(path)
-    if img is None:
-        return False, "изображение не прочитано"
+
     if not keywords:
         return False, "ключевые слова не настроены"
+    if not Path(path).exists():
+        return False, "изображение не найдено"
+
     _log_memory_usage("ocr:before-readtext")
     try:
-        text = extract_text(img)
-    except Exception:
+        text = extract_text(path)
+    except TimeoutError:
+        logger.warning("[QR] OCR timeout for %s", path)
+        return False, "распознавание превысило лимит времени"
+    except (FileNotFoundError, OCRWorkerError):
+        logger.exception("[QR] OCR worker failed for %s", path)
+        return False, "ошибка OCR"
+    except Exception:  # pragma: no cover - unexpected native failures
+        logger.exception("[QR] Unexpected OCR failure for %s", path)
         return False, "ошибка OCR"
     _log_memory_usage("ocr:after-readtext")
 

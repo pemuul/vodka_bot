@@ -1,55 +1,101 @@
-"""OCR helper using EasyOCR for Russian and English text."""
+"""OCR helper that runs EasyOCR in an isolated subprocess.
 
-import gc
-import warnings
+The EasyOCR models are quite heavy and tend to increase the memory usage of the
+current process every time they are loaded.  To keep the main bot and receipt
+worker lightweight we execute the recognition inside a short lived
+``multiprocessing`` child that is terminated after the text is extracted.  This
+ensures all allocations are reclaimed by the operating system once the child
+exits.
+"""
 
-warnings.filterwarnings("ignore", message=".*pin_memory.*")
+from __future__ import annotations
 
-import easyocr
-import numpy as np
+import multiprocessing as mp
+import os
+import queue
+from pathlib import Path
+from typing import Sequence
 
-try:  # Torch is optional but helps to release cached tensors if present
-    import torch
-except Exception:  # pragma: no cover - torch may be absent or partially installed
-    torch = None  # type: ignore
+__all__ = ["extract_text", "release_reader", "OCRWorkerError"]
 
-_reader: easyocr.Reader | None = None
-
-
-def _get_reader() -> easyocr.Reader:
-    """Initialize and cache the EasyOCR reader."""
-    global _reader
-    if _reader is None:
-        # initialize once without GPU for lower memory usage
-        _reader = easyocr.Reader(["ru", "en"], gpu=False, verbose=False)
-    return _reader
+_DEFAULT_LANGUAGES: tuple[str, ...] = ("ru", "en")
+_DEFAULT_TIMEOUT: float = float(os.getenv("OCR_WORKER_TIMEOUT", "90"))
 
 
-def extract_text(img_bgr: np.ndarray) -> str:
-    """Extract text from an image using EasyOCR."""
-    reader = _get_reader()
-    lines = reader.readtext(img_bgr, detail=0)  # list of strings
-    return "\n".join(lines)
+class OCRWorkerError(RuntimeError):
+    """Raised when the OCR worker fails to return a successful result."""
 
-
-def release_reader() -> None:
-    """Drop the cached OCR reader and release heavyweight resources."""
-
-    global _reader
-    if _reader is None:
-        return
+def _run_worker(image_path: str, languages: Sequence[str], result_queue: mp.SimpleQueue) -> None:
+    """Worker entry point executed inside a spawned process."""
 
     try:
-        # Reader instances keep references to neural network weights; removing
-        # them allows Python's GC to reclaim the memory.
-        _reader = None
-        gc.collect()
-        if torch is not None and hasattr(torch, "cuda"):
-            try:
-                torch.cuda.empty_cache()  # type: ignore[attr-defined]
-            except Exception:
-                pass
-    except Exception:
-        # Releasing resources should never crash the worker; if something goes
-        # wrong we simply continue with the existing reader.
-        pass
+        import cv2  # Local import keeps the parent process light-weight
+        import easyocr
+
+        image = cv2.imread(image_path)
+        if image is None:
+            result_queue.put((False, "image not readable"))
+            return
+
+        reader = easyocr.Reader(list(languages), gpu=False, verbose=False)
+        lines = reader.readtext(image, detail=0)
+        result_queue.put((True, "\n".join(lines)))
+    except Exception as exc:  # pragma: no cover - safety net for native libs
+        result_queue.put((False, f"{exc.__class__.__name__}: {exc}"))
+    finally:
+        try:
+            result_queue.close()
+        except Exception:
+            pass
+
+
+def _spawn_worker(image_path: str, timeout: float) -> tuple[bool, str]:
+    ctx = mp.get_context("spawn")
+    result_queue: mp.SimpleQueue = ctx.SimpleQueue()
+    process = ctx.Process(
+        target=_run_worker,
+        args=(image_path, _DEFAULT_LANGUAGES, result_queue),
+        name="easyocr-worker",
+        daemon=True,
+    )
+    process.start()
+
+    try:
+        success, payload = result_queue.get(timeout=timeout)
+    except queue.Empty as exc:
+        success, payload = False, f"timeout after {timeout} seconds"
+        raise TimeoutError(payload) from exc
+    except EOFError as exc:  # Worker exited without writing a result
+        success, payload = False, "worker finished without result"
+        raise OCRWorkerError(payload) from exc
+    finally:
+        try:
+            result_queue.close()
+        except Exception:
+            pass
+        process.join(timeout=1)
+        if process.is_alive():
+            process.terminate()
+            process.join()
+
+    return success, payload
+
+
+def extract_text(image_path: str, timeout: float | None = None) -> str:
+    """Extract text from *image_path* using EasyOCR inside an isolated worker."""
+
+    timeout = timeout if timeout is not None else _DEFAULT_TIMEOUT
+    path = Path(image_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Image not found: {path}")
+
+    success, payload = _spawn_worker(str(path), timeout)
+    if not success:
+        raise OCRWorkerError(payload)
+    return payload
+
+
+def release_reader() -> None:  # pragma: no cover - kept for backward compat
+    """No-op placeholder kept for compatibility with previous interface."""
+
+    return None
