@@ -1,6 +1,8 @@
 from aiogram import Router,  F
 import asyncio
 import logging
+import math
+import os
 import threading
 from aiogram.types import Message
 import time
@@ -17,6 +19,11 @@ from heandlers import import_files, admin
 from keyboards import admin_kb
 
 import cv2
+
+try:
+    import psutil  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    psutil = None
 from pyzbar.pyzbar import decode, ZBarSymbol
 # optional ZXing libraries may provide more robust QR reading
 # OCR helper based on Tesseract with Russian and English models
@@ -44,18 +51,71 @@ def init_object(global_objects_inp):
     sql_mgt.init_object(global_objects_inp)
 
 
+def _collect_memory_usage() -> dict[str, int] | None:
+    """Return memory statistics for the current process in bytes."""
+
+    if psutil is not None:
+        try:
+            process = psutil.Process()
+            with process.oneshot():
+                mem_info = process.memory_info()
+            return {"rss": mem_info.rss, "vms": mem_info.vms}
+        except Exception:
+            logger.exception("[QR] Failed to query memory usage via psutil")
+
+    try:
+        import resource  # type: ignore
+
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        rss_bytes = usage.ru_maxrss
+        if os.name != "nt":
+            rss_bytes *= 1024
+        return {"rss": int(rss_bytes)}
+    except Exception:
+        logger.exception("[QR] Failed to query memory usage via resource module")
+    return None
+
+
+def _format_bytes(num_bytes: int) -> str:
+    if num_bytes <= 0:
+        return "0.00 МБ"
+    magnitude = math.log(num_bytes, 1024) if num_bytes else 0
+    unit_index = max(0, min(int(magnitude), 3))
+    units = ["Б", "КБ", "МБ", "ГБ"]
+    scaled = num_bytes / (1024 ** unit_index)
+    return f"{scaled:.2f} {units[unit_index]}"
+
+
+def _log_memory_usage(context: str) -> None:
+    stats = _collect_memory_usage()
+    if not stats:
+        return
+    rss = _format_bytes(stats["rss"])
+    vms = stats.get("vms")
+    if vms is not None:
+        logger.info("[QR] Memory usage (%s): RSS=%s, VMS=%s", context, rss, _format_bytes(vms))
+    else:
+        logger.info("[QR] Memory usage (%s): RSS=%s", context, rss)
+
+
 def release_ocr_resources() -> None:
     """Release cached OCR models to lower the process memory footprint."""
 
+    logger.info("[QR] Releasing OCR resources (before)")
+    _log_memory_usage("before-release")
     try:
         release_reader()
     except Exception:
         logger.exception("[QR] Failed to release OCR resources")
+    else:
+        logger.info("[QR] OCR resources released")
+    _log_memory_usage("after-release")
 
 
 def _detect_qr(path: str) -> str | None:
     """Detect QR code, returning its payload if any."""
     logger.info("[QR] Starting detection for %s", path)
+    _log_memory_usage("detect_qr:start")
     img = cv2.imread(path)
     if img is None:
         logger.warning("[QR] Failed to read image %s", path)
@@ -75,10 +135,13 @@ def _detect_qr(path: str) -> str | None:
         logger.info("[QR] Found QR via cv2.QRCodeDetector: %s", decoded)
         return decoded
 
+    _log_memory_usage("detect_qr:post-basic")
+
     wechat_decoded = _decode_with_wechat(img)
     if wechat_decoded:
         return wechat_decoded
 
+    _log_memory_usage("detect_qr:pre-enhanced")
     return _enhanced_qr(gray)
 
 
@@ -89,10 +152,12 @@ def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str 
         return False, "изображение не прочитано"
     if not keywords:
         return False, "ключевые слова не настроены"
+    _log_memory_usage("ocr:before-readtext")
     try:
         text = extract_text(img)
     except Exception:
         return False, "ошибка OCR"
+    _log_memory_usage("ocr:after-readtext")
 
     lower = text.casefold()
     vodka = any(k in lower for k in keywords)
@@ -103,6 +168,7 @@ def _enhanced_qr(gray):
     """Attempt to decode difficult QR codes by rotating, scaling,
     thresholding, and using optional ZXing-based readers."""
     logger.info("[QR] Entering enhanced QR detection")
+    _log_memory_usage("enhanced:entry")
     detector = cv2.QRCodeDetector()
     rotate_codes = [None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE]
     for rc in rotate_codes:
@@ -124,8 +190,10 @@ def _enhanced_qr(gray):
                 decoded = data.strip()
                 logger.info("[QR] Enhanced cv2 detector success (rotation=%s): %s", rc, decoded)
                 return decoded
+        _log_memory_usage(f"enhanced:after-rotation-{rc}")
     try:
         import zxingcpp  # type: ignore
+        logger.info("[QR] Trying ZXingCPP reader")
         results = zxingcpp.read_barcodes(gray)
         if results:
             data = results[0].text
@@ -135,6 +203,7 @@ def _enhanced_qr(gray):
         pass
     try:
         from pyzxing import BarCodeReader  # type: ignore
+        logger.info("[QR] Trying pyzxing reader")
         reader = BarCodeReader()
         res = reader.decode_array(gray)
         if res and 'parsed' in res[0]:
@@ -142,7 +211,9 @@ def _enhanced_qr(gray):
             logger.info("[QR] pyzxing success: %s", data)
             return data
     except Exception:
+        logger.exception("[QR] pyzxing reader failed")
         pass
+    _log_memory_usage("enhanced:exit")
     logger.info("[QR] QR not detected by any method")
     return None
 
