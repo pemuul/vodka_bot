@@ -25,7 +25,7 @@ _DEFAULT_TIMEOUT: float = float(os.getenv("OCR_WORKER_TIMEOUT", "90"))
 class OCRWorkerError(RuntimeError):
     """Raised when the OCR worker fails to return a successful result."""
 
-def _run_worker(image_path: str, languages: Sequence[str], result_queue: mp.SimpleQueue) -> None:
+def _run_worker(image_path: str, languages: Sequence[str], result_queue: mp.Queue) -> None:
     """Worker entry point executed inside a spawned process."""
 
     try:
@@ -51,7 +51,10 @@ def _run_worker(image_path: str, languages: Sequence[str], result_queue: mp.Simp
 
 def _spawn_worker(image_path: str, timeout: float) -> tuple[bool, str]:
     ctx = mp.get_context("spawn")
-    result_queue: mp.SimpleQueue = ctx.SimpleQueue()
+    # ``SimpleQueue`` does not provide ``get(timeout=...)`` on Python 3.10, so
+    # we fall back to the regular ``Queue`` implementation which supports it
+    # while still giving us a simple cross-process channel.
+    result_queue: mp.Queue = ctx.Queue(maxsize=1)
     process = ctx.Process(
         target=_run_worker,
         args=(image_path, _DEFAULT_LANGUAGES, result_queue),
