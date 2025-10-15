@@ -5,6 +5,7 @@ from __future__ import annotations
 import gc
 import logging
 import os
+import ctypes
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -18,6 +19,18 @@ warnings.filterwarnings("ignore", message=".*pin_memory.*")
 __all__ = ["extract_text", "release_reader"]
 
 logger = logging.getLogger(__name__)
+
+# Уменьшаем параллелизм в используемых библиотеках, чтобы снизить число арен glibc
+try:  # pragma: no cover - зависит от версии OpenCV
+    cv2.setNumThreads(1)
+except Exception:
+    pass
+try:  # pragma: no cover - torch может отсутствовать в окружении
+    import torch  # type: ignore
+
+    torch.set_num_threads(int(os.getenv("TORCH_NUM_THREADS", "1")))
+except Exception:
+    pass
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -116,6 +129,12 @@ def release_reader() -> None:
     _reader = None
     _reader_config = None
     gc.collect()
+    # Вернём освобождённые страницы ОС (glibc по умолчанию держит их в кэше)
+    try:
+        libc = ctypes.CDLL("libc.so.6")
+        libc.malloc_trim(0)
+    except Exception:  # pragma: no cover - другие libc или ограничения окружения
+        pass
 
 
 def _prepare_image(image: np.ndarray) -> np.ndarray:

@@ -1,5 +1,6 @@
 from aiogram import Router,  F
 import asyncio
+import concurrent.futures
 import logging
 import math
 import os
@@ -8,6 +9,7 @@ from aiogram.types import Message
 import time
 import random
 import uuid
+import multiprocessing as mp
 from pathlib import Path
 from typing import Any
 from fns_api import get_receipt_by_qr
@@ -48,6 +50,9 @@ _WECHAT_LOCK = threading.Lock()
 _WECHAT_DETECTOR: Any | None = None
 _WECHAT_INIT_FAILED = False
 _OCR_FORCE_RELEASE = _env_flag("OCR_FORCE_RELEASE", default=False)
+# По умолчанию изолируем OCR в отдельном процессе, чтобы память гарантированно
+# освобождалась после завершения работы EasyOCR/PyTorch.
+_OCR_IN_SUBPROCESS = _env_flag("OCR_IN_SUBPROCESS", default=True)
 
 
 def init_object(global_objects_inp):
@@ -124,6 +129,38 @@ def release_ocr_resources(force: bool = False) -> None:
     _log_memory_usage("after-release")
 
 
+def _ocr_worker_job(path: str, keywords: list[str]) -> tuple[bool, str | None]:
+    """Execute OCR inside a short-lived subprocess."""
+
+    from pathlib import Path as _Path
+    from ocr import extract_text as _extract_text, release_reader as _release_reader
+
+    if not keywords:
+        return False, "ключевые слова не настроены"
+
+    image_path = _Path(path)
+    if not image_path.exists():
+        return False, "изображение не найдено"
+
+    try:
+        text = _extract_text(str(image_path))
+    except FileNotFoundError:
+        return False, "изображение не найдено"
+    except ValueError:
+        return False, "изображение не прочитано"
+    except Exception:
+        return False, "ошибка OCR"
+    finally:
+        try:
+            _release_reader()
+        except Exception:
+            pass
+
+    lower = text.casefold()
+    vodka = any(k in lower for k in keywords)
+    return vodka, None
+
+
 def _detect_qr(path: str) -> str | None:
     """Detect QR code, returning its payload if any."""
     logger.info("[QR] Starting detection for %s", path)
@@ -166,6 +203,20 @@ def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str 
         return False, "изображение не найдено"
 
     _log_memory_usage("ocr:before-readtext")
+
+    if _OCR_IN_SUBPROCESS:
+        ctx = mp.get_context("spawn")
+        with concurrent.futures.ProcessPoolExecutor(max_workers=1, mp_context=ctx) as executor:
+            future = executor.submit(_ocr_worker_job, path, keywords)
+            try:
+                result = future.result()
+            except Exception:
+                logger.exception("[QR] OCR subprocess failed for %s", path)
+                _log_memory_usage("ocr:after-readtext")
+                return False, "ошибка OCR"
+        _log_memory_usage("ocr:after-readtext")
+        return result
+
     try:
         text = extract_text(path)
     except FileNotFoundError:
