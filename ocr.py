@@ -20,11 +20,31 @@ _DEFAULT_LANGUAGES: Tuple[str, ...] = tuple(
     filter(None, (lang.strip() for lang in os.getenv("OCR_LANGUAGES", "ru,en").split(",")))
 ) or ("ru", "en")
 _FALLBACK_LANG: str = os.getenv("OCR_FALLBACK_LANG", "rus+eng")
-_MAX_DIMENSION: int = int(os.getenv("OCR_MAX_DIMENSION", "2048"))
+_MAX_DIMENSION: int = int(os.getenv("OCR_MAX_DIMENSION", "1600"))
 
 _reader_lock = threading.Lock()
 _reader: "easyocr.Reader | None" = None
 _reader_languages: Tuple[str, ...] | None = None
+
+try:  # pragma: no cover - зависимость окружения
+    import psutil  # type: ignore
+
+    _process = psutil.Process()
+except Exception:  # pragma: no cover - psutil не обязателен
+    _process = None
+
+
+def _log_memory(label: str) -> None:
+    """Вывести использование памяти процесса, если доступен psutil."""
+
+    if _process is None:
+        return
+
+    try:
+        mem = _process.memory_info().rss / (1024 * 1024)
+    except Exception:  # pragma: no cover - защита на случай ошибок psutil
+        return
+    logger.info("Использование памяти (%s): RSS=%.2f МБ", label, mem)
 
 
 class OCRWorkerError(RuntimeError):
@@ -54,6 +74,15 @@ def _load_image(path: Path):
         if max_dim > _MAX_DIMENSION:
             scale = _MAX_DIMENSION / float(max_dim)
             new_size = (max(int(width * scale), 1), max(int(height * scale), 1))
+            logger.info(
+                "EasyOCR: уменьшаем изображение %s с %sx%s до %sx%s (scale=%.3f)",
+                path,
+                width,
+                height,
+                new_size[0],
+                new_size[1],
+                scale,
+            )
             image = cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
 
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -155,7 +184,16 @@ def extract_text(image_path: str, timeout: float | None = None) -> str:
     if not path.exists():
         raise FileNotFoundError(f"Image not found: {path}")
 
+    _log_memory("ocr:before-load")
     image = _load_image(path)
+    logger.info(
+        "EasyOCR: подготовлено изображение %s размером %sx%s (channels=%s)",
+        path,
+        image.shape[1],
+        image.shape[0],
+        image.shape[2] if len(image.shape) > 2 else 1,
+    )
+    _log_memory("ocr:after-load")
 
     try:
         reader = _get_reader()
@@ -166,7 +204,9 @@ def extract_text(image_path: str, timeout: float | None = None) -> str:
         raise
 
     try:
+        _log_memory("ocr:before-readtext")
         lines = reader.readtext(image, detail=0, paragraph=True)
+        _log_memory("ocr:after-readtext")
     except Exception as exc:  # pragma: no cover - ошибки из native кода
         fallback = _fallback_with_tesseract(path, f"EasyOCRError: {exc}")
         if fallback is not None:
@@ -177,6 +217,14 @@ def extract_text(image_path: str, timeout: float | None = None) -> str:
         # явно удаляем их и просим сборщик мусора освободить память.
         del image
         gc.collect()
+        try:  # pragma: no cover - torch может отсутствовать
+            import torch
+
+            if torch.cuda.is_available():  # pragma: no cover - GPU не обязателен
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        _log_memory("ocr:after-gc")
 
     text = "\n".join(str(line) for line in lines if line is not None)
     if text.strip():
