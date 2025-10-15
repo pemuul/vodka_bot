@@ -191,7 +191,9 @@ def _worker_log_memory(token: str, stage: str) -> None:
 def _ocr_subprocess_init() -> None:
     """Инициализация подпроцесса OCR с ограничением потоков."""
 
+    import logging
     import os
+    import sys
     from pathlib import Path
 
     project_root = Path(__file__).resolve().parents[1]
@@ -203,6 +205,13 @@ def _ocr_subprocess_init() -> None:
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
         logger.info("[OCR-WORKER][init] sys.path updated with %s", project_root)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stdout,
+        force=True,
+    )
 
     os.environ.setdefault("TORCH_NUM_THREADS", "1")
     os.environ.setdefault("OMP_NUM_THREADS", "1")
