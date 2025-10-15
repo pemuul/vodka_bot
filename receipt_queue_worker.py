@@ -21,7 +21,7 @@
    ``OCR_LANGUAGES`` (по умолчанию только ``ru``) и ``OCR_RECOG_NETWORK``
    (по умолчанию ``cyrillic_g2``). Чтобы уменьшить потребление памяти, reader
    по умолчанию загружается в квантованном виде (``OCR_QUANTIZE=1``) и
-   автоматически уменьшает изображения до 1600 пикселей по длинной стороне
+   автоматически уменьшает изображения до 1024 пикселей по длинной стороне
    (можно изменить через ``OCR_MAX_IMAGE_DIM``). Если квантование нужно
    отключить, установите ``OCR_QUANTIZE=0``. При необходимости принудительно
    выгружать модели EasyOCR после каждого чека используйте
@@ -69,7 +69,7 @@ import sql_mgt
 # ---------------- Environment defaults (in-process, без внешних export) ----------------
 os.environ.setdefault("OCR_IN_SUBPROCESS", "1")
 os.environ.setdefault("OCR_FORCE_RELEASE", "1")
-os.environ.setdefault("OCR_MAX_IMAGE_DIM", "1200")
+os.environ.setdefault("OCR_MAX_IMAGE_DIM", "1024")
 os.environ.setdefault("OCR_QUANTIZE", "1")
 os.environ.setdefault("TORCH_NUM_THREADS", "1")
 os.environ.setdefault("TORCH_INTEROP_THREADS", "1")
@@ -79,7 +79,7 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 os.environ.setdefault("MALLOC_ARENA_MAX", "2")
 _jemalloc_path = "/usr/lib/x86_64-linux-gnu/libjemalloc.so.2"
-if os.path.exists(_jemalloc_path):
+if os.getenv("USE_JEMALLOC", "0") == "1" and os.path.exists(_jemalloc_path):
     os.environ.setdefault("LD_PRELOAD", _jemalloc_path)
 # --------------------------------------------------------------------------------------
 
@@ -321,6 +321,13 @@ async def run_worker(migrate_only: bool) -> None:
 
 
 def main(settings_path: str | os.PathLike[str] | None = None) -> None:
+    import multiprocessing as _mp
+
+    try:
+        _mp.set_start_method("spawn", force=True)
+    except RuntimeError:
+        pass
+
     parser = argparse.ArgumentParser(description="Очередь распознавания чеков")
     parser.add_argument(
         "--migrate",

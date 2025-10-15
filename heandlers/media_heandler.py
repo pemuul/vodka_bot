@@ -21,6 +21,11 @@ from heandlers import import_files, admin
 from keyboards import admin_kb
 
 import cv2
+try:
+    # Снижаем количество потоков в OpenCV, чтобы уменьшить количество арен glibc
+    cv2.setNumThreads(1)
+except Exception:
+    pass
 
 try:
     import psutil  # type: ignore
@@ -129,6 +134,35 @@ def release_ocr_resources(force: bool = False) -> None:
     _log_memory_usage("after-release")
 
 
+def _release_wechat_resources() -> None:
+    """Сбросить кешированный WeChat-детектор и вернуть память ОС."""
+
+    global _WECHAT_DETECTOR
+    with _WECHAT_LOCK:
+        _WECHAT_DETECTOR = None
+    try:
+        import ctypes
+
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
+
+def _ocr_subprocess_init() -> None:
+    """Инициализация подпроцесса OCR с ограничением потоков."""
+
+    import os
+
+    os.environ.setdefault("TORCH_NUM_THREADS", "1")
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    try:
+        import cv2 as _cv2  # type: ignore
+
+        _cv2.setNumThreads(1)
+    except Exception:
+        pass
+
+
 def _ocr_worker_job(path: str, keywords: list[str]) -> tuple[bool, str | None]:
     """Работаем в отдельном процессе: читаем текст и ищем ключевые слова."""
 
@@ -201,22 +235,25 @@ def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str 
     if not Path(path).exists():
         return False, "изображение не найдено"
 
+    # Освобождаем ресурсы WeChat, чтобы освободить память перед EasyOCR
+    _release_wechat_resources()
     _log_memory_usage("ocr:before-readtext")
 
     if _OCR_IN_SUBPROCESS:
         ctx = mp.get_context("spawn")
-        with concurrent.futures.ProcessPoolExecutor(max_workers=1, mp_context=ctx) as executor:
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=1, mp_context=ctx, initializer=_ocr_subprocess_init
+        ) as executor:
             future = executor.submit(_ocr_worker_job, path, keywords)
             try:
                 result = future.result()
             except Exception:
                 logger.exception("[QR] OCR subprocess failed for %s", path)
-            else:
-                _log_memory_usage("ocr:after-readtext")
-                return result
-        # Если дочерний процесс упал, пытаемся распознать текст в текущем процессе.
-        logger.info("[QR] Переходим к распознаванию в основном процессе после сбоя подпроцесса")
+                return False, "ошибка OCR"
+            _log_memory_usage("ocr:after-readtext")
+            return result
 
+    # Этот путь используется только если отключён подпроцесс
     try:
         text = extract_text(path)
     except FileNotFoundError:
@@ -225,14 +262,13 @@ def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str 
     except ValueError:
         logger.warning("[QR] OCR image not readable: %s", path)
         return False, "изображение не прочитано"
-    except Exception:  # pragma: no cover - unexpected native failures
+    except Exception:
         logger.exception("[QR] Unexpected OCR failure for %s", path)
         return False, "ошибка OCR"
     _log_memory_usage("ocr:after-readtext")
 
     lower = text.casefold()
-    vodka = any(k in lower for k in keywords)
-    return vodka, None
+    return any(k in lower for k in keywords), None
 
 
 def _enhanced_qr(gray):
