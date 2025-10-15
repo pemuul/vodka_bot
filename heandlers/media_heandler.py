@@ -11,7 +11,6 @@ import uuid
 import multiprocessing as mp
 import signal
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 from fns_api import get_receipt_by_qr
@@ -152,20 +151,13 @@ def _release_wechat_resources() -> None:
         pass
 
 
-def _worker_log(log_path: Path, message: str) -> None:
-    """Append debug information for the OCR subprocess."""
+def _worker_log(token: str, message: str) -> None:
+    """Append verbose debug information for the OCR subprocess."""
 
-    try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with log_path.open("a", encoding="utf-8") as handle:
-            handle.write(f"{timestamp} | {message}\n")
-    except Exception:
-        # Логирование не должно ломать основной процесс, поэтому молчим.
-        pass
+    logger.info("[OCR-WORKER][%s] %s", token, message)
 
 
-def _worker_log_memory(log_path: Path, stage: str) -> None:
+def _worker_log_memory(token: str, stage: str) -> None:
     """Log RSS/VMS information from inside the OCR subprocess."""
 
     rss = None
@@ -189,9 +181,11 @@ def _worker_log_memory(log_path: Path, stage: str) -> None:
 
     if rss is not None:
         if vms is not None:
-            _worker_log(log_path, f"memory:{stage}:rss={rss} vms={vms}")
+            _worker_log(token, f"memory:{stage}:rss={rss} vms={vms}")
         else:
-            _worker_log(log_path, f"memory:{stage}:rss={rss}")
+            _worker_log(token, f"memory:{stage}:rss={rss}")
+    else:
+        _worker_log(token, f"memory:{stage}:unavailable")
 
 
 def _ocr_subprocess_init() -> None:
@@ -201,84 +195,92 @@ def _ocr_subprocess_init() -> None:
     from pathlib import Path
 
     project_root = Path(__file__).resolve().parents[1]
+    logger.info("[OCR-WORKER][init] chdir to %s", project_root)
     try:
         os.chdir(project_root)
     except Exception:
-        pass
+        logger.exception("[OCR-WORKER][init] failed to chdir", exc_info=True)
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
+        logger.info("[OCR-WORKER][init] sys.path updated with %s", project_root)
 
     os.environ.setdefault("TORCH_NUM_THREADS", "1")
     os.environ.setdefault("OMP_NUM_THREADS", "1")
+    logger.info("[OCR-WORKER][init] thread limits applied")
     try:
         import cv2 as _cv2  # type: ignore
 
         _cv2.setNumThreads(1)
     except Exception:
-        pass
+        logger.exception("[OCR-WORKER][init] failed to limit cv2 threads", exc_info=True)
 
 
-def _ocr_worker_job(path: str, keywords: list[str], log_path: Path) -> tuple[bool, str | None]:
+def _ocr_worker_job(path: str, keywords: list[str], log_token: str) -> tuple[bool, str | None]:
     """Работаем в отдельном процессе: читаем текст и ищем ключевые слова."""
 
     from ocr import extract_text as _extract_text, release_reader as _release_reader
 
-    _worker_log(log_path, f"worker-start path={path}")
-    _worker_log_memory(log_path, "start")
+    _worker_log(log_token, "worker-enter")
+    _worker_log(log_token, f"worker-start path={path}")
+    _worker_log_memory(log_token, "start")
 
     if not keywords:
+        _worker_log(log_token, "keywords-empty")
         return False, "ключевые слова не настроены"
 
     image_path = Path(path)
     if not image_path.exists():
+        _worker_log(log_token, "image-missing")
         return False, "изображение не найдено"
 
     try:
-        _worker_log(log_path, "extract-text:start")
+        _worker_log(log_token, "extract-text:start")
         text = _extract_text(str(image_path))
-        _worker_log(log_path, f"extract-text:done length={len(text)}")
-        _worker_log_memory(log_path, "after-extract")
+        _worker_log(log_token, f"extract-text:done length={len(text)}")
+        _worker_log_memory(log_token, "after-extract")
     except FileNotFoundError:
-        _worker_log(log_path, "extract-text:error file-not-found")
+        _worker_log(log_token, "extract-text:error file-not-found")
         return False, "изображение не найдено"
     except ValueError:
-        _worker_log(log_path, "extract-text:error unreadable")
+        _worker_log(log_token, "extract-text:error unreadable")
         return False, "изображение не прочитано"
     finally:
         try:
             _release_reader()
-        except Exception:
-            pass
+        except Exception as cleanup_exc:
+            _worker_log(log_token, f"release-reader:error {cleanup_exc}")
         else:
-            _worker_log(log_path, "release-reader:done")
-            _worker_log_memory(log_path, "after-release")
+            _worker_log(log_token, "release-reader:done")
+            _worker_log_memory(log_token, "after-release")
 
     lower = text.casefold()
     vodka = any(k in lower for k in keywords)
-    _worker_log(log_path, f"keywords:found={vodka}")
-    _worker_log_memory(log_path, "after-keywords")
+    _worker_log(log_token, f"keywords:found={vodka}")
+    _worker_log_memory(log_token, "after-keywords")
+    _worker_log(log_token, "worker-exit")
     return vodka, None
 
 
-def _ocr_worker_entry(path: str, keywords: list[str], result_queue, log_path: str) -> None:
+def _ocr_worker_entry(path: str, keywords: list[str], result_queue, log_token: str) -> None:
     """Точка входа подпроцесса OCR."""
 
     import traceback
 
-    log_file = Path(log_path)
     try:
         _ocr_subprocess_init()
-        _worker_log(log_file, "subprocess:init-done")
-        result = _ocr_worker_job(path, keywords, log_file)
+        _worker_log(log_token, "subprocess:init-done")
+        result = _ocr_worker_job(path, keywords, log_token)
     except Exception as exc:
         tb_short = "".join(traceback.format_exception_only(type(exc), exc)).strip()
         tb_tail = "".join(traceback.format_exc(limit=2)).strip()
-        _worker_log(log_file, f"exception: {tb_short}")
-        _worker_log(log_file, tb_tail)
+        _worker_log(log_token, f"exception: {tb_short}")
+        _worker_log(log_token, tb_tail)
         result_queue.put(("error", f"ошибка OCR: {tb_short} | {tb_tail}"))
     else:
-        _worker_log(log_file, "worker-success")
+        _worker_log(log_token, "worker-success")
         result_queue.put(("ok", result))
+    finally:
+        _worker_log(log_token, "subprocess-exit")
 
 
 def _run_ocr_subprocess(path: str, keywords: list[str]) -> tuple[bool, str | None]:
@@ -286,27 +288,28 @@ def _run_ocr_subprocess(path: str, keywords: list[str]) -> tuple[bool, str | Non
 
     ctx = mp.get_context("spawn")
     result_queue = ctx.Queue()
-    log_dir = Path(os.getenv("OCR_WORKER_LOG_DIR", Path.cwd() / "logs" / "ocr_worker"))
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / f"ocr_{Path(path).stem}_{uuid.uuid4().hex}.log"
-    logger.info("[QR] OCR subprocess log file: %s", log_path)
-    process = ctx.Process(target=_ocr_worker_entry, args=(path, keywords, result_queue, str(log_path)))
+    log_token = f"{Path(path).stem}:{uuid.uuid4().hex[:8]}"
+    logger.info("[QR] OCR subprocess token: %s", log_token)
+    process = ctx.Process(target=_ocr_worker_entry, args=(path, keywords, result_queue, log_token))
     process.start()
+    logger.info("[OCR-SUBPROC][%s] started pid=%s", log_token, process.pid)
 
     try:
         process.join(_OCR_SUBPROCESS_TIMEOUT)
         if process.is_alive():
+            logger.warning("[OCR-SUBPROC][%s] timeout exceeded, terminating", log_token)
             process.terminate()
             process.join()
             return False, "распознавание превысило лимит времени"
 
         exit_code = process.exitcode
+        logger.info("[OCR-SUBPROC][%s] finished exit_code=%s", log_token, exit_code)
 
         try:
             status, payload = result_queue.get(timeout=5)
         except queue.Empty:
             if exit_code is None:
-                return False, f"ошибка OCR: результат не получен от подпроцесса (log: {log_path})"
+                return False, f"ошибка OCR: результат не получен от подпроцесса (token={log_token})"
             if exit_code < 0:
                 sig_num = -exit_code
                 try:
@@ -316,12 +319,14 @@ def _run_ocr_subprocess(path: str, keywords: list[str]) -> tuple[bool, str | Non
                     reason = f"сигнал {sig_num}"
             else:
                 reason = f"код {exit_code}"
-            return False, f"ошибка OCR: подпроцесс завершился ({reason}); log: {log_path}"
+            return False, f"ошибка OCR: подпроцесс завершился ({reason}); token={log_token}"
 
         if status == "ok":
             vodka, error = payload
+            logger.info("[OCR-SUBPROC][%s] result-ok vodka=%s error=%s", log_token, vodka, error)
             return vodka, error
-        return False, f"{payload}; log: {log_path}"
+        logger.warning("[OCR-SUBPROC][%s] result-error payload=%s", log_token, payload)
+        return False, f"{payload}; token={log_token}"
     finally:
         try:
             result_queue.close()
@@ -331,6 +336,7 @@ def _run_ocr_subprocess(path: str, keywords: list[str]) -> tuple[bool, str | Non
             result_queue.join_thread()
         except Exception:
             pass
+        logger.info("[OCR-SUBPROC][%s] resources cleaned", log_token)
 
 
 def _detect_qr(path: str) -> str | None:
@@ -369,9 +375,12 @@ def _detect_qr(path: str) -> str | None:
 def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str | None]:
     """Use OCR to search for configured keywords inside receipt image."""
 
+    logger.info("[OCR-TRACE] start path=%s keywords=%s", path, keywords)
     if not keywords:
+        logger.info("[OCR-TRACE] keywords missing")
         return False, "ключевые слова не настроены"
     if not Path(path).exists():
+        logger.info("[OCR-TRACE] image missing at path=%s", path)
         return False, "изображение не найдено"
 
     # Освобождаем ресурсы WeChat, чтобы освободить память перед EasyOCR
@@ -379,11 +388,14 @@ def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str 
     _log_memory_usage("ocr:before-readtext")
 
     if _OCR_IN_SUBPROCESS:
+        logger.info("[OCR-TRACE] invoking subprocess for OCR")
         vodka, error = _run_ocr_subprocess(path, keywords)
         _log_memory_usage("ocr:after-readtext")
+        logger.info("[OCR-TRACE] subprocess result vodka=%s error=%s", vodka, error)
         return vodka, error
 
     # Этот путь используется только если отключён подпроцесс
+    logger.info("[OCR-TRACE] running OCR inline")
     try:
         text = extract_text(path)
     except FileNotFoundError:
@@ -398,7 +410,9 @@ def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str 
     _log_memory_usage("ocr:after-readtext")
 
     lower = text.casefold()
-    return any(k in lower for k in keywords), None
+    vodka = any(k in lower for k in keywords)
+    logger.info("[OCR-TRACE] inline result vodka=%s", vodka)
+    return vodka, None
 
 
 def _enhanced_qr(gray):

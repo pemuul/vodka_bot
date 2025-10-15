@@ -19,6 +19,7 @@ warnings.filterwarnings("ignore", message=".*pin_memory.*")
 __all__ = ["extract_text", "release_reader"]
 
 logger = logging.getLogger(__name__)
+TRACE_PREFIX = "[OCR-TRACE]"
 
 # Уменьшаем параллелизм в используемых библиотеках, чтобы снизить число арен glibc
 try:  # pragma: no cover - зависит от версии OpenCV
@@ -37,17 +38,23 @@ except Exception:
 
 def _env_flag(name: str, default: bool) -> bool:
     value = os.getenv(name)
+    logger.info("%s _env_flag name=%s value=%s default=%s", TRACE_PREFIX, name, value, default)
     if value is None:
         return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    result = value.strip().lower() in {"1", "true", "yes", "on"}
+    logger.info("%s _env_flag result=%s", TRACE_PREFIX, result)
+    return result
 
 
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
+    logger.info("%s _env_int name=%s raw=%s default=%s", TRACE_PREFIX, name, raw, default)
     if raw is None:
         return default
     try:
-        return max(0, int(raw))
+        value = max(0, int(raw))
+        logger.info("%s _env_int parsed=%s", TRACE_PREFIX, value)
+        return value
     except ValueError:
         logger.warning("Некорректное значение для %s: %s", name, raw)
         return default
@@ -65,10 +72,18 @@ _reader_config: dict[str, object] | None = None
 
 
 def _ensure_languages(languages: Iterable[str] | None) -> list[str]:
+    logger.info("%s _ensure_languages input=%s", TRACE_PREFIX, languages)
     if languages is None:
-        return list(_DEFAULT_LANGUAGES)
+        result = list(_DEFAULT_LANGUAGES)
+        logger.info("%s _ensure_languages default=%s", TRACE_PREFIX, result)
+        return result
     langs = [lang.strip() for lang in languages if lang and lang.strip()]
-    return langs or list(_DEFAULT_LANGUAGES)
+    if not langs:
+        result = list(_DEFAULT_LANGUAGES)
+        logger.info("%s _ensure_languages fallback=%s", TRACE_PREFIX, result)
+        return result
+    logger.info("%s _ensure_languages cleaned=%s", TRACE_PREFIX, langs)
+    return langs
 
 
 def _get_reader(languages: Iterable[str] | None = None) -> easyocr.Reader:
@@ -77,15 +92,20 @@ def _get_reader(languages: Iterable[str] | None = None) -> easyocr.Reader:
     global _reader
     global _reader_config
 
+    logger.info("%s _get_reader called languages=%s", TRACE_PREFIX, languages)
     langs = _ensure_languages(languages)
     quantize = _env_flag("OCR_QUANTIZE", default=_USE_QUANTIZE)
     recog_network = (os.getenv("OCR_RECOG_NETWORK") or _DEFAULT_RECOG_NETWORK).strip() or None
+    logger.info(
+        "%s _get_reader config langs=%s quantize=%s network=%s", TRACE_PREFIX, langs, quantize, recog_network
+    )
 
     if _reader is not None and _reader_config == {
         "languages": tuple(langs),
         "quantize": quantize,
         "recog_network": recog_network,
     }:
+        logger.info("%s _get_reader reuse existing reader", TRACE_PREFIX)
         return _reader
 
     kwargs: dict[str, object] = {"gpu": False, "verbose": False}
@@ -106,10 +126,7 @@ def _get_reader(languages: Iterable[str] | None = None) -> easyocr.Reader:
             raise
 
     logger.info(
-        "EasyOCR reader инициализирован: языки=%s, quantize=%s, сеть=%s",
-        ",".join(langs),
-        quantize,
-        recog_network or "default",
+        "%s reader-init languages=%s quantize=%s network=%s", TRACE_PREFIX, ",".join(langs), quantize, recog_network or "default"
     )
 
     _reader = reader
@@ -126,26 +143,32 @@ def release_reader() -> None:
 
     global _reader
     global _reader_config
+    logger.info("%s release_reader called has_reader=%s", TRACE_PREFIX, _reader is not None)
     if _reader is not None:
         logger.info("EasyOCR: освобождаем reader и связанные веса")
     _reader = None
     _reader_config = None
     gc.collect()
+    logger.info("%s release_reader gc.collect completed", TRACE_PREFIX)
     # Вернём освобождённые страницы ОС (glibc по умолчанию держит их в кэше)
     try:
         libc = ctypes.CDLL("libc.so.6")
         libc.malloc_trim(0)
+        logger.info("%s release_reader malloc_trim invoked", TRACE_PREFIX)
     except Exception:  # pragma: no cover - другие libc или ограничения окружения
         pass
 
 
 def _prepare_image(image: np.ndarray) -> np.ndarray:
+    logger.info("%s _prepare_image start shape=%s max_dim=%s", TRACE_PREFIX, getattr(image, "shape", None), _MAX_IMAGE_DIM)
     if _MAX_IMAGE_DIM <= 0:
+        logger.info("%s _prepare_image skip resize", TRACE_PREFIX)
         return image
 
     height, width = image.shape[:2]
     max_side = max(height, width)
     if max_side <= _MAX_IMAGE_DIM:
+        logger.info("%s _prepare_image within limit max_side=%s", TRACE_PREFIX, max_side)
         return image
 
     scale = _MAX_IMAGE_DIM / float(max_side)
@@ -159,6 +182,9 @@ def _prepare_image(image: np.ndarray) -> np.ndarray:
         new_width,
         new_height,
     )
+    logger.info(
+        "%s _prepare_image resized from %sx%s to %sx%s", TRACE_PREFIX, width, height, new_width, new_height
+    )
     return resized
 
 
@@ -166,6 +192,7 @@ def extract_text(image_path: str, languages: Iterable[str] | None = None) -> str
     """Read text from the provided image using EasyOCR."""
 
     path = Path(image_path)
+    logger.info("%s extract_text start path=%s languages=%s", TRACE_PREFIX, path, languages)
     if not path.exists():
         raise FileNotFoundError(f"Image not found: {path}")
 
@@ -173,12 +200,16 @@ def extract_text(image_path: str, languages: Iterable[str] | None = None) -> str
     if image is None:
         raise ValueError(f"Unable to read image: {path}")
 
+    logger.info("%s extract_text image-loaded shape=%s", TRACE_PREFIX, getattr(image, "shape", None))
     reader = _get_reader(languages)
     prepared = _prepare_image(image)
     same_object = prepared is image
+    logger.info("%s extract_text calling readtext same_object=%s", TRACE_PREFIX, same_object)
     lines = reader.readtext(prepared, detail=0)
+    logger.info("%s extract_text readtext-lines=%s", TRACE_PREFIX, len(lines))
     if not same_object:
         del prepared
     del image
     gc.collect()
+    logger.info("%s extract_text gc.collect done", TRACE_PREFIX)
     return "\n".join(lines)
