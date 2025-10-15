@@ -9,6 +9,7 @@ import time
 import random
 import uuid
 import multiprocessing as mp
+import sys
 from pathlib import Path
 from typing import Any
 from fns_api import get_receipt_by_qr
@@ -153,6 +154,15 @@ def _ocr_subprocess_init() -> None:
     """Инициализация подпроцесса OCR с ограничением потоков."""
 
     import os
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parents[1]
+    try:
+        os.chdir(project_root)
+    except Exception:
+        pass
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
 
     os.environ.setdefault("TORCH_NUM_THREADS", "1")
     os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -198,11 +208,14 @@ def _ocr_worker_job(path: str, keywords: list[str]) -> tuple[bool, str | None]:
 def _ocr_worker_entry(path: str, keywords: list[str], result_queue) -> None:
     """Точка входа подпроцесса OCR."""
 
+    import traceback
+
     try:
         _ocr_subprocess_init()
         result = _ocr_worker_job(path, keywords)
-    except Exception:
-        result_queue.put(("error", "ошибка OCR"))
+    except Exception as exc:
+        tb = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+        result_queue.put(("error", f"ошибка OCR: {tb}"))
     else:
         result_queue.put(("ok", result))
 
@@ -230,7 +243,7 @@ def _run_ocr_subprocess(path: str, keywords: list[str]) -> tuple[bool, str | Non
         if status == "ok":
             vodka, error = payload
             return vodka, error
-        return False, payload
+        return False, str(payload)
     finally:
         try:
             result_queue.close()
