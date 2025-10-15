@@ -1,27 +1,24 @@
-"""OCR helper that runs EasyOCR in an isolated subprocess.
-
-The EasyOCR models are quite heavy and tend to increase the memory usage of the
-current process every time they are loaded. To keep the main bot and receipt
-worker lightweight we execute the recognition inside a short-lived helper
-process that is terminated after the text is extracted. This ensures all
-allocations are reclaimed by the operating system once the child exits.
-"""
+"""OCR helper that keeps EasyOCR in a dedicated long-lived subprocess."""
 
 from __future__ import annotations
 
-import json
+import atexit
 import logging
 import os
-import subprocess
-import sys
-import tempfile
+import queue
+import threading
+import time
+import uuid
+from multiprocessing import Process, Queue, get_context
 from pathlib import Path
+from typing import Any, Iterable
 
 __all__ = ["extract_text", "release_reader", "OCRWorkerError"]
 
 _DEFAULT_LANGUAGES: tuple[str, ...] = ("ru", "en")
 _DEFAULT_TIMEOUT: float = float(os.getenv("OCR_WORKER_TIMEOUT", "25"))
 _FALLBACK_LANG: str = os.getenv("OCR_FALLBACK_LANG", "rus+eng")
+_WORKER_READY_TIMEOUT: float = float(os.getenv("OCR_WORKER_READY_TIMEOUT", "45"))
 
 logger = logging.getLogger(__name__)
 
@@ -30,85 +27,259 @@ class OCRWorkerError(RuntimeError):
     """Raised when the OCR worker fails to return a successful result."""
 
 
-def _summarize_failure(returncode: int, stdout: str, stderr: str) -> str:
-    """Compose a human readable failure message from worker outputs."""
-
-    details: list[str] = []
-    if returncode:
-        details.append(f"exit code {returncode}")
-    if stdout:
-        details.append(f"stdout: {stdout.strip()}")
-    if stderr:
-        details.append(f"stderr: {stderr.strip()}")
-    return "; ".join(details) or "worker terminated without diagnostics"
+def _ensure_sequence(value: Iterable[str] | None) -> tuple[str, ...]:
+    if value is None:
+        return _DEFAULT_LANGUAGES
+    return tuple(value)
 
 
-def _spawn_worker(image_path: str, timeout: float) -> tuple[bool, str]:
-    """Execute the helper script that performs OCR inside a clean process."""
+def _worker_main(
+    request_queue: Queue,
+    response_queue: Queue,
+    languages: tuple[str, ...],
+) -> None:
+    """Worker entry point that hosts the EasyOCR reader."""
 
-    worker_path = Path(__file__).with_name("ocr_worker_cli.py")
-    if not worker_path.exists():  # pragma: no cover - deployment guard
-        raise OCRWorkerError("worker helper script not found")
-
-    output_file: Path | None = None
-    tmp_handle = None
-    try:
-        tmp_handle = tempfile.NamedTemporaryFile("w", delete=False, suffix=".json")
-        output_file = Path(tmp_handle.name)
-        tmp_handle.close()
-    except OSError as exc:  # pragma: no cover - filesystem safety
-        raise OCRWorkerError(f"failed to prepare worker output file: {exc}") from exc
-
-    cmd: list[str] = [
-        sys.executable,
-        "-u",
-        str(worker_path),
-        "--image",
-        image_path,
-        "--output",
-        str(output_file),
-    ]
-    for lang in _DEFAULT_LANGUAGES:
-        cmd.extend(["--lang", lang])
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+    os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
+    os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
     try:
-        completed = subprocess.run(
-            cmd,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+        import easyocr  # type: ignore
+    except Exception as exc:  # pragma: no cover - environment-specific
+        response_queue.put({
+            "kind": "fatal",
+            "error": f"EasyOCRImportError: {exc.__class__.__name__}: {exc}",
+        })
+        return
+
+    try:  # pragma: no cover - defensive guard around torch optional dependency
+        import torch  # type: ignore
+
+        try:
+            torch.set_num_threads(1)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    try:
+        reader = easyocr.Reader(list(languages), gpu=False, verbose=False)
+    except Exception as exc:  # pragma: no cover - environment-specific
+        response_queue.put({
+            "kind": "fatal",
+            "error": f"EasyOCRError: {exc.__class__.__name__}: {exc}",
+        })
+        return
+
+    response_queue.put({"kind": "ready"})
+
+    while True:
+        try:
+            message = request_queue.get()
+        except (EOFError, OSError):  # pragma: no cover - queue broke
+            break
+
+        if not isinstance(message, dict):
+            continue
+
+        kind = message.get("kind")
+        if kind == "stop":
+            break
+        if kind != "ocr":
+            continue
+
+        job_id = message.get("job_id")
+        image_path = message.get("path")
+        if not isinstance(job_id, str) or not isinstance(image_path, str):
+            response_queue.put(
+                {
+                    "kind": "result",
+                    "job_id": job_id,
+                    "success": False,
+                    "error": "invalid job payload",
+                }
+            )
+            continue
+
+        try:
+            lines = reader.readtext(image_path, detail=0)
+            text = "\n".join(map(str, lines))
+            response_queue.put(
+                {
+                    "kind": "result",
+                    "job_id": job_id,
+                    "success": True,
+                    "text": text,
+                }
+            )
+        except Exception as exc:  # pragma: no cover - native libs safety
+            response_queue.put(
+                {
+                    "kind": "result",
+                    "job_id": job_id,
+                    "success": False,
+                    "error": f"{exc.__class__.__name__}: {exc}",
+                }
+            )
+
+
+class _EasyOCRManager:
+    """Manage a dedicated EasyOCR subprocess and route jobs to it."""
+
+    def __init__(self, languages: Iterable[str] | None = None) -> None:
+        self._languages = _ensure_sequence(languages)
+        self._ctx = get_context("spawn")
+        self._request_queue: Queue | None = None
+        self._response_queue: Queue | None = None
+        self._process: Process | None = None
+        self._lock = threading.Lock()
+        atexit.register(self.close)
+
+    # ------------------------------------------------------------------ utils
+    def _terminate_process(self) -> None:
+        process = self._process
+        request_queue = self._request_queue
+        response_queue = self._response_queue
+
+        self._process = None
+        self._request_queue = None
+        self._response_queue = None
+
+        if request_queue is not None:
+            try:
+                request_queue.put_nowait({"kind": "stop"})
+            except Exception:
+                pass
+            try:
+                request_queue.cancel_join_thread()
+            except Exception:
+                pass
+            try:
+                request_queue.close()
+            except Exception:
+                pass
+
+        if process is not None:
+            process.join(timeout=5)
+            if process.is_alive():  # pragma: no cover - defensive
+                process.terminate()
+                process.join(timeout=5)
+
+        if response_queue is not None:
+            try:
+                response_queue.cancel_join_thread()
+            except Exception:
+                pass
+            try:
+                response_queue.close()
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        with self._lock:
+            self._terminate_process()
+
+    # ----------------------------------------------------------------- startup
+    def _start_worker(self) -> None:
+        if self._process is not None and self._process.is_alive():
+            return
+
+        self._terminate_process()
+
+        self._request_queue = self._ctx.Queue()
+        self._response_queue = self._ctx.Queue()
+        self._process = self._ctx.Process(
+            target=_worker_main,
+            args=(self._request_queue, self._response_queue, self._languages),
+            daemon=True,
         )
-    except subprocess.TimeoutExpired as exc:
-        if output_file is not None:
-            output_file.unlink(missing_ok=True)
-        raise TimeoutError(f"timeout after {timeout} seconds") from exc
+        self._process.start()
 
-    stdout = completed.stdout.strip()
-    stderr = completed.stderr.strip()
-    summary = _summarize_failure(completed.returncode, stdout, stderr)
+        if not self._await_ready():
+            raise OCRWorkerError("failed to start EasyOCR worker")
 
-    if output_file is None or not output_file.exists():
-        raise OCRWorkerError(f"worker produced no output ({summary})")
+    def _await_ready(self) -> bool:
+        if self._response_queue is None:
+            return False
 
-    raw_payload = output_file.read_text(encoding="utf-8")
-    try:
-        payload = json.loads(raw_payload)
-    except json.JSONDecodeError as exc:  # pragma: no cover - defensive
-        raise OCRWorkerError(f"invalid worker response ({summary})") from exc
-    finally:
-        if output_file is not None:
-            output_file.unlink(missing_ok=True)
+        deadline = time.monotonic() + _WORKER_READY_TIMEOUT
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._terminate_process()
+                return False
+            try:
+                message = self._response_queue.get(timeout=remaining)
+            except queue.Empty:
+                continue
 
-    if not raw_payload.strip():
-        raise OCRWorkerError(f"worker returned empty payload ({summary})")
+            if not isinstance(message, dict):
+                continue
 
-    if not payload:
-        raise OCRWorkerError("worker returned empty payload")
+            kind = message.get("kind")
+            if kind == "ready":
+                return True
+            if kind == "fatal":
+                self._terminate_process()
+                error_text = message.get("error", "worker failed to start")
+                raise OCRWorkerError(error_text)
 
-    success = bool(payload.get("success"))
-    message = payload.get("text") if success else payload.get("error", "unknown error")
-    return success, message or ""
+    # ------------------------------------------------------------------ public
+    def run(self, image_path: str, timeout: float) -> tuple[bool, str]:
+        with self._lock:
+            self._start_worker()
+            if self._request_queue is None or self._response_queue is None:
+                raise OCRWorkerError("EasyOCR worker queues unavailable")
+
+            job_id = uuid.uuid4().hex
+            self._request_queue.put({"kind": "ocr", "job_id": job_id, "path": image_path})
+
+            deadline = time.monotonic() + timeout
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._handle_failure("timeout waiting for worker response")
+                    raise TimeoutError(f"timeout after {timeout} seconds")
+
+                try:
+                    message: dict[str, Any] = self._response_queue.get(timeout=remaining)
+                except queue.Empty:
+                    if self._process is None or not self._process.is_alive():
+                        self._handle_failure("worker exited unexpectedly")
+                        raise OCRWorkerError("EasyOCR worker exited unexpectedly")
+                    continue
+
+                kind = message.get("kind")
+                if kind == "result":
+                    if message.get("job_id") != job_id:
+                        logger.debug(
+                            "Ignoring OCR result for stale job %s (expected %s)",
+                            message.get("job_id"),
+                            job_id,
+                        )
+                        continue
+                    success = bool(message.get("success"))
+                    payload = message.get("text") if success else message.get("error", "")
+                    return success, str(payload or "")
+
+                if kind == "fatal":
+                    error_text = message.get("error", "EasyOCR worker failure")
+                    self._handle_failure(error_text)
+                    raise OCRWorkerError(error_text)
+
+                if kind == "ready":  # stray handshake after restart
+                    continue
+
+    def _handle_failure(self, reason: str) -> None:
+        logger.warning("Restarting EasyOCR worker: %s", reason)
+        self._terminate_process()
+
+
+_manager = _EasyOCRManager()
 
 
 def _fallback_with_tesseract(path: Path, reason: str | None = None) -> str | None:
@@ -178,7 +349,7 @@ def _fallback_with_tesseract(path: Path, reason: str | None = None) -> str | Non
 
 
 def extract_text(image_path: str, timeout: float | None = None) -> str:
-    """Extract text from *image_path* using EasyOCR inside an isolated worker."""
+    """Extract text from *image_path* using the managed EasyOCR worker."""
 
     timeout = timeout if timeout is not None else _DEFAULT_TIMEOUT
     path = Path(image_path)
@@ -186,7 +357,7 @@ def extract_text(image_path: str, timeout: float | None = None) -> str:
         raise FileNotFoundError(f"Image not found: {path}")
 
     try:
-        success, payload = _spawn_worker(str(path), timeout)
+        success, payload = _manager.run(str(path), timeout)
     except TimeoutError:
         fallback_text = _fallback_with_tesseract(path, "timeout")
         if fallback_text is not None:
