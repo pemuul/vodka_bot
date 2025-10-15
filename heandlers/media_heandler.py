@@ -30,6 +30,13 @@ from pyzbar.pyzbar import decode, ZBarSymbol
 from ocr import OCRWorkerError, extract_text, release_reader
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -40,6 +47,7 @@ WECHAT_MODELS_DIR = Path(__file__).resolve().parent.parent / "wechat_qrcode"
 _WECHAT_LOCK = threading.Lock()
 _WECHAT_DETECTOR: Any | None = None
 _WECHAT_INIT_FAILED = False
+_OCR_FORCE_RELEASE = _env_flag("OCR_FORCE_RELEASE", default=False)
 
 
 def init_object(global_objects_inp):
@@ -98,8 +106,12 @@ def _log_memory_usage(context: str) -> None:
         logger.info("[QR] Memory usage (%s): RSS=%s", context, rss)
 
 
-def release_ocr_resources() -> None:
+def release_ocr_resources(force: bool = False) -> None:
     """Release cached OCR models to lower the process memory footprint."""
+
+    if not force and not _OCR_FORCE_RELEASE:
+        logger.debug("[QR] OCR ресурсы оставлены в памяти (force=%s)", force)
+        return
 
     logger.info("[QR] Releasing OCR resources (before)")
     _log_memory_usage("before-release")

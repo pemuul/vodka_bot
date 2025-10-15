@@ -203,7 +203,7 @@ async def _process_queue(stop_event: asyncio.Event) -> None:
                 last_job_completed_at is not None
                 and time.monotonic() - last_job_completed_at >= OCR_IDLE_RELEASE_SECONDS
             ):
-                media_heandler.release_ocr_resources()
+                media_heandler.release_ocr_resources(force=True)
                 _log_memory_usage("idle-release")
                 last_job_completed_at = None
             if await _wait_with_stop(stop_event, IDLE_SLEEP_SECONDS):
@@ -250,9 +250,8 @@ async def _process_queue(stop_event: asyncio.Event) -> None:
             )
         finally:
             last_job_completed_at = time.monotonic()
-            # EasyOCR может удерживать значительные объёмы памяти даже после
-            # завершения задачи. Принудительно освобождаем ресурсы после
-            # каждого чека, чтобы предотвратить рост потребления памяти.
+            # При необходимости освобождаем ресурсы OCR. По умолчанию воркер
+            # продолжает работать, чтобы не загружать модели заново на каждый чек.
             media_heandler.release_ocr_resources()
             _log_memory_usage(f"after receipt_id={receipt_id}")
         if await _wait_with_stop(stop_event, IDLE_SLEEP_SECONDS):
