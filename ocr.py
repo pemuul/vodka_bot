@@ -21,6 +21,11 @@ _DEFAULT_LANGUAGES: Tuple[str, ...] = tuple(
 ) or ("ru", "en")
 _FALLBACK_LANG: str = os.getenv("OCR_FALLBACK_LANG", "rus+eng")
 _MAX_DIMENSION: int = int(os.getenv("OCR_MAX_DIMENSION", "1600"))
+_CACHE_READER: bool = os.getenv("OCR_CACHE_READER", "0").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 
 _reader_lock = threading.Lock()
 _reader: "easyocr.Reader | None" = None
@@ -95,6 +100,7 @@ def _get_reader(languages: Iterable[str] | None = None):
     langs = _ensure_languages(languages)
     with _reader_lock:
         if _reader is not None and _reader_languages == langs:
+            _log_memory("ocr:reuse-reader")
             return _reader
 
         try:
@@ -109,6 +115,7 @@ def _get_reader(languages: Iterable[str] | None = None):
 
         _reader = reader
         _reader_languages = langs
+        _log_memory("ocr:after-reader-load")
         return _reader
 
 
@@ -224,6 +231,10 @@ def extract_text(image_path: str, timeout: float | None = None) -> str:
                 torch.cuda.empty_cache()
         except Exception:
             pass
+        if not _CACHE_READER:
+            _log_memory("ocr:before-release-reader")
+            release_reader()
+            _log_memory("ocr:after-release-reader")
         _log_memory("ocr:after-gc")
 
     text = "\n".join(str(line) for line in lines if line is not None)
@@ -242,5 +253,7 @@ def release_reader() -> None:
 
     global _reader, _reader_languages
     with _reader_lock:
+        if _reader is not None:
+            logger.info("EasyOCR: освобождаем reader и связанные веса")
         _reader = None
         _reader_languages = None
