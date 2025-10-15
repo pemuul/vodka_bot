@@ -159,8 +159,19 @@ def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str 
     except TimeoutError:
         logger.warning("[QR] OCR timeout for %s", path)
         return False, "распознавание превысило лимит времени"
-    except (FileNotFoundError, OCRWorkerError):
+    except FileNotFoundError:
         logger.exception("[QR] OCR worker failed for %s", path)
+        return False, "ошибка OCR"
+    except OCRWorkerError as exc:
+        message = str(exc)
+        if "No module named 'easyocr'" in message:
+            logger.error(
+                "[QR] OCR worker failed for %s: EasyOCR не установлен. "
+                "Установите пакет easyocr (например, pip install easyocr)",
+                path,
+            )
+        else:
+            logger.error("[QR] OCR worker failed for %s: %s", path, message)
         return False, "ошибка OCR"
     except Exception:  # pragma: no cover - unexpected native failures
         logger.exception("[QR] Unexpected OCR failure for %s", path)

@@ -26,6 +26,19 @@ class OCRWorkerError(RuntimeError):
     """Raised when the OCR worker fails to return a successful result."""
 
 
+def _summarize_failure(returncode: int, stdout: str, stderr: str) -> str:
+    """Compose a human readable failure message from worker outputs."""
+
+    details: list[str] = []
+    if returncode:
+        details.append(f"exit code {returncode}")
+    if stdout:
+        details.append(f"stdout: {stdout.strip()}")
+    if stderr:
+        details.append(f"stderr: {stderr.strip()}")
+    return "; ".join(details) or "worker terminated without diagnostics"
+
+
 def _spawn_worker(image_path: str, timeout: float) -> tuple[bool, str]:
     """Execute the helper script that performs OCR inside a clean process."""
 
@@ -61,18 +74,22 @@ def _spawn_worker(image_path: str, timeout: float) -> tuple[bool, str]:
 
     stdout = completed.stdout.strip()
     stderr = completed.stderr.strip()
+    summary = _summarize_failure(completed.returncode, stdout, stderr)
 
     if output_file is None or not output_file.exists():
-        message = stderr or stdout or f"exit code {completed.returncode}"
-        raise OCRWorkerError(f"worker produced no output: {message}")
+        raise OCRWorkerError(f"worker produced no output ({summary})")
 
+    raw_payload = output_file.read_text(encoding="utf-8")
     try:
-        payload = json.loads(output_file.read_text(encoding="utf-8"))
+        payload = json.loads(raw_payload)
     except json.JSONDecodeError as exc:  # pragma: no cover - defensive
-        raise OCRWorkerError("invalid worker response") from exc
+        raise OCRWorkerError(f"invalid worker response ({summary})") from exc
     finally:
         if output_file is not None:
             output_file.unlink(missing_ok=True)
+
+    if not raw_payload.strip():
+        raise OCRWorkerError(f"worker returned empty payload ({summary})")
 
     if not payload:
         raise OCRWorkerError("worker returned empty payload")
