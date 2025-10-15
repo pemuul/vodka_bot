@@ -211,7 +211,7 @@ def _run_ocr_subprocess(path: str, keywords: list[str]) -> tuple[bool, str | Non
     """Запустить OCR в отдельном процессе и вернуть результат."""
 
     ctx = mp.get_context("spawn")
-    result_queue = ctx.SimpleQueue()
+    result_queue = ctx.Queue()
     process = ctx.Process(target=_ocr_worker_entry, args=(path, keywords, result_queue))
     process.start()
 
