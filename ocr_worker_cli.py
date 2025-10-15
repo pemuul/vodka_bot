@@ -11,7 +11,7 @@ from typing import Sequence
 
 def _parse_languages(raw: str) -> list[str]:
     langs = [lang.strip() for lang in raw.split(",") if lang.strip()]
-    return langs or ["ru", "en"]
+    return langs or ["ru"]
 
 
 def _load_image(path: Path, max_dimension: int):
@@ -35,14 +35,17 @@ def _load_image(path: Path, max_dimension: int):
     return image
 
 
-def _recognize(image, languages: Sequence[str]) -> list[str]:
+def _recognize(image, languages: Sequence[str], recog_network: str | None) -> list[str]:
     try:
         from easyocr import Reader  # type: ignore
     except Exception as exc:  # pragma: no cover
         raise RuntimeError(f"EasyOCRImportError: {exc}") from exc
 
     try:
-        reader = Reader(list(languages), gpu=False, verbose=False)
+        reader_kwargs = {"lang_list": list(languages), "gpu": False, "verbose": False}
+        if recog_network:
+            reader_kwargs["recog_network"] = recog_network
+        reader = Reader(**reader_kwargs)
         return reader.readtext(image, detail=0, paragraph=True)
     except Exception as exc:  # pragma: no cover - native errors
         raise RuntimeError(f"EasyOCRError: {exc}") from exc
@@ -60,15 +63,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run EasyOCR once and dump JSON output")
     parser.add_argument("--image", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--languages", default="ru,en")
+    parser.add_argument("--languages", default="ru")
     parser.add_argument("--max-dimension", type=int, default=0)
+    parser.add_argument("--recog-network", default=None)
     args = parser.parse_args()
 
     languages = _parse_languages(args.languages)
 
     try:
         image = _load_image(args.image, args.max_dimension)
-        lines = _recognize(image, languages)
+        lines = _recognize(image, languages, args.recog_network)
     except Exception as exc:
         _write_output(args.output, False, error=str(exc))
         return 1

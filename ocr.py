@@ -1,11 +1,13 @@
-"""Run EasyOCR in a dedicated worker process to keep memory bounded."""
+"""Run EasyOCR via a short-lived helper process to avoid memory leaks."""
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-import time
-from multiprocessing import get_context
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from typing import Iterable, Tuple
 
@@ -19,8 +21,7 @@ _DEFAULT_LANGUAGES: Tuple[str, ...] = tuple(
 _FALLBACK_LANG: str = os.getenv("OCR_FALLBACK_LANG", "rus+eng")
 _MAX_DIMENSION: int = int(os.getenv("OCR_MAX_DIMENSION", "1600"))
 _DEFAULT_TIMEOUT: float = float(os.getenv("OCR_TIMEOUT", "35"))
-_WORKER_START_TIMEOUT: float = float(os.getenv("OCR_WORKER_START_TIMEOUT", "25"))
-_RECOG_NETWORK: str | None = os.getenv("OCR_RECOG_NETWORK", "cyrillic_g2") or None
+_RECOG_NETWORK: str | None = os.getenv("OCR_RECOG_NETWORK") or None
 
 try:  # pragma: no cover - psutil не обязателен в окружении тестов
     import psutil  # type: ignore
@@ -116,269 +117,77 @@ def _fallback_with_tesseract(path: Path, reason: str | None = None) -> str | Non
     return text
 
 
-def _load_image(path: Path, max_dimension: int):
-    import cv2  # type: ignore
+def _run_easyocr_subprocess(path: Path, timeout: float | None) -> str:
+    """Запустить EasyOCR в отдельном процессе и вернуть распознанный текст."""
 
-    image = cv2.imread(str(path))
-    if image is None:
-        raise RuntimeError("image not readable")
+    script_path = Path(__file__).with_name("ocr_worker_cli.py")
+    if not script_path.exists():
+        raise OCRWorkerError("Не найден ocr_worker_cli.py")
 
-    if max_dimension > 0:
-        height, width = image.shape[:2]
-        max_dim = max(height, width)
-        if max_dim > max_dimension:
-            scale = max_dimension / float(max_dim)
-            new_size = (max(int(width * scale), 1), max(int(height * scale), 1))
-            image = cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
+    languages = ",".join(_ensure_languages(None))
 
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    return image
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tmp:
+        output_path = Path(tmp.name)
 
+    cmd = [
+        sys.executable,
+        str(script_path),
+        "--image",
+        str(path),
+        "--output",
+        str(output_path),
+        "--languages",
+        languages,
+        "--max-dimension",
+        str(_MAX_DIMENSION),
+    ]
+    if _RECOG_NETWORK:
+        cmd.extend(["--recog-network", _RECOG_NETWORK])
 
-def _worker_main(conn, languages: Tuple[str, ...], max_dimension: int) -> None:
-    import gc
-    import signal
-
-    try:
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-    except Exception:  # pragma: no cover - не критично
-        pass
-
-    try:
-        from easyocr import Reader  # type: ignore
-    except Exception as exc:  # pragma: no cover
-        try:
-            conn.send({"type": "fatal", "error": f"EasyOCRImportError: {exc}"})
-        finally:
-            conn.close()
-        return
+    effective_timeout = timeout if timeout is not None else _DEFAULT_TIMEOUT
 
     try:
-        reader_kwargs = {
-            "lang_list": list(languages),
-            "gpu": False,
-            "verbose": False,
-        }
-        if _RECOG_NETWORK:
-            reader_kwargs["recog_network"] = _RECOG_NETWORK
-        reader = Reader(**reader_kwargs)
-    except Exception as exc:  # pragma: no cover - ошибки загрузки весов
-        try:
-            conn.send({"type": "fatal", "error": f"EasyOCRError: {exc}"})
-        finally:
-            conn.close()
-        return
-
-    conn.send(
-        {
-            "type": "ready",
-            "languages": list(languages),
-            "recog_network": _RECOG_NETWORK,
-        }
-    )
-
-    while True:
-        try:
-            message = conn.recv()
-        except EOFError:
-            break
-
-        if not isinstance(message, dict):
-            continue
-
-        command = message.get("cmd")
-        if command == "shutdown":
-            break
-        if command != "process":
-            continue
-
-        path = Path(message.get("path", ""))
-        if not path.exists():
-            conn.send({"type": "result", "ok": False, "error": f"file not found: {path}"})
-            continue
-
-        try:
-            image = _load_image(path, max_dimension)
-            lines = reader.readtext(image, detail=0, paragraph=True)
-            text = "\n".join(line for line in lines if line)
-            conn.send({"type": "result", "ok": True, "text": text})
-        except Exception as exc:  # pragma: no cover - ошибочные ситуации внутри EasyOCR
-            conn.send({"type": "result", "ok": False, "error": str(exc)})
-        finally:
-            try:
-                del image
-            except Exception:
-                pass
-            gc.collect()
-
-    try:
-        conn.close()
-    except Exception:  # pragma: no cover - завершение процесса
-        pass
-
-
-class _WorkerHandle:
-    def __init__(self) -> None:
-        self._ctx = get_context("spawn")
-        self._proc = None
-        self._conn = None
-        self._languages = _ensure_languages(None)
-
-    @property
-    def alive(self) -> bool:
-        return self._proc is not None and self._proc.is_alive()
-
-    def ensure_started(self) -> None:
-        if self.alive and self._conn is not None:
-            return
-
-        self.stop(force=True)
-
-        parent_conn, child_conn = self._ctx.Pipe()
-        proc = self._ctx.Process(
-            target=_worker_main,
-            args=(child_conn, self._languages, _MAX_DIMENSION),
-            name="easyocr-worker",
+        completed = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=effective_timeout,
         )
-        proc.daemon = True
-        proc.start()
-        child_conn.close()
+    except subprocess.TimeoutExpired as exc:
+        output_path.unlink(missing_ok=True)
+        raise TimeoutError(f"OCR worker timeout after {effective_timeout} секунд") from exc
 
-        self._proc = proc
-        self._conn = parent_conn
+    stdout = completed.stdout.strip()
+    stderr = completed.stderr.strip()
 
-        if not parent_conn.poll(_WORKER_START_TIMEOUT):
-            self.stop(force=True)
-            raise OCRWorkerError("EasyOCR worker не ответил на запуск")
+    try:
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise OCRWorkerError("worker produced no output") from exc
+    except json.JSONDecodeError as exc:
+        output_path.unlink(missing_ok=True)
+        raise OCRWorkerError("invalid worker response") from exc
+    finally:
+        output_path.unlink(missing_ok=True)
 
-        message = parent_conn.recv()
-        if not isinstance(message, dict) or message.get("type") != "ready":
-            error = message.get("error") if isinstance(message, dict) else "unknown"
-            self.stop(force=True)
-            raise OCRWorkerError(f"EasyOCR worker не запустился: {error}")
-
-        logger.info(
-            "EasyOCR worker готов (languages=%s, recog_network=%s)",
-            message.get("languages"),
-            message.get("recog_network"),
+    if completed.returncode != 0 and not payload.get("error"):
+        raise OCRWorkerError(
+            f"worker failure: non-zero exit; exit_code={completed.returncode}; stderr={stderr}"
         )
 
-    def stop(self, force: bool = False) -> None:
-        if self._conn is not None:
-            try:
-                if not force and self.alive:
-                    self._conn.send({"cmd": "shutdown"})
-            except Exception:
-                pass
-            try:
-                self._conn.close()
-            except Exception:
-                pass
-            finally:
-                self._conn = None
+    if not payload.get("success"):
+        error = payload.get("error", "unknown")
+        logger.warning(
+            "EasyOCR subprocess failed: %s (stdout=%s, stderr=%s)", error, stdout, stderr
+        )
+        raise OCRWorkerError(error)
 
-        if self._proc is not None:
-            try:
-                self._proc.join(timeout=5)
-            except Exception:
-                pass
-            if self._proc.is_alive():
-                try:
-                    self._proc.terminate()
-                except Exception:
-                    pass
-                try:
-                    self._proc.join(timeout=5)
-                except Exception:
-                    pass
-            self._proc = None
+    text = payload.get("text", "")
+    if not isinstance(text, str):
+        raise OCRWorkerError("worker returned non-string text")
 
-    def restart(self) -> None:
-        self.stop(force=True)
-        self.ensure_started()
-
-    def request(self, path: Path, timeout: float | None) -> dict:
-        if self._conn is None:
-            raise OCRWorkerError("EasyOCR worker недоступен")
-
-        effective_timeout = timeout if timeout is not None else _DEFAULT_TIMEOUT
-
-        try:
-            self._conn.send({"cmd": "process", "path": str(path)})
-        except (BrokenPipeError, EOFError):
-            self.restart()
-            raise OCRWorkerError("EasyOCR worker разорвал соединение")
-
-        deadline = time.monotonic() + effective_timeout
-
-        while True:
-            if self._conn is None:
-                raise OCRWorkerError("EasyOCR worker недоступен")
-
-            if not self.alive:
-                exit_code = self._proc.exitcode if self._proc else None
-                self.restart()
-                raise OCRWorkerError(f"EasyOCR worker завершился (exitcode={exit_code})")
-
-            remaining = max(deadline - time.monotonic(), 0.0)
-
-            if remaining <= 0:
-                self.restart()
-                raise TimeoutError(f"OCR worker timeout after {effective_timeout} секунд")
-
-            try:
-                ready = self._conn.poll(remaining)
-            except (OSError, EOFError):
-                ready = False
-                exit_code = self._proc.exitcode if self._proc else None
-                self.restart()
-                raise OCRWorkerError(f"EasyOCR worker завершился (exitcode={exit_code})")
-
-            if ready:
-                try:
-                    message = self._conn.recv()
-                except EOFError:
-                    exit_code = self._proc.exitcode if self._proc else None
-                    self.restart()
-                    raise OCRWorkerError(f"EasyOCR worker завершился (exitcode={exit_code})")
-
-                if not isinstance(message, dict):
-                    continue
-
-                msg_type = message.get("type")
-                if msg_type == "result":
-                    return message
-                if msg_type == "fatal":
-                    error = message.get("error", "unknown")
-                    self.restart()
-                    raise OCRWorkerError(error)
-
-                continue
-
-
-_WORKER = _WorkerHandle()
-
-
-def _run_via_worker(path: Path, timeout: float | None) -> str:
-    try:
-        _WORKER.ensure_started()
-    except OCRWorkerError:
-        raise
-    except Exception as exc:  # pragma: no cover - непредвиденные ошибки запуска
-        raise OCRWorkerError(f"Не удалось запустить EasyOCR worker: {exc}") from exc
-
-    try:
-        message = _WORKER.request(path, timeout)
-    except TimeoutError:
-        raise
-    except OCRWorkerError:
-        raise
-
-    if message.get("ok"):
-        return message.get("text", "")
-
-    error = message.get("error", "unknown error")
-    raise OCRWorkerError(error)
+    return text
 
 
 def extract_text(image_path: str, timeout: float | None = None) -> str:
@@ -388,7 +197,7 @@ def extract_text(image_path: str, timeout: float | None = None) -> str:
 
     _log_memory("ocr:before-worker")
     try:
-        text = _run_via_worker(path, timeout)
+        text = _run_easyocr_subprocess(path, timeout)
     except TimeoutError:
         raise
     except OCRWorkerError as exc:
@@ -410,6 +219,6 @@ def extract_text(image_path: str, timeout: float | None = None) -> str:
 
 
 def release_reader() -> None:
-    """Освободить фонового воркера, если он запущен."""
+    """Совместимость: фонового воркера нет, освобождать нечего."""
 
-    _WORKER.stop()
+    logger.debug("release_reader() вызван, но постоянный OCR процесс не используется")
