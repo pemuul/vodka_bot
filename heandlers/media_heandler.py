@@ -11,6 +11,7 @@ import uuid
 import multiprocessing as mp
 import signal
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from fns_api import get_receipt_by_qr
@@ -151,6 +152,19 @@ def _release_wechat_resources() -> None:
         pass
 
 
+def _worker_log(log_path: Path, message: str) -> None:
+    """Append debug information for the OCR subprocess."""
+
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"{timestamp} | {message}\n")
+    except Exception:
+        # Логирование не должно ломать основной процесс, поэтому молчим.
+        pass
+
+
 def _ocr_subprocess_init() -> None:
     """Инициализация подпроцесса OCR с ограничением потоков."""
 
@@ -175,10 +189,12 @@ def _ocr_subprocess_init() -> None:
         pass
 
 
-def _ocr_worker_job(path: str, keywords: list[str]) -> tuple[bool, str | None]:
+def _ocr_worker_job(path: str, keywords: list[str], log_path: Path) -> tuple[bool, str | None]:
     """Работаем в отдельном процессе: читаем текст и ищем ключевые слова."""
 
     from ocr import extract_text as _extract_text, release_reader as _release_reader
+
+    _worker_log(log_path, f"worker-start path={path}")
 
     if not keywords:
         return False, "ключевые слова не настроены"
@@ -188,35 +204,47 @@ def _ocr_worker_job(path: str, keywords: list[str]) -> tuple[bool, str | None]:
         return False, "изображение не найдено"
 
     try:
+        _worker_log(log_path, "extract-text:start")
         text = _extract_text(str(image_path))
+        _worker_log(log_path, f"extract-text:done length={len(text)}")
     except FileNotFoundError:
+        _worker_log(log_path, "extract-text:error file-not-found")
         return False, "изображение не найдено"
     except ValueError:
+        _worker_log(log_path, "extract-text:error unreadable")
         return False, "изображение не прочитано"
     finally:
         try:
             _release_reader()
         except Exception:
             pass
+        else:
+            _worker_log(log_path, "release-reader:done")
 
     lower = text.casefold()
     vodka = any(k in lower for k in keywords)
+    _worker_log(log_path, f"keywords:found={vodka}")
     return vodka, None
 
 
-def _ocr_worker_entry(path: str, keywords: list[str], result_queue) -> None:
+def _ocr_worker_entry(path: str, keywords: list[str], result_queue, log_path: str) -> None:
     """Точка входа подпроцесса OCR."""
 
     import traceback
 
+    log_file = Path(log_path)
     try:
         _ocr_subprocess_init()
-        result = _ocr_worker_job(path, keywords)
+        _worker_log(log_file, "subprocess:init-done")
+        result = _ocr_worker_job(path, keywords, log_file)
     except Exception as exc:
         tb_short = "".join(traceback.format_exception_only(type(exc), exc)).strip()
         tb_tail = "".join(traceback.format_exc(limit=2)).strip()
+        _worker_log(log_file, f"exception: {tb_short}")
+        _worker_log(log_file, tb_tail)
         result_queue.put(("error", f"ошибка OCR: {tb_short} | {tb_tail}"))
     else:
+        _worker_log(log_file, "worker-success")
         result_queue.put(("ok", result))
 
 
@@ -225,7 +253,11 @@ def _run_ocr_subprocess(path: str, keywords: list[str]) -> tuple[bool, str | Non
 
     ctx = mp.get_context("spawn")
     result_queue = ctx.Queue()
-    process = ctx.Process(target=_ocr_worker_entry, args=(path, keywords, result_queue))
+    log_dir = Path(os.getenv("OCR_WORKER_LOG_DIR", Path.cwd() / "logs" / "ocr_worker"))
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"ocr_{Path(path).stem}_{uuid.uuid4().hex}.log"
+    logger.info("[QR] OCR subprocess log file: %s", log_path)
+    process = ctx.Process(target=_ocr_worker_entry, args=(path, keywords, result_queue, str(log_path)))
     process.start()
 
     try:
@@ -241,7 +273,7 @@ def _run_ocr_subprocess(path: str, keywords: list[str]) -> tuple[bool, str | Non
             status, payload = result_queue.get(timeout=5)
         except queue.Empty:
             if exit_code is None:
-                return False, "ошибка OCR: результат не получен от подпроцесса"
+                return False, f"ошибка OCR: результат не получен от подпроцесса (log: {log_path})"
             if exit_code < 0:
                 sig_num = -exit_code
                 try:
@@ -251,12 +283,12 @@ def _run_ocr_subprocess(path: str, keywords: list[str]) -> tuple[bool, str | Non
                     reason = f"сигнал {sig_num}"
             else:
                 reason = f"код {exit_code}"
-            return False, f"ошибка OCR: подпроцесс завершился ({reason})"
+            return False, f"ошибка OCR: подпроцесс завершился ({reason}); log: {log_path}"
 
         if status == "ok":
             vodka, error = payload
             return vodka, error
-        return False, str(payload)
+        return False, f"{payload}; log: {log_path}"
     finally:
         try:
             result_queue.close()
