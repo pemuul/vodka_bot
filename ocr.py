@@ -1,323 +1,106 @@
-"""OCR helper that keeps EasyOCR in a dedicated long-lived subprocess."""
+"""Helpers for распознавание текста на чеках с помощью EasyOCR."""
 
 from __future__ import annotations
 
-import atexit
 import logging
 import os
-import queue
 import threading
-import time
-import uuid
-from multiprocessing import Process, Queue, get_context
+import warnings
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Iterable, Tuple
+
+warnings.filterwarnings("ignore", message=".*pin_memory.*")
 
 __all__ = ["extract_text", "release_reader", "OCRWorkerError"]
 
-_DEFAULT_LANGUAGES: tuple[str, ...] = ("ru", "en")
-_DEFAULT_TIMEOUT: float = float(os.getenv("OCR_WORKER_TIMEOUT", "25"))
-_FALLBACK_LANG: str = os.getenv("OCR_FALLBACK_LANG", "rus+eng")
-_WORKER_READY_TIMEOUT: float = float(os.getenv("OCR_WORKER_READY_TIMEOUT", "45"))
-_MAX_DIMENSION: int = int(os.getenv("OCR_MAX_DIMENSION", "1600"))
-
 logger = logging.getLogger(__name__)
+
+_DEFAULT_LANGUAGES: Tuple[str, ...] = tuple(
+    filter(None, (lang.strip() for lang in os.getenv("OCR_LANGUAGES", "ru,en").split(",")))
+) or ("ru", "en")
+_FALLBACK_LANG: str = os.getenv("OCR_FALLBACK_LANG", "rus+eng")
+_MAX_DIMENSION: int = int(os.getenv("OCR_MAX_DIMENSION", "0"))
+
+_reader_lock = threading.Lock()
+_reader: "easyocr.Reader | None" = None
+_reader_languages: Tuple[str, ...] | None = None
 
 
 class OCRWorkerError(RuntimeError):
-    """Raised when the OCR worker fails to return a successful result."""
+    """Исключение при сбое распознавания текста."""
 
 
-def _ensure_sequence(value: Iterable[str] | None) -> tuple[str, ...]:
-    if value is None:
+def _ensure_languages(languages: Iterable[str] | None) -> Tuple[str, ...]:
+    if languages is None:
         return _DEFAULT_LANGUAGES
-    return tuple(value)
+    langs = tuple(lang.strip() for lang in languages if lang and lang.strip())
+    return langs or _DEFAULT_LANGUAGES
 
 
-def _worker_main(
-    request_queue: Queue,
-    response_queue: Queue,
-    languages: tuple[str, ...],
-) -> None:
-    """Worker entry point that hosts the EasyOCR reader."""
-
-    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
-    os.environ.setdefault("OMP_NUM_THREADS", "1")
-    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-    os.environ.setdefault("MKL_NUM_THREADS", "1")
-    os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
-    os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
-
+def _load_image(path: Path):
     try:
-        import easyocr  # type: ignore
-    except Exception as exc:  # pragma: no cover - environment-specific
-        response_queue.put({
-            "kind": "fatal",
-            "error": f"EasyOCRImportError: {exc.__class__.__name__}: {exc}",
-        })
-        return
+        import cv2  # type: ignore
+    except Exception as exc:  # pragma: no cover - зависимость окружения
+        raise OCRWorkerError(f"OpenCVImportError: {exc}") from exc
 
-    try:  # pragma: no cover - defensive guard around torch optional dependency
-        import torch  # type: ignore
+    image = cv2.imread(str(path))
+    if image is None:
+        raise OCRWorkerError(f"Не удалось прочитать изображение: {path}")
 
-        try:
-            torch.set_num_threads(1)
-        except Exception:
-            pass
-    except Exception:
-        pass
+    if _MAX_DIMENSION > 0:
+        height, width = image.shape[:2]
+        max_dim = max(height, width)
+        if max_dim > _MAX_DIMENSION:
+            scale = _MAX_DIMENSION / float(max_dim)
+            new_size = (max(int(width * scale), 1), max(int(height * scale), 1))
+            image = cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
 
-    try:
-        reader = easyocr.Reader(list(languages), gpu=False, verbose=False)
-    except Exception as exc:  # pragma: no cover - environment-specific
-        response_queue.put({
-            "kind": "fatal",
-            "error": f"EasyOCRError: {exc.__class__.__name__}: {exc}",
-        })
-        return
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    return image
 
-    response_queue.put({"kind": "ready"})
 
-    while True:
-        try:
-            message = request_queue.get()
-        except (EOFError, OSError):  # pragma: no cover - queue broke
-            break
+def _get_reader(languages: Iterable[str] | None = None):
+    global _reader, _reader_languages
 
-        if not isinstance(message, dict):
-            continue
-
-        kind = message.get("kind")
-        if kind == "stop":
-            break
-        if kind != "ocr":
-            continue
-
-        job_id = message.get("job_id")
-        image_path = message.get("path")
-        if not isinstance(job_id, str) or not isinstance(image_path, str):
-            response_queue.put(
-                {
-                    "kind": "result",
-                    "job_id": job_id,
-                    "success": False,
-                    "error": "invalid job payload",
-                }
-            )
-            continue
+    langs = _ensure_languages(languages)
+    with _reader_lock:
+        if _reader is not None and _reader_languages == langs:
+            return _reader
 
         try:
-            import cv2  # type: ignore
+            import easyocr  # type: ignore
+        except Exception as exc:  # pragma: no cover - зависимость окружения
+            raise OCRWorkerError(f"EasyOCRImportError: {exc}") from exc
 
-            image = cv2.imread(image_path)
-            if image is None:
-                raise ValueError(f"Unable to read image: {image_path}")
+        try:
+            reader = easyocr.Reader(list(langs), gpu=False, verbose=False)
+        except Exception as exc:  # pragma: no cover - ошибки easyocr/torch
+            raise OCRWorkerError(f"EasyOCRError: {exc}") from exc
 
-            height, width = image.shape[:2]
-            max_dim = max(height, width)
-            target_dim = max(_MAX_DIMENSION, 1)
-            if max_dim > target_dim:
-                scale = target_dim / float(max_dim)
-                new_size = (max(int(width * scale), 1), max(int(height * scale), 1))
-                image = cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
-
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-            lines = reader.readtext(image, detail=0, paragraph=True)
-            text = "\n".join(map(str, lines))
-            response_queue.put(
-                {
-                    "kind": "result",
-                    "job_id": job_id,
-                    "success": True,
-                    "text": text,
-                }
-            )
-        except Exception as exc:  # pragma: no cover - native libs safety
-            response_queue.put(
-                {
-                    "kind": "result",
-                    "job_id": job_id,
-                    "success": False,
-                    "error": f"{exc.__class__.__name__}: {exc}",
-                }
-            )
-
-
-class _EasyOCRManager:
-    """Manage a dedicated EasyOCR subprocess and route jobs to it."""
-
-    def __init__(self, languages: Iterable[str] | None = None) -> None:
-        self._languages = _ensure_sequence(languages)
-        self._ctx = get_context("spawn")
-        self._request_queue: Queue | None = None
-        self._response_queue: Queue | None = None
-        self._process: Process | None = None
-        self._lock = threading.Lock()
-        atexit.register(self.close)
-
-    # ------------------------------------------------------------------ utils
-    def _terminate_process(self) -> None:
-        process = self._process
-        request_queue = self._request_queue
-        response_queue = self._response_queue
-
-        self._process = None
-        self._request_queue = None
-        self._response_queue = None
-
-        if request_queue is not None:
-            try:
-                request_queue.put_nowait({"kind": "stop"})
-            except Exception:
-                pass
-            try:
-                request_queue.cancel_join_thread()
-            except Exception:
-                pass
-            try:
-                request_queue.close()
-            except Exception:
-                pass
-
-        if process is not None:
-            process.join(timeout=5)
-            if process.is_alive():  # pragma: no cover - defensive
-                process.terminate()
-                process.join(timeout=5)
-
-        if response_queue is not None:
-            try:
-                response_queue.cancel_join_thread()
-            except Exception:
-                pass
-            try:
-                response_queue.close()
-            except Exception:
-                pass
-
-    def close(self) -> None:
-        with self._lock:
-            self._terminate_process()
-
-    # ----------------------------------------------------------------- startup
-    def _start_worker(self) -> None:
-        if self._process is not None and self._process.is_alive():
-            return
-
-        self._terminate_process()
-
-        self._request_queue = self._ctx.Queue()
-        self._response_queue = self._ctx.Queue()
-        self._process = self._ctx.Process(
-            target=_worker_main,
-            args=(self._request_queue, self._response_queue, self._languages),
-            daemon=True,
-        )
-        self._process.start()
-
-        if not self._await_ready():
-            raise OCRWorkerError("failed to start EasyOCR worker")
-
-    def _await_ready(self) -> bool:
-        if self._response_queue is None:
-            return False
-
-        deadline = time.monotonic() + _WORKER_READY_TIMEOUT
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                self._terminate_process()
-                return False
-            try:
-                message = self._response_queue.get(timeout=remaining)
-            except queue.Empty:
-                continue
-
-            if not isinstance(message, dict):
-                continue
-
-            kind = message.get("kind")
-            if kind == "ready":
-                return True
-            if kind == "fatal":
-                self._terminate_process()
-                error_text = message.get("error", "worker failed to start")
-                raise OCRWorkerError(error_text)
-
-    # ------------------------------------------------------------------ public
-    def run(self, image_path: str, timeout: float) -> tuple[bool, str]:
-        with self._lock:
-            self._start_worker()
-            if self._request_queue is None or self._response_queue is None:
-                raise OCRWorkerError("EasyOCR worker queues unavailable")
-
-            job_id = uuid.uuid4().hex
-            self._request_queue.put({"kind": "ocr", "job_id": job_id, "path": image_path})
-
-            deadline = time.monotonic() + timeout
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    self._handle_failure("timeout waiting for worker response")
-                    raise TimeoutError(f"timeout after {timeout} seconds")
-
-                try:
-                    message: dict[str, Any] = self._response_queue.get(timeout=remaining)
-                except queue.Empty:
-                    if self._process is None or not self._process.is_alive():
-                        self._handle_failure("worker exited unexpectedly")
-                        raise OCRWorkerError("EasyOCR worker exited unexpectedly")
-                    continue
-
-                kind = message.get("kind")
-                if kind == "result":
-                    if message.get("job_id") != job_id:
-                        logger.debug(
-                            "Ignoring OCR result for stale job %s (expected %s)",
-                            message.get("job_id"),
-                            job_id,
-                        )
-                        continue
-                    success = bool(message.get("success"))
-                    payload = message.get("text") if success else message.get("error", "")
-                    return success, str(payload or "")
-
-                if kind == "fatal":
-                    error_text = message.get("error", "EasyOCR worker failure")
-                    self._handle_failure(error_text)
-                    raise OCRWorkerError(error_text)
-
-                if kind == "ready":  # stray handshake after restart
-                    continue
-
-    def _handle_failure(self, reason: str) -> None:
-        logger.warning("Restarting EasyOCR worker: %s", reason)
-        self._terminate_process()
-
-
-_manager = _EasyOCRManager()
+        _reader = reader
+        _reader_languages = langs
+        return _reader
 
 
 def _fallback_with_tesseract(path: Path, reason: str | None = None) -> str | None:
-    """Attempt to extract text with pytesseract if EasyOCR is unavailable."""
+    """Попробовать распознать текст с помощью pytesseract."""
 
     try:
         import pytesseract  # type: ignore
-    except Exception as exc:  # pragma: no cover - environment specific
+    except Exception as exc:  # pragma: no cover - не обязательная зависимость
         logger.warning(
-            "EasyOCR worker failed (%s) and pytesseract is not available: %s",
-            reason or "unknown reason",
+            "EasyOCR failed (%s) и pytesseract недоступен: %s",
+            reason or "unknown",
             exc,
         )
         return None
 
     try:
         import cv2  # type: ignore
-    except Exception as exc:  # pragma: no cover - OpenCV should be present
+    except Exception as exc:  # pragma: no cover
         logger.warning(
-            "EasyOCR worker failed (%s) and OpenCV is unavailable for fallback: %s",
-            reason or "unknown reason",
+            "EasyOCR failed (%s) и OpenCV недоступен для fallback: %s",
+            reason or "unknown",
             exc,
         )
         return None
@@ -325,78 +108,85 @@ def _fallback_with_tesseract(path: Path, reason: str | None = None) -> str | Non
     image = cv2.imread(str(path))
     if image is None:
         logger.warning(
-            "EasyOCR worker failed (%s) and fallback image load failed for %s",
-            reason or "unknown reason",
+            "EasyOCR failed (%s); fallback не смог прочитать %s",
+            reason or "unknown",
             path,
         )
         return None
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
     try:
         text = pytesseract.image_to_string(gray, lang=_FALLBACK_LANG)
     except pytesseract.pytesseract.TesseractNotFoundError as exc:  # type: ignore[attr-defined]
         logger.warning(
-            "EasyOCR worker failed (%s) and Tesseract binary is missing: %s",
-            reason or "unknown reason",
+            "EasyOCR failed (%s) и бинарник tesseract не найден: %s",
+            reason or "unknown",
             exc,
         )
         return None
     except pytesseract.pytesseract.TesseractError as exc:  # type: ignore[attr-defined]
         logger.warning(
-            "EasyOCR worker failed (%s); pytesseract returned an error: %s",
-            reason or "unknown reason",
+            "EasyOCR failed (%s); pytesseract вернул ошибку: %s",
+            reason or "unknown",
             exc,
         )
         return None
-    except Exception as exc:  # pragma: no cover - defensive guard
+    except Exception as exc:  # pragma: no cover - защита от нестандартных ошибок
         logger.warning(
-            "EasyOCR worker failed (%s); unexpected pytesseract error: %s",
-            reason or "unknown reason",
+            "EasyOCR failed (%s); непредвиденная ошибка pytesseract: %s",
+            reason or "unknown",
             exc,
         )
         return None
 
     logger.info(
-        "EasyOCR worker failed (%s); successfully used pytesseract fallback for %s",
-        reason or "unknown reason",
+        "EasyOCR failed (%s); успешно использован pytesseract fallback для %s",
+        reason or "unknown",
         path,
     )
     return text
 
 
 def extract_text(image_path: str, timeout: float | None = None) -> str:
-    """Extract text from *image_path* using the managed EasyOCR worker."""
+    """Распознать текст на изображении ``image_path``."""
 
-    timeout = timeout if timeout is not None else _DEFAULT_TIMEOUT
     path = Path(image_path)
     if not path.exists():
         raise FileNotFoundError(f"Image not found: {path}")
 
+    image = _load_image(path)
+
     try:
-        success, payload = _manager.run(str(path), timeout)
-    except TimeoutError:
-        fallback_text = _fallback_with_tesseract(path, "timeout")
-        if fallback_text is not None:
-            return fallback_text
-        raise
+        reader = _get_reader()
     except OCRWorkerError as exc:
-        fallback_text = _fallback_with_tesseract(path, str(exc))
-        if fallback_text is not None:
-            return fallback_text
+        fallback = _fallback_with_tesseract(path, str(exc))
+        if fallback is not None:
+            return fallback
         raise
 
-    if success:
-        return payload
+    try:
+        lines = reader.readtext(image, detail=0, paragraph=True)
+    except Exception as exc:  # pragma: no cover - ошибки из native кода
+        fallback = _fallback_with_tesseract(path, f"EasyOCRError: {exc}")
+        if fallback is not None:
+            return fallback
+        raise OCRWorkerError(f"EasyOCRError: {exc}") from exc
 
-    fallback_text = _fallback_with_tesseract(path, payload)
-    if fallback_text is not None:
-        return fallback_text
+    text = "\n".join(str(line) for line in lines if line is not None)
+    if text.strip():
+        return text
 
-    raise OCRWorkerError(payload)
+    fallback = _fallback_with_tesseract(path, "empty EasyOCR result")
+    if fallback is not None:
+        return fallback
+
+    return text
 
 
-def release_reader() -> None:  # pragma: no cover - kept for backward compat
-    """No-op placeholder kept for compatibility with previous interface."""
+def release_reader() -> None:
+    """Освободить кэш EasyOCR Reader."""
 
-    return None
+    global _reader, _reader_languages
+    with _reader_lock:
+        _reader = None
+        _reader_languages = None
