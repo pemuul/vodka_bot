@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import threading
@@ -19,7 +20,7 @@ _DEFAULT_LANGUAGES: Tuple[str, ...] = tuple(
     filter(None, (lang.strip() for lang in os.getenv("OCR_LANGUAGES", "ru,en").split(",")))
 ) or ("ru", "en")
 _FALLBACK_LANG: str = os.getenv("OCR_FALLBACK_LANG", "rus+eng")
-_MAX_DIMENSION: int = int(os.getenv("OCR_MAX_DIMENSION", "0"))
+_MAX_DIMENSION: int = int(os.getenv("OCR_MAX_DIMENSION", "2048"))
 
 _reader_lock = threading.Lock()
 _reader: "easyocr.Reader | None" = None
@@ -171,6 +172,11 @@ def extract_text(image_path: str, timeout: float | None = None) -> str:
         if fallback is not None:
             return fallback
         raise OCRWorkerError(f"EasyOCRError: {exc}") from exc
+    finally:
+        # EasyOCR держит ссылки на исходные массивы изображений, поэтому
+        # явно удаляем их и просим сборщик мусора освободить память.
+        del image
+        gc.collect()
 
     text = "\n".join(str(line) for line in lines if line is not None)
     if text.strip():
