@@ -19,6 +19,7 @@ _DEFAULT_LANGUAGES: tuple[str, ...] = ("ru", "en")
 _DEFAULT_TIMEOUT: float = float(os.getenv("OCR_WORKER_TIMEOUT", "25"))
 _FALLBACK_LANG: str = os.getenv("OCR_FALLBACK_LANG", "rus+eng")
 _WORKER_READY_TIMEOUT: float = float(os.getenv("OCR_WORKER_READY_TIMEOUT", "45"))
+_MAX_DIMENSION: int = int(os.getenv("OCR_MAX_DIMENSION", "1600"))
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +107,23 @@ def _worker_main(
             continue
 
         try:
-            lines = reader.readtext(image_path, detail=0)
+            import cv2  # type: ignore
+
+            image = cv2.imread(image_path)
+            if image is None:
+                raise ValueError(f"Unable to read image: {image_path}")
+
+            height, width = image.shape[:2]
+            max_dim = max(height, width)
+            target_dim = max(_MAX_DIMENSION, 1)
+            if max_dim > target_dim:
+                scale = target_dim / float(max_dim)
+                new_size = (max(int(width * scale), 1), max(int(height * scale), 1))
+                image = cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
+
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+            lines = reader.readtext(image, detail=0, paragraph=True)
             text = "\n".join(map(str, lines))
             response_queue.put(
                 {
