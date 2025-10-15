@@ -165,6 +165,35 @@ def _worker_log(log_path: Path, message: str) -> None:
         pass
 
 
+def _worker_log_memory(log_path: Path, stage: str) -> None:
+    """Log RSS/VMS information from inside the OCR subprocess."""
+
+    rss = None
+    vms = None
+    try:
+        import psutil  # type: ignore
+
+        process = psutil.Process()
+        with process.oneshot():
+            info = process.memory_info()
+        rss = info.rss
+        vms = info.vms
+    except Exception:
+        try:
+            import resource  # type: ignore
+
+            usage = resource.getrusage(resource.RUSAGE_SELF)
+            rss = usage.ru_maxrss * (1024 if os.name != "nt" else 1)
+        except Exception:
+            pass
+
+    if rss is not None:
+        if vms is not None:
+            _worker_log(log_path, f"memory:{stage}:rss={rss} vms={vms}")
+        else:
+            _worker_log(log_path, f"memory:{stage}:rss={rss}")
+
+
 def _ocr_subprocess_init() -> None:
     """Инициализация подпроцесса OCR с ограничением потоков."""
 
@@ -195,6 +224,7 @@ def _ocr_worker_job(path: str, keywords: list[str], log_path: Path) -> tuple[boo
     from ocr import extract_text as _extract_text, release_reader as _release_reader
 
     _worker_log(log_path, f"worker-start path={path}")
+    _worker_log_memory(log_path, "start")
 
     if not keywords:
         return False, "ключевые слова не настроены"
@@ -207,6 +237,7 @@ def _ocr_worker_job(path: str, keywords: list[str], log_path: Path) -> tuple[boo
         _worker_log(log_path, "extract-text:start")
         text = _extract_text(str(image_path))
         _worker_log(log_path, f"extract-text:done length={len(text)}")
+        _worker_log_memory(log_path, "after-extract")
     except FileNotFoundError:
         _worker_log(log_path, "extract-text:error file-not-found")
         return False, "изображение не найдено"
@@ -220,10 +251,12 @@ def _ocr_worker_job(path: str, keywords: list[str], log_path: Path) -> tuple[boo
             pass
         else:
             _worker_log(log_path, "release-reader:done")
+            _worker_log_memory(log_path, "after-release")
 
     lower = text.casefold()
     vodka = any(k in lower for k in keywords)
     _worker_log(log_path, f"keywords:found={vodka}")
+    _worker_log_memory(log_path, "after-keywords")
     return vodka, None
 
 
