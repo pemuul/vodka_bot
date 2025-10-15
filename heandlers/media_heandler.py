@@ -27,7 +27,7 @@ except Exception:  # pragma: no cover - optional dependency
 from pyzbar.pyzbar import decode, ZBarSymbol
 # optional ZXing libraries may provide more robust QR reading
 # OCR helper based on Tesseract with Russian and English models
-from ocr import OCRWorkerError, extract_text, release_reader
+from ocr import extract_text, release_reader
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -168,23 +168,12 @@ def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str 
     _log_memory_usage("ocr:before-readtext")
     try:
         text = extract_text(path)
-    except TimeoutError:
-        logger.warning("[QR] OCR timeout for %s", path)
-        return False, "распознавание превысило лимит времени"
     except FileNotFoundError:
-        logger.exception("[QR] OCR worker failed for %s", path)
-        return False, "ошибка OCR"
-    except OCRWorkerError as exc:
-        message = str(exc)
-        if "No module named 'easyocr'" in message:
-            logger.error(
-                "[QR] OCR worker failed for %s: EasyOCR не установлен. "
-                "Установите пакет easyocr (например, pip install easyocr)",
-                path,
-            )
-        else:
-            logger.error("[QR] OCR worker failed for %s: %s", path, message)
-        return False, "ошибка OCR"
+        logger.warning("[QR] OCR image missing: %s", path)
+        return False, "изображение не найдено"
+    except ValueError:
+        logger.warning("[QR] OCR image not readable: %s", path)
+        return False, "изображение не прочитано"
     except Exception:  # pragma: no cover - unexpected native failures
         logger.exception("[QR] Unexpected OCR failure for %s", path)
         return False, "ошибка OCR"
