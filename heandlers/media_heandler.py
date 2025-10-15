@@ -9,6 +9,7 @@ import time
 import random
 import uuid
 import multiprocessing as mp
+import signal
 import sys
 from pathlib import Path
 from typing import Any
@@ -234,10 +235,23 @@ def _run_ocr_subprocess(path: str, keywords: list[str]) -> tuple[bool, str | Non
             process.join()
             return False, "распознавание превысило лимит времени"
 
+        exit_code = process.exitcode
+
         try:
             status, payload = result_queue.get(timeout=5)
         except queue.Empty:
-            return False, "ошибка OCR"
+            if exit_code is None:
+                return False, "ошибка OCR: результат не получен от подпроцесса"
+            if exit_code < 0:
+                sig_num = -exit_code
+                try:
+                    sig_name = signal.Signals(sig_num).name
+                    reason = f"сигнал {sig_name}"
+                except ValueError:
+                    reason = f"сигнал {sig_num}"
+            else:
+                reason = f"код {exit_code}"
+            return False, f"ошибка OCR: подпроцесс завершился ({reason})"
 
         if status == "ok":
             vodka, error = payload
@@ -612,8 +626,10 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
                 comment_text = "Бот: не удалось прочитать изображение чека"
             elif vision_error == "ключевые слова не настроены":
                 comment_text = "Бот: не настроены ключевые слова для проверки чека"
-            elif vision_error == "ошибка OCR":
-                comment_text = "Бот: произошла ошибка распознавания текста"
+            elif isinstance(vision_error, str) and vision_error.startswith("ошибка OCR"):
+                comment_text = f"Бот: {vision_error}"
+            elif vision_error:
+                comment_text = f"Бот: {vision_error}"
             else:
                 if not qr_data:
                     comment_text = (
