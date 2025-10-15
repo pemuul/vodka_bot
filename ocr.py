@@ -29,6 +29,8 @@ try:  # pragma: no cover - torch может отсутствовать в окр
     import torch  # type: ignore
 
     torch.set_num_threads(int(os.getenv("TORCH_NUM_THREADS", "1")))
+    if hasattr(torch, "set_num_interop_threads"):
+        torch.set_num_interop_threads(int(os.getenv("TORCH_INTEROP_THREADS", "1")))
 except Exception:
     pass
 

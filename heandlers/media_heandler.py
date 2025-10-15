@@ -50,8 +50,8 @@ _WECHAT_LOCK = threading.Lock()
 _WECHAT_DETECTOR: Any | None = None
 _WECHAT_INIT_FAILED = False
 _OCR_FORCE_RELEASE = _env_flag("OCR_FORCE_RELEASE", default=False)
-# По умолчанию изолируем OCR в отдельном процессе, чтобы память гарантированно
-# освобождалась после завершения работы EasyOCR/PyTorch.
+# По умолчанию запускаем OCR в отдельном процессе, чтобы после каждого чека
+# память, занятая EasyOCR/PyTorch, гарантированно возвращалась системе.
 _OCR_IN_SUBPROCESS = _env_flag("OCR_IN_SUBPROCESS", default=True)
 
 
@@ -130,15 +130,14 @@ def release_ocr_resources(force: bool = False) -> None:
 
 
 def _ocr_worker_job(path: str, keywords: list[str]) -> tuple[bool, str | None]:
-    """Execute OCR inside a short-lived subprocess."""
+    """Работаем в отдельном процессе: читаем текст и ищем ключевые слова."""
 
-    from pathlib import Path as _Path
     from ocr import extract_text as _extract_text, release_reader as _release_reader
 
     if not keywords:
         return False, "ключевые слова не настроены"
 
-    image_path = _Path(path)
+    image_path = Path(path)
     if not image_path.exists():
         return False, "изображение не найдено"
 
@@ -212,10 +211,11 @@ def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str 
                 result = future.result()
             except Exception:
                 logger.exception("[QR] OCR subprocess failed for %s", path)
+            else:
                 _log_memory_usage("ocr:after-readtext")
-                return False, "ошибка OCR"
-        _log_memory_usage("ocr:after-readtext")
-        return result
+                return result
+        # Если дочерний процесс упал, пытаемся распознать текст в текущем процессе.
+        logger.info("[QR] Переходим к распознаванию в основном процессе после сбоя подпроцесса")
 
     try:
         text = extract_text(path)
