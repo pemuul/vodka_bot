@@ -1,6 +1,5 @@
 from aiogram import Router,  F
 import asyncio
-import concurrent.futures
 import logging
 import math
 import os
@@ -13,6 +12,7 @@ import multiprocessing as mp
 from pathlib import Path
 from typing import Any
 from fns_api import get_receipt_by_qr
+import queue
 
 #from sql_mgt import sql_mgt.get_param, sql_mgt.set_param, sql_mgt.append_param_get_old
 import sql_mgt
@@ -58,6 +58,7 @@ _OCR_FORCE_RELEASE = _env_flag("OCR_FORCE_RELEASE", default=False)
 # По умолчанию запускаем OCR в отдельном процессе, чтобы после каждого чека
 # память, занятая EasyOCR/PyTorch, гарантированно возвращалась системе.
 _OCR_IN_SUBPROCESS = _env_flag("OCR_IN_SUBPROCESS", default=True)
+_OCR_SUBPROCESS_TIMEOUT = int(os.getenv("OCR_SUBPROCESS_TIMEOUT", "45"))
 
 
 def init_object(global_objects_inp):
@@ -194,6 +195,53 @@ def _ocr_worker_job(path: str, keywords: list[str]) -> tuple[bool, str | None]:
     return vodka, None
 
 
+def _ocr_worker_entry(path: str, keywords: list[str], result_queue) -> None:
+    """Точка входа подпроцесса OCR."""
+
+    try:
+        _ocr_subprocess_init()
+        result = _ocr_worker_job(path, keywords)
+    except Exception:
+        result_queue.put(("error", "ошибка OCR"))
+    else:
+        result_queue.put(("ok", result))
+
+
+def _run_ocr_subprocess(path: str, keywords: list[str]) -> tuple[bool, str | None]:
+    """Запустить OCR в отдельном процессе и вернуть результат."""
+
+    ctx = mp.get_context("spawn")
+    result_queue = ctx.SimpleQueue()
+    process = ctx.Process(target=_ocr_worker_entry, args=(path, keywords, result_queue))
+    process.start()
+
+    try:
+        process.join(_OCR_SUBPROCESS_TIMEOUT)
+        if process.is_alive():
+            process.terminate()
+            process.join()
+            return False, "распознавание превысило лимит времени"
+
+        try:
+            status, payload = result_queue.get(timeout=1)
+        except queue.Empty:
+            return False, "ошибка OCR"
+
+        if status == "ok":
+            vodka, error = payload
+            return vodka, error
+        return False, payload
+    finally:
+        try:
+            result_queue.close()
+        except Exception:
+            pass
+        try:
+            result_queue.join_thread()
+        except Exception:
+            pass
+
+
 def _detect_qr(path: str) -> str | None:
     """Detect QR code, returning its payload if any."""
     logger.info("[QR] Starting detection for %s", path)
@@ -240,18 +288,9 @@ def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str 
     _log_memory_usage("ocr:before-readtext")
 
     if _OCR_IN_SUBPROCESS:
-        ctx = mp.get_context("spawn")
-        with concurrent.futures.ProcessPoolExecutor(
-            max_workers=1, mp_context=ctx, initializer=_ocr_subprocess_init
-        ) as executor:
-            future = executor.submit(_ocr_worker_job, path, keywords)
-            try:
-                result = future.result()
-            except Exception:
-                logger.exception("[QR] OCR subprocess failed for %s", path)
-                return False, "ошибка OCR"
-            _log_memory_usage("ocr:after-readtext")
-            return result
+        vodka, error = _run_ocr_subprocess(path, keywords)
+        _log_memory_usage("ocr:after-readtext")
+        return vodka, error
 
     # Этот путь используется только если отключён подпроцесс
     try:
