@@ -1,59 +1,47 @@
-"""Helpers for распознавание текста на чеках с помощью EasyOCR."""
+"""Helpers for running EasyOCR in an isolated subprocess to avoid memory leaks."""
 
 from __future__ import annotations
 
-import gc
+import json
 import logging
 import os
-import threading
-import warnings
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from typing import Iterable, Tuple
 
-warnings.filterwarnings("ignore", message=".*pin_memory.*")
+logger = logging.getLogger(__name__)
 
 __all__ = ["extract_text", "release_reader", "OCRWorkerError"]
-
-logger = logging.getLogger(__name__)
 
 _DEFAULT_LANGUAGES: Tuple[str, ...] = tuple(
     filter(None, (lang.strip() for lang in os.getenv("OCR_LANGUAGES", "ru,en").split(",")))
 ) or ("ru", "en")
 _FALLBACK_LANG: str = os.getenv("OCR_FALLBACK_LANG", "rus+eng")
 _MAX_DIMENSION: int = int(os.getenv("OCR_MAX_DIMENSION", "1600"))
-_CACHE_READER: bool = os.getenv("OCR_CACHE_READER", "0").lower() in {
-    "1",
-    "true",
-    "yes",
-}
+_DEFAULT_TIMEOUT: float = float(os.getenv("OCR_TIMEOUT", "35"))
 
-_reader_lock = threading.Lock()
-_reader: "easyocr.Reader | None" = None
-_reader_languages: Tuple[str, ...] | None = None
-
-try:  # pragma: no cover - зависимость окружения
+try:  # pragma: no cover - psutil не обязателен в окружении тестов
     import psutil  # type: ignore
 
-    _process = psutil.Process()
-except Exception:  # pragma: no cover - psutil не обязателен
-    _process = None
-
-
-def _log_memory(label: str) -> None:
-    """Вывести использование памяти процесса, если доступен psutil."""
-
-    if _process is None:
-        return
-
-    try:
-        mem = _process.memory_info().rss / (1024 * 1024)
-    except Exception:  # pragma: no cover - защита на случай ошибок psutil
-        return
-    logger.info("Использование памяти (%s): RSS=%.2f МБ", label, mem)
+    _PROCESS = psutil.Process()
+except Exception:  # pragma: no cover
+    _PROCESS = None
 
 
 class OCRWorkerError(RuntimeError):
-    """Исключение при сбое распознавания текста."""
+    """Raised when the EasyOCR helper process fails."""
+
+
+def _log_memory(label: str) -> None:
+    if _PROCESS is None:
+        return
+    try:
+        mem = _PROCESS.memory_info().rss / (1024 * 1024)
+    except Exception:  # pragma: no cover - защитная проверка
+        return
+    logger.info("Использование памяти (%s): RSS=%.2f МБ", label, mem)
 
 
 def _ensure_languages(languages: Iterable[str] | None) -> Tuple[str, ...]:
@@ -63,68 +51,12 @@ def _ensure_languages(languages: Iterable[str] | None) -> Tuple[str, ...]:
     return langs or _DEFAULT_LANGUAGES
 
 
-def _load_image(path: Path):
-    try:
-        import cv2  # type: ignore
-    except Exception as exc:  # pragma: no cover - зависимость окружения
-        raise OCRWorkerError(f"OpenCVImportError: {exc}") from exc
-
-    image = cv2.imread(str(path))
-    if image is None:
-        raise OCRWorkerError(f"Не удалось прочитать изображение: {path}")
-
-    if _MAX_DIMENSION > 0:
-        height, width = image.shape[:2]
-        max_dim = max(height, width)
-        if max_dim > _MAX_DIMENSION:
-            scale = _MAX_DIMENSION / float(max_dim)
-            new_size = (max(int(width * scale), 1), max(int(height * scale), 1))
-            logger.info(
-                "EasyOCR: уменьшаем изображение %s с %sx%s до %sx%s (scale=%.3f)",
-                path,
-                width,
-                height,
-                new_size[0],
-                new_size[1],
-                scale,
-            )
-            image = cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
-
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    return image
-
-
-def _get_reader(languages: Iterable[str] | None = None):
-    global _reader, _reader_languages
-
-    langs = _ensure_languages(languages)
-    with _reader_lock:
-        if _reader is not None and _reader_languages == langs:
-            _log_memory("ocr:reuse-reader")
-            return _reader
-
-        try:
-            import easyocr  # type: ignore
-        except Exception as exc:  # pragma: no cover - зависимость окружения
-            raise OCRWorkerError(f"EasyOCRImportError: {exc}") from exc
-
-        try:
-            reader = easyocr.Reader(list(langs), gpu=False, verbose=False)
-        except Exception as exc:  # pragma: no cover - ошибки easyocr/torch
-            raise OCRWorkerError(f"EasyOCRError: {exc}") from exc
-
-        _reader = reader
-        _reader_languages = langs
-        _log_memory("ocr:after-reader-load")
-        return _reader
-
-
 def _fallback_with_tesseract(path: Path, reason: str | None = None) -> str | None:
     """Попробовать распознать текст с помощью pytesseract."""
 
     try:
         import pytesseract  # type: ignore
-    except Exception as exc:  # pragma: no cover - не обязательная зависимость
+    except Exception as exc:  # pragma: no cover - pytesseract опционален
         logger.warning(
             "EasyOCR failed (%s) и pytesseract недоступен: %s",
             reason or "unknown",
@@ -184,60 +116,115 @@ def _fallback_with_tesseract(path: Path, reason: str | None = None) -> str | Non
     return text
 
 
-def extract_text(image_path: str, timeout: float | None = None) -> str:
-    """Распознать текст на изображении ``image_path``."""
+def _format_worker_failure(reason: str, code: int | None, stdout: str | None, stderr: str | None) -> str:
+    parts = [f"worker failure: {reason}"]
+    if code is not None:
+        parts.append(f"exit_code={code}")
+    if stdout:
+        parts.append(f"stdout={stdout.strip()}")
+    if stderr:
+        parts.append(f"stderr={stderr.strip()}")
+    return "; ".join(parts)
 
+
+def _spawn_worker(path: Path, timeout: float | None) -> str:
+    script = Path(__file__).with_name("ocr_worker_cli.py")
+    if not script.exists():
+        raise OCRWorkerError("worker script not found")
+
+    languages = _ensure_languages(None)
+
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+
+    cmd = [
+        sys.executable,
+        str(script),
+        "--image",
+        str(path),
+        "--output",
+        str(tmp_path),
+        "--languages",
+        ",".join(languages),
+    ]
+    if _MAX_DIMENSION > 0:
+        cmd.extend(["--max-dimension", str(_MAX_DIMENSION)])
+
+    env = os.environ.copy()
+    env.setdefault("PYTHONUNBUFFERED", "1")
+
+    effective_timeout = timeout if timeout is not None else _DEFAULT_TIMEOUT
+
+    try:
+        completed = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=effective_timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise TimeoutError(f"OCR worker timeout after {effective_timeout} секунд") from exc
+
+    stdout = completed.stdout
+    stderr = completed.stderr
+    tmp_exists = tmp_path.exists()
+
+    try:
+        if completed.returncode != 0:
+            raise OCRWorkerError(
+                _format_worker_failure("non-zero exit", completed.returncode, stdout, stderr)
+            )
+
+        if not tmp_exists:
+            raise OCRWorkerError(
+                _format_worker_failure("missing output", completed.returncode, stdout, stderr)
+            )
+
+        data = json.loads(tmp_path.read_text(encoding="utf-8"))
+    except OCRWorkerError:
+        raise
+    except Exception as exc:  # pragma: no cover - JSON/IO ошибки
+        raise OCRWorkerError(
+            _format_worker_failure(f"invalid output: {exc}", completed.returncode, stdout, stderr)
+        ) from exc
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    if not data.get("success"):
+        raise OCRWorkerError(
+            _format_worker_failure(data.get("error", "unknown"), completed.returncode, stdout, stderr)
+        )
+
+    return data.get("text", "")
+
+
+def extract_text(image_path: str, timeout: float | None = None) -> str:
     path = Path(image_path)
     if not path.exists():
         raise FileNotFoundError(f"Image not found: {path}")
 
-    _log_memory("ocr:before-load")
-    image = _load_image(path)
-    logger.info(
-        "EasyOCR: подготовлено изображение %s размером %sx%s (channels=%s)",
-        path,
-        image.shape[1],
-        image.shape[0],
-        image.shape[2] if len(image.shape) > 2 else 1,
-    )
-    _log_memory("ocr:after-load")
-
+    _log_memory("ocr:before-worker")
     try:
-        reader = _get_reader()
+        text = _spawn_worker(path, timeout)
+    except TimeoutError:
+        raise
     except OCRWorkerError as exc:
         fallback = _fallback_with_tesseract(path, str(exc))
         if fallback is not None:
             return fallback
         raise
-
-    try:
-        _log_memory("ocr:before-readtext")
-        lines = reader.readtext(image, detail=0, paragraph=True)
-        _log_memory("ocr:after-readtext")
-    except Exception as exc:  # pragma: no cover - ошибки из native кода
-        fallback = _fallback_with_tesseract(path, f"EasyOCRError: {exc}")
-        if fallback is not None:
-            return fallback
-        raise OCRWorkerError(f"EasyOCRError: {exc}") from exc
     finally:
-        # EasyOCR держит ссылки на исходные массивы изображений, поэтому
-        # явно удаляем их и просим сборщик мусора освободить память.
-        del image
-        gc.collect()
-        try:  # pragma: no cover - torch может отсутствовать
-            import torch
+        _log_memory("ocr:after-worker")
 
-            if torch.cuda.is_available():  # pragma: no cover - GPU не обязателен
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
-        if not _CACHE_READER:
-            _log_memory("ocr:before-release-reader")
-            release_reader()
-            _log_memory("ocr:after-release-reader")
-        _log_memory("ocr:after-gc")
-
-    text = "\n".join(str(line) for line in lines if line is not None)
     if text.strip():
         return text
 
@@ -249,30 +236,6 @@ def extract_text(image_path: str, timeout: float | None = None) -> str:
 
 
 def release_reader() -> None:
-    """Освободить кэш EasyOCR Reader."""
+    """Compatibility shim for legacy code: subprocess-based worker has no cache."""
 
-    import sys
-
-    global _reader, _reader_languages
-    with _reader_lock:
-        if _reader is not None:
-            logger.info("EasyOCR: освобождаем reader и связанные веса")
-        _reader = None
-        _reader_languages = None
-
-    modules_cleared = 0
-    module_names: list[str] = []
-    for name in list(sys.modules.keys()):
-        if name == "easyocr" or name.startswith("easyocr."):
-            module = sys.modules.pop(name, None)
-            if module is not None:
-                modules_cleared += 1
-                module_names.append(name)
-
-    if modules_cleared:
-        logger.info(
-            "EasyOCR: выгружено модулей=%s (%s)",
-            modules_cleared,
-            ", ".join(sorted(module_names))
-        )
-    gc.collect()
+    logger.debug("EasyOCR subprocess mode активен — release_reader ничего не делает")
