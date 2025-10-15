@@ -10,6 +10,7 @@ allocations are reclaimed by the operating system once the child exits.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -20,6 +21,9 @@ __all__ = ["extract_text", "release_reader", "OCRWorkerError"]
 
 _DEFAULT_LANGUAGES: tuple[str, ...] = ("ru", "en")
 _DEFAULT_TIMEOUT: float = float(os.getenv("OCR_WORKER_TIMEOUT", "25"))
+_FALLBACK_LANG: str = os.getenv("OCR_FALLBACK_LANG", "rus+eng")
+
+logger = logging.getLogger(__name__)
 
 
 class OCRWorkerError(RuntimeError):
@@ -55,7 +59,15 @@ def _spawn_worker(image_path: str, timeout: float) -> tuple[bool, str]:
     except OSError as exc:  # pragma: no cover - filesystem safety
         raise OCRWorkerError(f"failed to prepare worker output file: {exc}") from exc
 
-    cmd: list[str] = [sys.executable, "-u", str(worker_path), "--image", image_path, "--output", str(output_file)]
+    cmd: list[str] = [
+        sys.executable,
+        "-u",
+        str(worker_path),
+        "--image",
+        image_path,
+        "--output",
+        str(output_file),
+    ]
     for lang in _DEFAULT_LANGUAGES:
         cmd.extend(["--lang", lang])
 
@@ -99,6 +111,72 @@ def _spawn_worker(image_path: str, timeout: float) -> tuple[bool, str]:
     return success, message or ""
 
 
+def _fallback_with_tesseract(path: Path, reason: str | None = None) -> str | None:
+    """Attempt to extract text with pytesseract if EasyOCR is unavailable."""
+
+    try:
+        import pytesseract  # type: ignore
+    except Exception as exc:  # pragma: no cover - environment specific
+        logger.warning(
+            "EasyOCR worker failed (%s) and pytesseract is not available: %s",
+            reason or "unknown reason",
+            exc,
+        )
+        return None
+
+    try:
+        import cv2  # type: ignore
+    except Exception as exc:  # pragma: no cover - OpenCV should be present
+        logger.warning(
+            "EasyOCR worker failed (%s) and OpenCV is unavailable for fallback: %s",
+            reason or "unknown reason",
+            exc,
+        )
+        return None
+
+    image = cv2.imread(str(path))
+    if image is None:
+        logger.warning(
+            "EasyOCR worker failed (%s) and fallback image load failed for %s",
+            reason or "unknown reason",
+            path,
+        )
+        return None
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    try:
+        text = pytesseract.image_to_string(gray, lang=_FALLBACK_LANG)
+    except pytesseract.pytesseract.TesseractNotFoundError as exc:  # type: ignore[attr-defined]
+        logger.warning(
+            "EasyOCR worker failed (%s) and Tesseract binary is missing: %s",
+            reason or "unknown reason",
+            exc,
+        )
+        return None
+    except pytesseract.pytesseract.TesseractError as exc:  # type: ignore[attr-defined]
+        logger.warning(
+            "EasyOCR worker failed (%s); pytesseract returned an error: %s",
+            reason or "unknown reason",
+            exc,
+        )
+        return None
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning(
+            "EasyOCR worker failed (%s); unexpected pytesseract error: %s",
+            reason or "unknown reason",
+            exc,
+        )
+        return None
+
+    logger.info(
+        "EasyOCR worker failed (%s); successfully used pytesseract fallback for %s",
+        reason or "unknown reason",
+        path,
+    )
+    return text
+
+
 def extract_text(image_path: str, timeout: float | None = None) -> str:
     """Extract text from *image_path* using EasyOCR inside an isolated worker."""
 
@@ -107,10 +185,27 @@ def extract_text(image_path: str, timeout: float | None = None) -> str:
     if not path.exists():
         raise FileNotFoundError(f"Image not found: {path}")
 
-    success, payload = _spawn_worker(str(path), timeout)
-    if not success:
-        raise OCRWorkerError(payload)
-    return payload
+    try:
+        success, payload = _spawn_worker(str(path), timeout)
+    except TimeoutError:
+        fallback_text = _fallback_with_tesseract(path, "timeout")
+        if fallback_text is not None:
+            return fallback_text
+        raise
+    except OCRWorkerError as exc:
+        fallback_text = _fallback_with_tesseract(path, str(exc))
+        if fallback_text is not None:
+            return fallback_text
+        raise
+
+    if success:
+        return payload
+
+    fallback_text = _fallback_with_tesseract(path, payload)
+    if fallback_text is not None:
+        return fallback_text
+
+    raise OCRWorkerError(payload)
 
 
 def release_reader() -> None:  # pragma: no cover - kept for backward compat
