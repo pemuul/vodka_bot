@@ -14,12 +14,13 @@ logger = logging.getLogger(__name__)
 __all__ = ["extract_text", "release_reader", "OCRWorkerError"]
 
 _DEFAULT_LANGUAGES: Tuple[str, ...] = tuple(
-    filter(None, (lang.strip() for lang in os.getenv("OCR_LANGUAGES", "ru,en").split(",")))
-) or ("ru", "en")
+    filter(None, (lang.strip() for lang in os.getenv("OCR_LANGUAGES", "ru").split(",")))
+) or ("ru",)
 _FALLBACK_LANG: str = os.getenv("OCR_FALLBACK_LANG", "rus+eng")
 _MAX_DIMENSION: int = int(os.getenv("OCR_MAX_DIMENSION", "1600"))
 _DEFAULT_TIMEOUT: float = float(os.getenv("OCR_TIMEOUT", "35"))
 _WORKER_START_TIMEOUT: float = float(os.getenv("OCR_WORKER_START_TIMEOUT", "25"))
+_RECOG_NETWORK: str | None = os.getenv("OCR_RECOG_NETWORK", "cyrillic_g2") or None
 
 try:  # pragma: no cover - psutil не обязателен в окружении тестов
     import psutil  # type: ignore
@@ -153,7 +154,14 @@ def _worker_main(conn, languages: Tuple[str, ...], max_dimension: int) -> None:
         return
 
     try:
-        reader = Reader(list(languages), gpu=False, verbose=False)
+        reader_kwargs = {
+            "lang_list": list(languages),
+            "gpu": False,
+            "verbose": False,
+        }
+        if _RECOG_NETWORK:
+            reader_kwargs["recog_network"] = _RECOG_NETWORK
+        reader = Reader(**reader_kwargs)
     except Exception as exc:  # pragma: no cover - ошибки загрузки весов
         try:
             conn.send({"type": "fatal", "error": f"EasyOCRError: {exc}"})
@@ -161,7 +169,13 @@ def _worker_main(conn, languages: Tuple[str, ...], max_dimension: int) -> None:
             conn.close()
         return
 
-    conn.send({"type": "ready"})
+    conn.send(
+        {
+            "type": "ready",
+            "languages": list(languages),
+            "recog_network": _RECOG_NETWORK,
+        }
+    )
 
     while True:
         try:
@@ -242,6 +256,12 @@ class _WorkerHandle:
             error = message.get("error") if isinstance(message, dict) else "unknown"
             self.stop(force=True)
             raise OCRWorkerError(f"EasyOCR worker не запустился: {error}")
+
+        logger.info(
+            "EasyOCR worker готов (languages=%s, recog_network=%s)",
+            message.get("languages"),
+            message.get("recog_network"),
+        )
 
     def stop(self, force: bool = False) -> None:
         if self._conn is not None:
