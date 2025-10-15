@@ -78,6 +78,13 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+# Явно укажем каталог моделей EasyOCR, если он существует, чтобы spawn-процессы
+# находили веса независимо от окружения пользователя.
+_easyocr_models = os.path.expanduser("~/.EasyOCR")
+if os.path.isdir(_easyocr_models):
+    os.environ.setdefault("EASYOCR_MODULE_PATH", _easyocr_models)
+# Таймаут выполнения OCR в подпроцессе (секунды)
+os.environ.setdefault("OCR_SUBPROCESS_TIMEOUT", "45")
 _jemalloc_path = "/usr/lib/x86_64-linux-gnu/libjemalloc.so.2"
 if os.getenv("USE_JEMALLOC", "0") == "1" and os.path.exists(_jemalloc_path):
     os.environ.setdefault("LD_PRELOAD", _jemalloc_path)

@@ -192,8 +192,6 @@ def _ocr_worker_job(path: str, keywords: list[str]) -> tuple[bool, str | None]:
         return False, "изображение не найдено"
     except ValueError:
         return False, "изображение не прочитано"
-    except Exception:
-        return False, "ошибка OCR"
     finally:
         try:
             _release_reader()
@@ -214,8 +212,9 @@ def _ocr_worker_entry(path: str, keywords: list[str], result_queue) -> None:
         _ocr_subprocess_init()
         result = _ocr_worker_job(path, keywords)
     except Exception as exc:
-        tb = "".join(traceback.format_exception_only(type(exc), exc)).strip()
-        result_queue.put(("error", f"ошибка OCR: {tb}"))
+        tb_short = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+        tb_tail = "".join(traceback.format_exc(limit=2)).strip()
+        result_queue.put(("error", f"ошибка OCR: {tb_short} | {tb_tail}"))
     else:
         result_queue.put(("ok", result))
 
@@ -236,7 +235,7 @@ def _run_ocr_subprocess(path: str, keywords: list[str]) -> tuple[bool, str | Non
             return False, "распознавание превысило лимит времени"
 
         try:
-            status, payload = result_queue.get(timeout=1)
+            status, payload = result_queue.get(timeout=5)
         except queue.Empty:
             return False, "ошибка OCR"
 
