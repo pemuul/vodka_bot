@@ -251,9 +251,28 @@ def extract_text(image_path: str, timeout: float | None = None) -> str:
 def release_reader() -> None:
     """Освободить кэш EasyOCR Reader."""
 
+    import sys
+
     global _reader, _reader_languages
     with _reader_lock:
         if _reader is not None:
             logger.info("EasyOCR: освобождаем reader и связанные веса")
         _reader = None
         _reader_languages = None
+
+    modules_cleared = 0
+    module_names: list[str] = []
+    for name in list(sys.modules.keys()):
+        if name == "easyocr" or name.startswith("easyocr."):
+            module = sys.modules.pop(name, None)
+            if module is not None:
+                modules_cleared += 1
+                module_names.append(name)
+
+    if modules_cleared:
+        logger.info(
+            "EasyOCR: выгружено модулей=%s (%s)",
+            modules_cleared,
+            ", ".join(sorted(module_names))
+        )
+    gc.collect()
