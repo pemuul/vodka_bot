@@ -30,5 +30,6 @@
     "receipts": "receipts (id INTEGER PRIMARY KEY AUTOINCREMENT, number TEXT, date DATE, amount REAL, user_tg_id INTEGER, draw_id INTEGER, message_id INTEGER, qr TEXT, file_path TEXT, status TEXT DEFAULT 'не подтвержден', comment TEXT, create_dt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
     "images": "images (id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT NOT NULL, filepath TEXT NOT NULL, user_tg_id INTEGER, upload_dt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
     "deleted_images": "deleted_images (id INTEGER PRIMARY KEY AUTOINCREMENT, image_id INTEGER NOT NULL, deleted_dt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
-    "notifications": "notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, user_tg_id INTEGER NOT NULL, message TEXT NOT NULL, is_read BOOLEAN DEFAULT FALSE, create_dt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+    "notifications": "notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, user_tg_id INTEGER NOT NULL, message TEXT NOT NULL, is_read BOOLEAN DEFAULT FALSE, create_dt TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+    "receipt_ocr_queue": "receipt_ocr_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, receipt_id INTEGER UNIQUE NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, locked_at TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, available_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
 }
