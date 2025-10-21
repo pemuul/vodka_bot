@@ -1,5 +1,6 @@
 from aiogram import Router,  F
 import asyncio
+import json
 import logging
 import math
 import os
@@ -599,16 +600,108 @@ def _first_wechat_result(decoded) -> str | None:
     return str(decoded).strip()
 
 
-def _check_vodka_in_receipt(qr_data: str, keywords: list[str]) -> bool | None:
+def _truncate_payload(payload: object, limit: int = 1500) -> str:
+    """Serialize payload objects for logging without flooding the console."""
+
+    try:
+        if isinstance(payload, str):
+            text = payload
+        else:
+            text = json.dumps(payload, ensure_ascii=False, default=str)
+    except Exception:
+        text = repr(payload)
+    if len(text) > limit:
+        return f"{text[:limit]}… (truncated)"
+    return text
+
+
+def _format_money_value(value: object) -> str:
+    """Return a readable representation for monetary values."""
+
+    if value in (None, ""):
+        return ""
+    try:
+        amount = float(value)
+    except Exception:
+        return str(value)
+    if math.isfinite(amount):
+        rounded = round(amount, 2)
+        text = f"{rounded:.2f}₽"
+        int_amount = int(round(amount))
+        if abs(amount - int_amount) < 1e-6 and int_amount % 100 == 0 and int_amount:
+            text = f"{int_amount / 100:.2f}₽ ({int_amount} коп.)"
+        return text
+    return str(value)
+
+
+def _format_receipt_items(items: list[dict]) -> str:
+    """Return a readable summary for items inside an FNS receipt."""
+
+    summary = []
+    for item in items:
+        name = str(item.get("name", "")).strip() or "<без названия>"
+        quantity = item.get("quantity") or item.get("qty") or 0
+        price = item.get("price")
+        total = item.get("sum")
+        if price is None and total is not None and quantity:
+            try:
+                price = float(total) / float(quantity)
+            except Exception:
+                price = None
+        parts = [name]
+        try:
+            qty_val = float(quantity)
+            parts.append(f"x{qty_val:g}")
+        except Exception:
+            if quantity:
+                parts.append(f"x{quantity}")
+        if price is not None:
+            parts.append(f"цена={_format_money_value(price)}")
+        if total is not None:
+            parts.append(f"сумма={_format_money_value(total)}")
+        summary.append("; ".join(parts))
+    return ", ".join(summary) if summary else "<товары отсутствуют>"
+
+
+def _check_vodka_in_receipt(
+    qr_data: str, keywords: list[str], receipt_id: int | None = None
+) -> bool | None:
     """Call FNS service and search receipt items for configured products."""
+
     data = get_receipt_by_qr(qr_data)
     if not data:
+        if receipt_id is not None:
+            logger.info(
+                "[QR] Receipt %s FNS ticket отсутствует или не получен", receipt_id
+            )
         return None
-    items = (
+
+    if receipt_id is not None:
+        logger.info(
+            "[QR] Receipt %s FNS ticket payload: %s",
+            receipt_id,
+            _truncate_payload(data),
+        )
+
+    raw_items = (
         data.get("items")
         or data.get("content", {}).get("items")
         or data.get("document", {}).get("receipt", {}).get("items", [])
+        or []
     )
+
+    if not isinstance(raw_items, (list, tuple)):
+        raw_items = [raw_items]
+
+    items = [item for item in raw_items if isinstance(item, dict)]
+
+    if receipt_id is not None:
+        logger.info(
+            "[QR] Receipt %s FNS items: %s",
+            receipt_id,
+            _format_receipt_items(items),
+        )
+
     for item in items:
         name = str(item.get("name", "")).casefold()
         if any(k in name for k in keywords):
@@ -662,7 +755,7 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
         await sql_mgt.update_receipt_qr(receipt_id, qr_data)
         try:
             vodka_found = await loop.run_in_executor(
-                None, _check_vodka_in_receipt, qr_data, keywords
+                None, _check_vodka_in_receipt, qr_data, keywords, receipt_id
             )
         except Exception:
             logger.exception(
