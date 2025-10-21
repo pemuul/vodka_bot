@@ -40,7 +40,6 @@ import csv
 import io
 from decimal import Decimal
 import sys
-import sqlite3
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -95,53 +94,43 @@ _ensure_receipts_schema()
 
 def _ensure_scheduled_messages_schema() -> None:
     """Ensure the scheduled_messages table exists with the expected columns."""
-    conn: Optional[sqlite3.Connection] = None
     try:
-        db_path = make_url(DATABASE_URL).database or ""
-        db_file = Path(db_path)
-        if not db_file.is_absolute():
-            db_file = (Path(__file__).resolve().parent / db_file).resolve()
-        conn = sqlite3.connect(str(db_file))
-        cur = conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS scheduled_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                content TEXT NOT NULL,
-                schedule_dt TIMESTAMP,
-                status TEXT NOT NULL DEFAULT 'Черновик'
-            )
-            """
-        )
-        existing_columns = {
-            row[1]: row for row in cur.execute("PRAGMA table_info(scheduled_messages)")
-        }
-        required_columns = {
-            "auto_send": "INTEGER NOT NULL DEFAULT 0",
-            "media": "TEXT",
-            "last_attempt_dt": "TIMESTAMP",
-            "sent_dt": "TIMESTAMP",
-            "last_error": "TEXT",
-            "success_count": "INTEGER NOT NULL DEFAULT 0",
-            "failure_count": "INTEGER NOT NULL DEFAULT 0",
-            "created_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-            "updated_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-        }
-        for column_name, ddl in required_columns.items():
-            if column_name not in existing_columns:
-                cur.execute(
-                    f"ALTER TABLE scheduled_messages ADD COLUMN {column_name} {ddl}"
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE IF NOT EXISTS scheduled_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    schedule_dt TIMESTAMP,
+                    status TEXT NOT NULL DEFAULT 'Черновик'
                 )
-        conn.commit()
+                """
+            )
+            existing_columns = {
+                row[1]: row
+                for row in connection.exec_driver_sql(
+                    "PRAGMA table_info(scheduled_messages)"
+                )
+            }
+            required_columns = {
+                "auto_send": "INTEGER NOT NULL DEFAULT 0",
+                "media": "TEXT",
+                "last_attempt_dt": "TIMESTAMP",
+                "sent_dt": "TIMESTAMP",
+                "last_error": "TEXT",
+                "success_count": "INTEGER NOT NULL DEFAULT 0",
+                "failure_count": "INTEGER NOT NULL DEFAULT 0",
+                "created_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+                "updated_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+            }
+            for column_name, ddl in required_columns.items():
+                if column_name not in existing_columns:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE scheduled_messages ADD COLUMN {column_name} {ddl}"
+                    )
     except Exception:
         logger.exception("Failed to ensure scheduled_messages schema")
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
 
 
 _ensure_scheduled_messages_schema()
@@ -182,6 +171,7 @@ participant_messages_table = Table("participant_messages", metadata, autoload_wi
 # when reading or writing data.
 HAS_PM_IS_ANSWER = 'is_answer' in participant_messages_table.c
 HAS_QM_IS_ANSWER = 'is_answer' in question_messages_table.c
+HAS_SM_AUTO_SEND = 'auto_send' in scheduled_messages_table.c
 HAS_SM_MEDIA = 'media' in scheduled_messages_table.c
 HAS_PDW_RECEIPT_ID = 'receipt_id' in prize_draw_winners_table.c
 receipts_table             = Table("receipts", metadata, autoload_with=engine)
@@ -961,7 +951,7 @@ async def scheduled_messages(request: Request):
         except Exception:
             media = []
         status = _normalize_legacy_status(r.get("status")) or "Черновик"
-        auto_flag = bool(r.get("auto_send") or 0)
+        auto_flag = bool(r.get("auto_send") or 0) if HAS_SM_AUTO_SEND else False
         last_attempt_dt = _coerce_datetime(r.get("last_attempt_dt"))
         sent_dt = _coerce_datetime(r.get("sent_dt"))
         next_attempt_dt = _calc_next_attempt(
@@ -1183,25 +1173,24 @@ async def _broadcast_scheduled_message(
         combined_error = preview[:SCHEDULE_MAX_ERROR_LENGTH]
     status = "Отправлено" if not combined_error and sent_count > 0 else "Ошибка"
     now = datetime.datetime.utcnow()
-    auto_send_after = 1 if bool(row.get("auto_send")) else 0
-    if not has_recipients:
-        auto_send_after = 0
-    if status == "Отправлено":
+    auto_send_after = 1 if (HAS_SM_AUTO_SEND and bool(row.get("auto_send"))) else 0
+    if not has_recipients or status == "Отправлено":
         auto_send_after = 0
     update_values: Dict[str, Any] = {
         "status": status,
-        "auto_send": auto_send_after,
         "last_attempt_dt": now,
         "updated_at": now,
         "success_count": sent_count,
         "failure_count": failed_count,
         "last_error": combined_error,
     }
+    if HAS_SM_AUTO_SEND:
+        update_values["auto_send"] = auto_send_after
     if status == "Отправлено":
         update_values["sent_dt"] = now
         update_values["last_error"] = None
     else:
-        if initiated_by_scheduler and bool(row.get("auto_send")):
+        if HAS_SM_AUTO_SEND and initiated_by_scheduler and bool(row.get("auto_send")):
             update_values["auto_send"] = 1
         update_values.setdefault("sent_dt", row.get("sent_dt"))
     await database.execute(
@@ -1213,6 +1202,8 @@ async def _broadcast_scheduled_message(
 
 
 async def _process_due_scheduled_messages() -> None:
+    if not HAS_SM_AUTO_SEND:
+        return
     now = datetime.datetime.utcnow()
     candidates: List[Dict[str, Any]] = []
     async with _schedule_lock:
@@ -1297,7 +1288,7 @@ async def save_scheduled_message(msg: ScheduledMessageIn):
             safe_media.append({"type": typ, "file": name})
     media_json = json.dumps(safe_media) if safe_media else None
     schedule_dt = _to_utc_naive(msg.schedule)
-    auto_flag = bool(msg.auto_send) if msg.auto_send is not None else False
+    auto_flag = bool(msg.auto_send) if (HAS_SM_AUTO_SEND and msg.auto_send is not None) else False
     if auto_flag and schedule_dt is None:
         auto_flag = False
     now = datetime.datetime.utcnow()
@@ -1314,7 +1305,7 @@ async def save_scheduled_message(msg: ScheduledMessageIn):
                 content=msg.content,
                 schedule_dt=schedule_dt,
                 status=status_value,
-                auto_send=1 if auto_flag else 0,
+                **({"auto_send": 1 if auto_flag else 0} if HAS_SM_AUTO_SEND else {}),
                 created_at=now,
                 updated_at=now,
                 **({"media": media_json} if HAS_SM_MEDIA else {}),
@@ -1332,8 +1323,8 @@ async def save_scheduled_message(msg: ScheduledMessageIn):
         schedule_value = schedule_dt
         if "schedule" not in fields_set:
             schedule_value = _coerce_datetime(existing_map.get("schedule_dt"))
-        auto_flag_existing = bool(existing_map.get("auto_send") or 0)
-        if "auto_send" in fields_set:
+        auto_flag_existing = bool(existing_map.get("auto_send") or 0) if HAS_SM_AUTO_SEND else False
+        if HAS_SM_AUTO_SEND and "auto_send" in fields_set:
             auto_flag = bool(msg.auto_send)
             if auto_flag and schedule_value is None:
                 auto_flag = False
@@ -1349,8 +1340,8 @@ async def save_scheduled_message(msg: ScheduledMessageIn):
             "name": msg.name,
             "content": msg.content,
             "status": status_value,
-            "auto_send": 1 if auto_flag else 0,
             "updated_at": now,
+            **({"auto_send": 1 if auto_flag else 0} if HAS_SM_AUTO_SEND else {}),
             **({"media": media_json} if HAS_SM_MEDIA else {}),
         }
         if "schedule" in fields_set:
