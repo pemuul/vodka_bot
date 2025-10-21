@@ -54,7 +54,21 @@ from sql_mgt import ensure_receipt_comment_column_sync
 # ==============================
 # Настройка БД
 # ==============================
-DATABASE_URL = "sqlite:///../../tg_base.sqlite"
+def _resolve_database_file(default_path: str) -> Path:
+    raw_path = Path(default_path)
+    if raw_path.is_absolute():
+        return raw_path
+    base_dir = Path(__file__).resolve().parent
+    search_roots = [base_dir, *base_dir.parents]
+    for root in search_roots:
+        candidate = (root / raw_path).resolve()
+        if candidate.exists():
+            return candidate
+    return (base_dir / raw_path).resolve()
+
+
+DATABASE_FILE = _resolve_database_file("../../tg_base.sqlite")
+DATABASE_URL = f"sqlite:///{DATABASE_FILE}"
 
 database = Database(DATABASE_URL)
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
@@ -279,12 +293,22 @@ def _get_table_column_names(table_name: str) -> Set[str]:
         return set()
 
 
-SCHEDULED_MESSAGES_COLUMN_NAMES = _get_table_column_names("scheduled_messages")
+SCHEDULED_MESSAGES_COLUMN_NAMES: Set[str] = set()
+HAS_SM_AUTO_SEND = False
+HAS_SM_MEDIA = False
+
+
+def _set_scheduled_messages_column_flags(column_names: Set[str]) -> None:
+    global SCHEDULED_MESSAGES_COLUMN_NAMES, HAS_SM_AUTO_SEND, HAS_SM_MEDIA
+    SCHEDULED_MESSAGES_COLUMN_NAMES = set(column_names)
+    HAS_SM_AUTO_SEND = "auto_send" in SCHEDULED_MESSAGES_COLUMN_NAMES
+    HAS_SM_MEDIA = "media" in SCHEDULED_MESSAGES_COLUMN_NAMES
+
+
+_set_scheduled_messages_column_flags(_get_table_column_names("scheduled_messages"))
 
 HAS_PM_IS_ANSWER = 'is_answer' in participant_messages_table.c
 HAS_QM_IS_ANSWER = 'is_answer' in question_messages_table.c
-HAS_SM_AUTO_SEND = "auto_send" in SCHEDULED_MESSAGES_COLUMN_NAMES
-HAS_SM_MEDIA = "media" in SCHEDULED_MESSAGES_COLUMN_NAMES
 
 
 def _scheduled_messages_columns() -> List[Any]:
@@ -317,6 +341,19 @@ def _scheduled_messages_select() -> "sqlalchemy.sql.Select":
         sqlalchemy.select(*_scheduled_messages_columns())
         .select_from(scheduled_messages_table)
     )
+
+
+async def _refresh_scheduled_messages_column_flags() -> None:
+    try:
+        rows = await database.fetch_all("PRAGMA table_info(scheduled_messages)")
+    except Exception:
+        logger.exception("Failed to refresh scheduled_messages column metadata")
+        return
+    column_names = {row["name"] for row in rows if "name" in row}
+    if not column_names and rows:
+        # Databases Record may expose tuple-style access
+        column_names = {row[1] for row in rows}
+    _set_scheduled_messages_column_flags(column_names)
 HAS_PDW_RECEIPT_ID = 'receipt_id' in prize_draw_winners_table.c
 receipts_table             = Table("receipts", metadata, autoload_with=engine)
 images_table               = Table("images", metadata, autoload_with=engine)
@@ -386,6 +423,7 @@ for name, model in Base.classes.items():
 @app.on_event("startup")
 async def on_startup():
     await database.connect()
+    await _refresh_scheduled_messages_column_flags()
     app.state.scheduler_task = asyncio.create_task(_scheduled_sender_loop())
 
 @app.on_event("shutdown")
@@ -1350,7 +1388,7 @@ async def _broadcast_scheduled_message(
 
 
 async def _process_due_scheduled_messages() -> None:
-    if not HAS_SM_AUTO_SEND:
+    if not (HAS_SM_AUTO_SEND and hasattr(scheduled_messages_table.c, "auto_send")):
         return
     now = datetime.datetime.utcnow()
     candidates: List[Dict[str, Any]] = []
