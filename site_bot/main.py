@@ -1447,7 +1447,10 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
         .values(**update_values)
     )
     if old_row and has_receipt_status() and has_receipt_msg_id():
-        row_data = old_row._mapping if hasattr(old_row, "_mapping") else dict(old_row)
+        if hasattr(old_row, "_mapping"):
+            row_data = dict(old_row._mapping)
+        else:
+            row_data = dict(old_row)
         if row_data.get("status") != upd.status:
             message_id = row_data.get("message_id")
             user_tg_id = row_data.get("user_tg_id")
