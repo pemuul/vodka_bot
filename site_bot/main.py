@@ -1360,9 +1360,7 @@ async def _broadcast_scheduled_message(
     if status == "Отправлено":
         combined_error = None
     now = datetime.datetime.utcnow()
-    auto_send_after = 1 if (HAS_SM_AUTO_SEND and bool(row.get("auto_send"))) else 0
-    if not has_recipients or status == "Отправлено":
-        auto_send_after = 0
+    auto_send_after = 0
     update_values: Dict[str, Any] = {
         "status": status,
         "last_attempt_dt": now,
@@ -1377,8 +1375,6 @@ async def _broadcast_scheduled_message(
         update_values["sent_dt"] = now
         update_values["last_error"] = None
     else:
-        if HAS_SM_AUTO_SEND and initiated_by_scheduler and bool(row.get("auto_send")):
-            update_values["auto_send"] = 1
         update_values.setdefault("sent_dt", row.get("sent_dt"))
     await database.execute(
         scheduled_messages_table.update()
