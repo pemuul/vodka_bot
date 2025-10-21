@@ -59,16 +59,32 @@
               <textarea id="message-content" class="form-control" rows="5" required></textarea>
             </div>
             <div class="mb-3">
+              <label for="message-schedule" class="form-label">Дата и время отправки</label>
+              <input type="datetime-local" id="message-schedule" class="form-control" />
+              <div class="form-text">Время указывается по Москве (GMT+3). Рассылка запустится автоматически в указанное время.</div>
+            </div>
+            <div class="form-check form-switch mb-3">
+              <input class="form-check-input" type="checkbox" id="message-auto-send">
+              <label class="form-check-label" for="message-auto-send">Автоматически отправить по расписанию</label>
+              <div class="form-text">Если выключить, вы сможете отправить сообщение вручную кнопкой «Сделать рассылку».</div>
+            </div>
+            <div class="mb-3">
               <label class="form-label">Медиафайлы</label>
               <div id="media-list"></div>
               <button type="button" class="btn btn-outline-secondary btn-sm mt-1" id="add-media-btn">Добавить медиа</button>
             </div>
+            <div class="mb-3">
+              <label class="form-label">Информация об отправке</label>
+              <dl class="row mb-0 small" id="send-meta" data-empty-text="Рассылка ещё не запускалась"></dl>
+            </div>
             <div class="mb-3 d-none" id="status-group">
               <label for="message-status" class="form-label">Статус</label>
               <select id="message-status" class="form-select">
-                <option value="Новый">Новый</option>
-                <option value="Ожидает отправки">Ожидает отправки</option>
+                <option value="Черновик">Черновик</option>
+                <option value="Запланирована">Запланирована</option>
+                <option value="Идёт отправка">Идёт отправка</option>
                 <option value="Отправлено">Отправлено</option>
+                <option value="Ошибка">Ошибка</option>
               </select>
             </div>
             <div class="d-flex justify-content-end">
@@ -97,6 +113,7 @@
       const nameInput = document.getElementById("message-name");
       const contentInput = document.getElementById("message-content");
       const scheduleInput = document.getElementById("message-schedule");
+      const autoSendInput = document.getElementById("message-auto-send");
       const statusGroup = document.getElementById("status-group");
       const statusInput = document.getElementById("message-status");
       const copyBtn = document.getElementById("copy-btn");
@@ -105,24 +122,124 @@
       const sendBtn = document.getElementById("send-btn");
       const mediaListElem = document.getElementById("media-list");
       const addMediaBtn = document.getElementById("add-media-btn");
+      const sendMeta = document.getElementById("send-meta");
       let mediaArr = [];
       let currentId = null;
 
       renderMediaFields();
 
+      function escapeHtml(text) {
+        if (text === null || text === undefined) return "";
+        const div = document.createElement("div");
+        div.textContent = String(text);
+        return div.innerHTML;
+      }
+
+      function renderStatusBadge(status) {
+        const map = {
+          "Черновик": "bg-secondary",
+          "Запланирована": "bg-info text-dark",
+          "Идёт отправка": "bg-warning text-dark",
+          "Отправлено": "bg-success",
+          "Ошибка": "bg-danger",
+        };
+        const cls = map[status] || "bg-secondary";
+        return `<span class="badge ${cls}">${escapeHtml(status || "")}</span>`;
+      }
+
+      function renderSendMeta(info = {}) {
+        if (!sendMeta) return;
+        sendMeta.innerHTML = "";
+        const addRow = (label, value, valueClass = "") => {
+          const dt = document.createElement("dt");
+          dt.className = "col-sm-5 text-muted";
+          dt.textContent = label;
+          const dd = document.createElement("dd");
+          dd.className = `col-sm-7 ${valueClass}`.trim();
+          dd.textContent = value;
+          sendMeta.appendChild(dt);
+          sendMeta.appendChild(dd);
+        };
+        const rows = [];
+        if (info.sent_display) {
+          rows.push(["Отправлено", info.sent_display, ""]);
+        }
+        if (info.last_attempt_display) {
+          rows.push(["Последняя попытка", info.last_attempt_display, ""]);
+        }
+        if (info.auto_send && info.next_attempt_display) {
+          rows.push([
+            "Следующая попытка",
+            info.next_attempt_display,
+            info.is_overdue ? "text-danger" : "text-muted",
+          ]);
+        }
+        if (typeof info.success_count === "number") {
+          rows.push(["Успешно доставлено", String(info.success_count), ""]);
+        }
+        if (typeof info.failure_count === "number" && info.failure_count > 0) {
+          rows.push(["Ошибок", String(info.failure_count), "text-danger"]);
+        }
+        if (info.last_error) {
+          rows.push(["Комментарий", info.last_error, "text-danger"]);
+        }
+        rows.forEach(([label, value, cls]) => addRow(label, value, cls));
+        if (!rows.length) {
+          const emptyText = sendMeta.dataset.emptyText || "";
+          const dd = document.createElement("div");
+          dd.className = "text-muted";
+          dd.textContent = emptyText;
+          sendMeta.appendChild(dd);
+        }
+      }
+
       function renderMessages() {
         tableBody.innerHTML = "";
         messages.forEach((msg, i) => {
           const tr = document.createElement("tr");
+          const scheduleParts = [];
+          if (msg.schedule_display) {
+            scheduleParts.push(`<div>${escapeHtml(msg.schedule_display)}</div>`);
+          } else {
+            scheduleParts.push('<div class="text-muted">Не запланировано</div>');
+          }
+          if (msg.auto_send) {
+            scheduleParts.push('<div class="small text-success">Автозапуск включён</div>');
+          } else {
+            scheduleParts.push('<div class="small text-muted">Автозапуск выключен</div>');
+          }
+          if (msg.auto_send && msg.next_attempt_display) {
+            scheduleParts.push(`<div class="small ${msg.is_overdue ? 'text-danger' : 'text-muted'}">Следующая попытка: ${escapeHtml(msg.next_attempt_display)}</div>`);
+          }
+          if (msg.last_attempt_display) {
+            scheduleParts.push(`<div class="small text-muted">Последняя попытка: ${escapeHtml(msg.last_attempt_display)}</div>`);
+          }
+          const contentPreview = (() => {
+            const text = msg.content || "";
+            if (!text) return "";
+            const trimmed = text.length > 120 ? `${text.slice(0, 117)}…` : text;
+            return `<div class="text-muted small">${escapeHtml(trimmed)}</div>`;
+          })();
+          const statusDetails = [];
+          if (typeof msg.success_count === "number" && msg.success_count > 0) {
+            statusDetails.push(`<div class="small text-muted">Отправлено: ${msg.success_count}</div>`);
+          }
+          if (typeof msg.failure_count === "number" && msg.failure_count > 0) {
+            statusDetails.push(`<div class="small text-danger">Ошибок: ${msg.failure_count}</div>`);
+          }
+          if (msg.last_error) {
+            statusDetails.push(`<div class="small text-danger">${escapeHtml(msg.last_error)}</div>`);
+          }
           tr.innerHTML = `
-            <td>${i+1}</td>
-            <td>${msg.name}</td>
-            <td>${msg.schedule_display ? msg.schedule_display : ""}</td>
+            <td>${i + 1}</td>
             <td>
-              <span class="badge ${
-                msg.status==="Новый"?"bg-primary":
-                msg.status==="Ожидает отправки"?"bg-warning":"bg-success"
-              }">${msg.status}</span>
+              <div class="fw-semibold">${escapeHtml(msg.name)}</div>
+              ${contentPreview}
+            </td>
+            <td>${scheduleParts.join("")}</td>
+            <td>
+              ${renderStatusBadge(msg.status)}
+              ${statusDetails.join("")}
             </td>`;
           tr.dataset.id = msg.id;
           tr.style.cursor = "pointer";
@@ -137,6 +254,13 @@
         form.reset();
         statusGroup.classList.add("d-none");
         idInput.value = "";
+        if (scheduleInput) {
+          scheduleInput.value = "";
+        }
+        if (autoSendInput) {
+          autoSendInput.checked = false;
+        }
+        renderSendMeta();
         mediaArr = [];
         renderMediaFields();
         currentId = null;
@@ -157,10 +281,14 @@
             if (scheduleInput) {
               scheduleInput.value = msg.schedule || "";
             }
+            if (autoSendInput) {
+              autoSendInput.checked = !!msg.auto_send;
+            }
             statusGroup.classList.remove("d-none");
-            statusInput.value = msg.status;
+            statusInput.value = msg.status || "Черновик";
             mediaArr = msg.media ? msg.media.map(m=>({type:m.type,file:m.file||m.file_id||''})) : [];
             renderMediaFields();
+            renderSendMeta(msg);
             currentId = msg.id;
             copyBtn.classList.remove("d-none");
             deleteBtn.classList.remove("d-none");
@@ -173,9 +301,13 @@
             if (scheduleInput) {
               scheduleInput.value = msg.schedule || "";
             }
+            if (autoSendInput) {
+              autoSendInput.checked = false;
+            }
             statusGroup.classList.add("d-none");
             mediaArr = msg.media ? msg.media.map(m=>({type:m.type,file:m.file||m.file_id||''})) : [];
             renderMediaFields();
+            renderSendMeta();
           }
         }
       }
@@ -185,6 +317,7 @@
         listContainer.classList.remove("d-none");
         mediaArr = [];
         renderMediaFields();
+        renderSendMeta();
       }
 
       function renderMediaFields() {
@@ -265,6 +398,7 @@
           name: nameInput.value.trim(),
           content: contentInput.value.trim(),
           status: statusInput.value,
+          auto_send: autoSendInput ? autoSendInput.checked : false,
           media: mediaArr.filter(m=>m.file)
         };
         if (scheduleInput && scheduleInput.value) {
