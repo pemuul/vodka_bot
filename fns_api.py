@@ -5,7 +5,7 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
 
 import requests
 import xml.etree.ElementTree as ET
@@ -186,10 +186,23 @@ def qr_to_params(qr: str) -> dict:
     }
 
 
-def get_receipt_by_qr(qr: str) -> Optional[dict]:
-    """Fetch receipt info by QR string. Returns ticket dict or None."""
+def _describe_exception(exc: Exception) -> str:
+    """Return a compact description of an exception for logs and UI."""
+
+    name = exc.__class__.__name__
+    message = str(exc) or name
+    return f"{name}: {message}" if message != name else name
+
+
+def get_receipt_by_qr(qr: str) -> Tuple[Optional[dict], Optional[str]]:
+    """Fetch receipt info by QR string.
+
+    Returns a tuple of (ticket dict or None, error text or None).
+    """
     if not MASTER_TOKEN:
-        return None
+        warning = "FNS master token is not configured"
+        logger.warning("[FNS] %s", warning)
+        return None, warning
     try:
         logger.info("[FNS] Запрос по QR: %s", qr)
         token, _ = get_access_token()
@@ -202,8 +215,8 @@ def get_receipt_by_qr(qr: str) -> Optional[dict]:
         logger.info("[FNS] Ответ сервиса (XML): %s", _truncate_payload(raw_xml))
         ticket = parse_ticket(env)
         logger.info("[FNS] Распарсенный чек: %s", _truncate_payload(ticket))
-        return ticket
+        return ticket, None
     except Exception as e:
         logger.exception("[FNS] Ошибка получения чека по QR: %s", qr)
-        raise RuntimeError(f"FNS API error: {e}") from e
+        return None, _describe_exception(e)
 

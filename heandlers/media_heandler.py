@@ -663,18 +663,39 @@ def _format_receipt_items(items: list[dict]) -> str:
     return ", ".join(summary) if summary else "<товары отсутствуют>"
 
 
+def _format_error_text(error: str | None, limit: int = 400) -> str | None:
+    """Shorten error messages so they fit into logs and comments."""
+
+    if not error:
+        return None
+    text = error.strip()
+    if len(text) > limit:
+        return f"{text[:limit]}…"
+    return text
+
+
 def _check_vodka_in_receipt(
     qr_data: str, keywords: list[str], receipt_id: int | None = None
-) -> bool | None:
+) -> tuple[bool | None, str | None]:
     """Call FNS service and search receipt items for configured products."""
 
-    data = get_receipt_by_qr(qr_data)
-    if not data:
+    data, error_text = get_receipt_by_qr(qr_data)
+    error_text = _format_error_text(error_text)
+
+    if data is None:
         if receipt_id is not None:
-            logger.info(
-                "[QR] Receipt %s FNS ticket отсутствует или не получен", receipt_id
-            )
-        return None
+            if error_text:
+                logger.warning(
+                    "[QR] Receipt %s FNS ticket не получен: %s",
+                    receipt_id,
+                    error_text,
+                )
+            else:
+                logger.info(
+                    "[QR] Receipt %s FNS ticket отсутствует или не получен",
+                    receipt_id,
+                )
+        return None, error_text
 
     if receipt_id is not None:
         logger.info(
@@ -705,8 +726,8 @@ def _check_vodka_in_receipt(
     for item in items:
         name = str(item.get("name", "")).casefold()
         if any(k in name for k in keywords):
-            return True
-    return False
+            return True, None
+    return False, None
 
 
 async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int):
@@ -728,6 +749,7 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     final_status: str | None = None
     comment_text: str | None = None
     fns_result: str | None = None  # "success", "no_goods", "error"
+    fns_error_text: str | None = None
     notify_messages = {
         "Подтверждён": "✅ Чек подтверждён",
         "Ошибка": "❌ Проверка чека не пройдена",
@@ -754,17 +776,24 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
             return
         await sql_mgt.update_receipt_qr(receipt_id, qr_data)
         try:
-            vodka_found = await loop.run_in_executor(
+            vodka_found, fns_error_text = await loop.run_in_executor(
                 None, _check_vodka_in_receipt, qr_data, keywords, receipt_id
             )
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "[QR] FNS check failed for receipt %s with QR %s",
                 receipt_id,
                 qr_data,
             )
             vodka_found = None
+            fns_error_text = _format_error_text(
+                f"{exc.__class__.__name__}: {exc}"
+            )
         logger.info("[QR] Receipt %s FNS result: %s", receipt_id, vodka_found)
+        if fns_error_text:
+            logger.info(
+                "[QR] Receipt %s FNS error detail: %s", receipt_id, fns_error_text
+            )
         if vodka_found is None:
             fns_result = "error"
             use_vision = True
@@ -798,8 +827,12 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
             final_status = "Подтверждён"
             if qr_data:
                 if fns_result == "error":
+                    detail = "ФНС недоступна"
+                    if fns_error_text:
+                        detail = f"ФНС недоступна: {fns_error_text}"
                     comment_text = (
-                        "Бот: товар найден через распознавание изображения (ФНС недоступна)"
+                        "Бот: товар найден через распознавание изображения "
+                        f"({detail})"
                     )
                 else:
                     comment_text = "Бот: товар найден через распознавание изображения"
@@ -823,9 +856,10 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
                         "Бот: QR-код не распознан и распознавание не подтвердило чек"
                     )
                 elif fns_result == "error":
-                    comment_text = (
-                        "Бот: не удалось получить данные по QR и распознавание не подтвердило чек"
-                    )
+                    base = "Бот: не удалось получить данные по QR"
+                    if fns_error_text:
+                        base = f"{base} ({fns_error_text})"
+                    comment_text = f"{base} и распознавание не подтвердило чек"
                 else:
                     comment_text = "Бот: распознавание не подтвердило чек"
 
