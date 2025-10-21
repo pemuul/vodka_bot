@@ -47,7 +47,11 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from sql_mgt import ensure_receipt_comment_column_sync
+from sql_mgt import (
+    ensure_receipt_comment_column_sync,
+    get_table_schema_columns,
+    get_table_schema_sql,
+)
 
 # aiogram is imported lazily when sending messages
 
@@ -91,24 +95,38 @@ SCHEDULE_ALLOWED_STATUSES = {
 SCHEDULE_MAX_ERROR_LENGTH = 800
 _schedule_lock = asyncio.Lock()
 
-SCHEDULED_MESSAGES_EXPECTED_COLUMNS: Tuple[Tuple[str, str], ...] = (
-    ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
-    ("name", "TEXT NOT NULL"),
-    ("content", "TEXT NOT NULL"),
-    ("schedule_dt", "TIMESTAMP"),
-    ("status", "TEXT NOT NULL DEFAULT 'Черновик'"),
-    ("auto_send", "INTEGER NOT NULL DEFAULT 0"),
-    ("media", "TEXT"),
-    ("last_attempt_dt", "TIMESTAMP"),
-    ("sent_dt", "TIMESTAMP"),
-    ("last_error", "TEXT"),
-    ("success_count", "INTEGER NOT NULL DEFAULT 0"),
-    ("failure_count", "INTEGER NOT NULL DEFAULT 0"),
-    ("created_at", "TIMESTAMP"),
-    ("updated_at", "TIMESTAMP"),
+_SCHEDULED_MESSAGES_SCHEMA_SQL = get_table_schema_sql("scheduled_messages")
+_SCHEDULED_MESSAGES_COLUMNS = get_table_schema_columns("scheduled_messages")
+
+if _SCHEDULED_MESSAGES_COLUMNS:
+    SCHEDULED_MESSAGES_EXPECTED_COLUMNS: Tuple[Tuple[str, str], ...] = tuple(
+        _SCHEDULED_MESSAGES_COLUMNS
+    )
+else:
+    SCHEDULED_MESSAGES_EXPECTED_COLUMNS = (
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("name", "TEXT NOT NULL"),
+        ("content", "TEXT NOT NULL"),
+        ("schedule_dt", "TIMESTAMP"),
+        ("status", "TEXT NOT NULL DEFAULT 'Черновик'"),
+        ("auto_send", "INTEGER DEFAULT 0"),
+        ("media", "TEXT"),
+        ("last_attempt_dt", "TIMESTAMP"),
+        ("sent_dt", "TIMESTAMP"),
+        ("last_error", "TEXT"),
+        ("success_count", "INTEGER DEFAULT 0"),
+        ("failure_count", "INTEGER DEFAULT 0"),
+        ("created_at", "TIMESTAMP"),
+        ("updated_at", "TIMESTAMP"),
+    )
+
+SCHEDULED_MESSAGES_CREATE_STATEMENT = (
+    _SCHEDULED_MESSAGES_SCHEMA_SQL
+    or "scheduled_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, content TEXT NOT NULL, schedule_dt TIMESTAMP, status TEXT NOT NULL DEFAULT 'Черновик', auto_send INTEGER DEFAULT 0, media TEXT, last_attempt_dt TIMESTAMP, sent_dt TIMESTAMP, last_error TEXT, success_count INTEGER DEFAULT 0, failure_count INTEGER DEFAULT 0, created_at TIMESTAMP, updated_at TIMESTAMP)"
 )
 
 SCHEDULED_MESSAGES_COPY_DEFAULTS: Dict[str, str] = {
+    "status": "'Черновик'",
     "auto_send": "0",
     "media": "NULL",
     "last_attempt_dt": "NULL",
@@ -139,35 +157,17 @@ _ensure_receipts_schema()
 def _ensure_scheduled_messages_schema() -> None:
     """Ensure the scheduled_messages table exists with the expected columns."""
 
-    def add_column(
-        connection: "sqlalchemy.engine.Connection",
-        existing: Dict[str, Any],
-        column_name: str,
-        ddl: str,
-    ) -> bool:
-        if column_name in existing:
-            return True
-        try:
-            connection.exec_driver_sql(
-                f"ALTER TABLE scheduled_messages ADD COLUMN {column_name} {ddl}"
-            )
-            existing[column_name] = True
-            return True
-        except OperationalError:
-            logger.exception(
-                "Failed to add %s column to scheduled_messages", column_name
-            )
-            return False
-        except Exception:
-            logger.exception(
-                "Unexpected error while adding %s to scheduled_messages", column_name
-            )
-            return False
+    if not SCHEDULED_MESSAGES_EXPECTED_COLUMNS:
+        logger.warning(
+            "No scheduled_messages schema definition was found; skipping auto migration"
+        )
+        return
+
+    column_def_sql = ",\n                ".join(
+        f"{name} {ddl}" for name, ddl in SCHEDULED_MESSAGES_EXPECTED_COLUMNS
+    )
 
     def rebuild_table(connection: "sqlalchemy.engine.Connection") -> Dict[str, Any]:
-        column_def_sql = ",\n                ".join(
-            f"{name} {ddl}" for name, ddl in SCHEDULED_MESSAGES_EXPECTED_COLUMNS
-        )
         temp_table = "scheduled_messages_tmp"
         connection.exec_driver_sql(f"DROP TABLE IF EXISTS {temp_table}")
         connection.exec_driver_sql(
@@ -202,15 +202,8 @@ def _ensure_scheduled_messages_schema() -> None:
 
     try:
         with engine.begin() as connection:
-            base_columns_sql = ",\n                ".join(
-                f"{name} {ddl}" for name, ddl in SCHEDULED_MESSAGES_EXPECTED_COLUMNS[:5]
-            )
             connection.exec_driver_sql(
-                f"""
-                CREATE TABLE IF NOT EXISTS scheduled_messages (
-                    {base_columns_sql}
-                )
-                """
+                f"CREATE TABLE IF NOT EXISTS {SCHEDULED_MESSAGES_CREATE_STATEMENT}"
             )
             existing_columns = {
                 row[1]: True
@@ -218,17 +211,21 @@ def _ensure_scheduled_messages_schema() -> None:
                     "PRAGMA table_info(scheduled_messages)"
                 )
             }
-            failed: List[str] = []
-            for name, ddl in SCHEDULED_MESSAGES_EXPECTED_COLUMNS[5:]:
-                if add_column(connection, existing_columns, name, ddl):
+            for name, ddl in SCHEDULED_MESSAGES_EXPECTED_COLUMNS:
+                if name in existing_columns:
                     continue
-                failed.append(name)
-            if failed:
-                logger.warning(
-                    "Rebuilding scheduled_messages table because columns %s could not be added",
-                    ", ".join(failed),
-                )
-                existing_columns = rebuild_table(connection)
+                try:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE scheduled_messages ADD COLUMN {name} {ddl}"
+                    )
+                    existing_columns[name] = True
+                except OperationalError:
+                    logger.warning(
+                        "Rebuilding scheduled_messages table to add missing column %s",
+                        name,
+                    )
+                    existing_columns = rebuild_table(connection)
+                    break
             if "created_at" in existing_columns:
                 connection.exec_driver_sql(
                     "UPDATE scheduled_messages SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
