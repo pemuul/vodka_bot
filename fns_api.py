@@ -5,6 +5,7 @@ import logging
 import os
 import time
 from datetime import datetime
+from urllib.parse import parse_qsl, unquote_plus, urlsplit
 from typing import Optional, Tuple
 
 import requests
@@ -165,25 +166,83 @@ def parse_ticket(env: ET.Element) -> dict:
     return json.loads(ticket_text)
 
 
+def _parse_qr_datetime(value: str) -> datetime:
+    """Parse the QR timestamp supporting multiple formats.
+
+    The FNS QR specification allows both ``YYYYMMDDTHHMM`` and
+    ``YYYYMMDDTHHMMSS`` forms (optionally with ``:`` separators).  Older code
+    only supported the shorter variant and silently substituted the current
+    server time when parsing failed, which produced invalid FNS requests.  We
+    now try a set of known layouts and raise a clear error if none match.
+    """
+
+    cleaned = unquote_plus(value or "").strip()
+    if not cleaned:
+        raise ValueError("QR timestamp (t=) is missing")
+
+    # Some providers URL-encode the separator or add a trailing Z suffix.
+    if cleaned.endswith("Z"):
+        cleaned = cleaned[:-1]
+
+    candidates = (
+        "%Y%m%dT%H%M%S",
+        "%Y%m%dT%H%M",
+        "%Y%m%dT%H:%M:%S",
+        "%Y%m%dT%H:%M",
+    )
+    for fmt in candidates:
+        try:
+            return datetime.strptime(cleaned, fmt)
+        except ValueError:
+            continue
+    raise ValueError(
+        "Не удалось распарсить время из QR (ожидаются форматы YYYYMMDDTHHMM или YYYYMMDDTHHMMSS)"
+    )
+
+
+def _split_qr_query(qr: str) -> dict:
+    """Return dict of parameters from QR string or URL."""
+
+    qr = qr.strip()
+    if not qr:
+        return {}
+    # Strip leading URL parts if someone passed the full link.
+    if "?" in qr or "=" not in qr.split("&", 1)[0]:
+        qr = urlsplit(qr).query or qr.split("?", 1)[-1]
+
+    # parse_qsl handles URL decoding and duplicate keys gracefully.
+    return {key.lower(): value for key, value in parse_qsl(qr, keep_blank_values=True)}
+
+
 def qr_to_params(qr: str) -> dict:
     """Convert qr query string into FNS fiscal parameters."""
-    parts = dict(item.split("=", 1) for item in qr.split("&"))
-    date_raw = parts.get("t", "")
+
+    parts = _split_qr_query(qr)
+    if not parts:
+        raise ValueError("QR строка не содержит параметров")
+
+    dt = _parse_qr_datetime(parts.get("t", ""))
+    date_iso = dt.strftime("%Y-%m-%dT%H:%M:%S")
+
     try:
-        dt = datetime.strptime(date_raw, "%Y%m%dT%H%M")
-        date_iso = dt.strftime("%Y-%m-%dT%H:%M:%S")
-    except ValueError:
-        date_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
-    sum_value = int(float(parts.get("s", "0")) * 100)
-    return {
+        sum_value = int(round(float(parts.get("s", "0")) * 100))
+    except ValueError as exc:
+        raise ValueError("Некорректная сумма в QR (s=)") from exc
+
+    required_fields = {"fn": "Fn", "i": "FiscalDocumentId", "fp": "FiscalSign"}
+    params = {
         "Sum": sum_value,
         "Date": date_iso,
-        "Fn": parts.get("fn", ""),
-        "TypeOperation": int(parts.get("n", "1")),
-        "FiscalDocumentId": int(parts.get("i", "0")),
-        "FiscalSign": parts.get("fp", ""),
+        "TypeOperation": int(parts.get("n", "1") or 1),
         "RawData": True,
     }
+    for key, dest in required_fields.items():
+        value = parts.get(key)
+        if value in (None, ""):
+            raise ValueError(f"В QR отсутствует обязательный параметр {key}=*")
+        params[dest] = int(value) if dest == "FiscalDocumentId" else value
+
+    return params
 
 
 def _describe_exception(exc: Exception) -> str:
