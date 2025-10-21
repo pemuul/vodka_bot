@@ -1455,14 +1455,9 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
         if old_row.get("message_id") and old_row.get("user_tg_id"):
             status_messages = {
                 "Подтверждён": "✅ Чек подтверждён",
-                "Ошибка": "⏳ Чек требует дополнительной проверки",
-                "В авто обработке": "⏳ Чек находится в обработке",
-                "Чек уже загружен": "❌ Чек уже загружен",
                 "Нет товара в чеке": "❌ В чеке не найден нужный товар",
             }
             text = status_messages.get(upd.status)
-            if text is None:
-                text = f"Статус чека изменён: {upd.status}"
             if text:
                 try:
                     await bot.send_message(
