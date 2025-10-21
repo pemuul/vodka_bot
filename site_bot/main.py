@@ -1126,7 +1126,7 @@ async def scheduled_messages(request: Request):
         schedule_display = ""
         if isinstance(schedule_val, datetime.datetime):
             aware = schedule_val if schedule_val.tzinfo else schedule_val.replace(tzinfo=UTC)
-            schedule_iso = aware.astimezone(UTC).strftime("%Y-%m-%dT%H:%M")
+            schedule_iso = aware.astimezone(MSK_TZ).strftime("%Y-%m-%dT%H:%M")
             schedule_display = aware.astimezone(MSK_TZ).strftime("%d.%m.%Y %H:%M")
         raw_media = row.get("media")
         try:
@@ -1354,7 +1354,11 @@ async def _broadcast_scheduled_message(
         if len(error_messages) > 3:
             preview += f" и ещё {len(error_messages) - 3}"
         combined_error = preview[:SCHEDULE_MAX_ERROR_LENGTH]
-    status = "Отправлено" if not combined_error and sent_count > 0 else "Ошибка"
+    status = "Отправлено" if sent_count > 0 else "Ошибка"
+    if not has_recipients:
+        status = "Ошибка"
+    if status == "Отправлено":
+        combined_error = None
     now = datetime.datetime.utcnow()
     auto_send_after = 1 if (HAS_SM_AUTO_SEND and bool(row.get("auto_send"))) else 0
     if not has_recipients or status == "Отправлено":
