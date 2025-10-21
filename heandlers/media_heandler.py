@@ -637,7 +637,10 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     fns_result: str | None = None  # "success", "no_goods", "error"
     notify_messages = {
         "Подтверждён": "✅ Чек подтверждён",
-        "Нет товара в чеке": "❌ Нет товара в чеке",
+        "Ошибка": "⏳ Чек отправлен на дополнительную проверку",
+        "В авто обработке": "⏳ Чек находится в обработке",
+        "Чек уже загружен": "❌ Чек уже загружен",
+        "Нет товара в чеке": "❌ В чеке не найден нужный товар",
     }
     use_vision = False
     if qr_data:
@@ -779,7 +782,9 @@ async def set_photo(message: Message) -> None:
                 draw_id=draw_id,
             )
             await sql_mgt.enqueue_receipt_ocr(receipt_id)
-            await message.reply('Чек получен, идёт обработка...')
+            await message.reply(
+                'Чек загружен и находится в статусе Проверка. Как проверка будет пройдена, мы вам сообщим.'
+            )
             return
         except Exception:
             await message.reply('Ошибка при обработке чека. Попробуйте ещё раз.')

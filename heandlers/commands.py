@@ -345,7 +345,10 @@ async def set_commands():
     ]
 
     commands_name = list(global_objects.command_dict.keys())
+    hidden_menu_commands = {"settings", "about_bot"}
     for command in commands_name:
+        if command in hidden_menu_commands:
+            continue
         commands.append(
                 BotCommand(
                     command=command,

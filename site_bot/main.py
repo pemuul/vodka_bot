@@ -1431,8 +1431,16 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
     update_values = {"status": upd.status}
     if has_receipt_draw_id():
         update_values["draw_id"] = upd.draw_id
+
+    manual_comment_note = "Изменено пользователем"
+    comment_value = (upd.comment or "").strip()
     if has_receipt_comment():
-        update_values["comment"] = upd.comment
+        if manual_comment_note.lower() not in comment_value.lower():
+            if comment_value:
+                comment_value = f"{comment_value} ({manual_comment_note})"
+            else:
+                comment_value = manual_comment_note
+        update_values["comment"] = comment_value
     await database.execute(
         receipts_table.update()
         .where(receipts_table.c.id == receipt_id)
@@ -1445,12 +1453,16 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
         and has_receipt_msg_id()
     ):
         if old_row.get("message_id") and old_row.get("user_tg_id"):
-            text = None
             status_messages = {
-                "Подтверждён": "Чек подтверждён",
-                "Нет товара в чеке": "В чеке не найден нужный товар",
+                "Подтверждён": "✅ Чек подтверждён",
+                "Ошибка": "⏳ Чек требует дополнительной проверки",
+                "В авто обработке": "⏳ Чек находится в обработке",
+                "Чек уже загружен": "❌ Чек уже загружен",
+                "Нет товара в чеке": "❌ В чеке не найден нужный товар",
             }
             text = status_messages.get(upd.status)
+            if text is None:
+                text = f"Статус чека изменён: {upd.status}"
             if text:
                 try:
                     await bot.send_message(
