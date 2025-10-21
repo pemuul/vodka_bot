@@ -875,26 +875,28 @@ async def api_notifications():
     """Return receipts with problem receipts and unanswered questions."""
     notifications = []
 
-    if has_receipt_status():
-        problematic_statuses = [
-            "Нет товара в чеке",
-            "Ошибка",
-            "Не распознан",
-        ]
+    if has_receipt_status() and has_receipt_comment():
+        comment_col = receipts_table.c.comment
         rec_rows = await database.fetch_all(
             sqlalchemy.select(
                 receipts_table.c.id,
                 receipts_table.c.number,
                 receipts_table.c.status,
-            ).where(receipts_table.c.status.in_(problematic_statuses))
+                comment_col,
+            ).where(
+                sqlalchemy.and_(
+                    receipts_table.c.status == "Ошибка",
+                    comment_col.isnot(None),
+                    comment_col.like("Бот:%"),
+                )
+            )
         )
-        status_text = {
-            "Нет товара в чеке": "нет нужного товара",
-            "Ошибка": "ошибка обработки",
-            "Не распознан": "не распознан",
-        }
         for r in rec_rows:
-            descr = status_text.get(r["status"], r["status"].lower())
+            comment_val = r["comment"] or ""
+            if comment_val.startswith("Бот:"):
+                descr = comment_val.split(":", 1)[1].strip() or "ошибка автоматической обработки"
+            else:
+                descr = comment_val or "ошибка автоматической обработки"
             text = f"Чек {r['number'] or r['id']} – {descr}"
             notifications.append({
                 "type": "receipt",

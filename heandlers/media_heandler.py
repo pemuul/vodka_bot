@@ -752,7 +752,6 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     fns_error_text: str | None = None
     notify_messages = {
         "Подтверждён": "✅ Чек подтверждён",
-        "Ошибка": "❌ Проверка чека не пройдена",
         "Чек уже загружен": "❌ Чек уже загружен",
         "Нет товара в чеке": "❌ В чеке не найден нужный товар",
     }
