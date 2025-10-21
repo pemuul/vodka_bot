@@ -12,6 +12,18 @@ from keyboards.admin_kb import edit_menu_kb, init_object as init_object_akb
 from keys import SPLITTER_STR, DELETE_MESSAGES, SHOW_SECTION_NAME
 
 
+STATUS_ICON_MAP = {
+    "подтверждён": "✅",
+    "подтвержден": "✅",
+    "распознан": "✅",
+    "ошибка": "⏳",
+    "в авто обработке": "⏳",
+    "чек уже загружен": "❌",
+    "нет товара в чеке": "❌",
+}
+DEFAULT_STATUS_ICON = "⏳"
+
+
 global_objects = None
 
 
@@ -116,9 +128,7 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
             delete_old_message = True
 
         replace = False # создадим меню в новом сообщении 
-        album_builder = MediaGroupBuilder(
-            caption=tree_name
-        )
+        album_builder = MediaGroupBuilder()
         for media in medias:
             #print(media)
             album_builder.add(
@@ -183,12 +193,7 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                         name = f"Чек #{r['id']}"
                     link = f"https://t.me/{me.username}?start=receipt_{r['id']}"
                     status = (r.get('status') or '').lower()
-                    if status == 'распознан':
-                        mark = '✅'
-                    elif status == 'отменён':
-                        mark = '❌'
-                    else:
-                        mark = '⏳'
+                    mark = STATUS_ICON_MAP.get(status, DEFAULT_STATUS_ICON)
                     text_message += f'<a href="{link}">{name}</a> {mark}\n'
     else:
         await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', '')

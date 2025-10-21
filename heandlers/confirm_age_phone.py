@@ -38,6 +38,36 @@ import sql_mgt
 router = Router()  # [1]
 global_objects = None
 
+REG_STAGE_FLOW = ["start", "phone", "age", "privacy", "name", "done"]
+REG_PREVIOUS_STAGE = {
+    stage: REG_STAGE_FLOW[index - 1] if index > 0 else None
+    for index, stage in enumerate(REG_STAGE_FLOW)
+}
+BACK_TEXT_TRIGGERS = ("назад", "вернут")
+
+
+def _normalize_text(value: str | None) -> str:
+    return value.strip().lower() if value else ""
+
+
+async def set_registration_stage(user_id: int, stage: str) -> None:
+    current = await sql_mgt.get_param(user_id, "REG_STAGE")
+    if current == stage:
+        return
+
+    await sql_mgt.set_param(user_id, "REG_STAGE", stage)
+    prev_stage = REG_PREVIOUS_STAGE.get(stage)
+    await sql_mgt.set_param(user_id, "REG_PREV_STAGE", prev_stage or "")
+
+
+async def revert_registration_stage(user_id: int) -> str | None:
+    prev_stage = await sql_mgt.get_param(user_id, "REG_PREV_STAGE")
+    if not prev_stage:
+        return None
+
+    await set_registration_stage(user_id, prev_stage)
+    return prev_stage
+
 
 def init_object(global_objects_inp):
     global global_objects
@@ -63,33 +93,53 @@ class RegistrationMiddleware(BaseMiddleware):
             user = await sql_mgt.get_user_async(event.chat.id)
 
         stage = await sql_mgt.get_param(event.chat.id, "REG_STAGE")
+        if not stage:
+            await set_registration_stage(event.chat.id, "start")
+            stage = "start"
+
         if stage != "done":
-            if not stage or stage == "start":
-                await sql_mgt.set_param(event.chat.id, "REG_STAGE", "start")
+            normalized_text = _normalize_text(event.text)
+            if normalized_text and any(trigger in normalized_text for trigger in BACK_TEXT_TRIGGERS):
+                reverted = await revert_registration_stage(event.chat.id)
+                if reverted:
+                    stage = reverted
+
+            if stage == "start":
+                await set_registration_stage(event.chat.id, "start")
                 await send_greeting(event)
                 await commands.delete_this_message(event)
                 return
+
             if stage == "phone":
                 if event.contact:
                     return await handler(event, data)
                 await send_phone_request(event)
                 await commands.delete_this_message(event)
                 return
+
             if stage == "age":
                 await send_age_question(event)
                 await commands.delete_this_message(event)
                 return
+
             if stage == "privacy":
                 await send_privacy_policy(event)
                 await commands.delete_this_message(event)
                 return
+
             if stage == "name":
+                if normalized_text and any(trigger in normalized_text for trigger in BACK_TEXT_TRIGGERS):
+                    stage = await sql_mgt.get_param(event.chat.id, "REG_STAGE")
+                    if stage == "name":
+                        await send_name_request(event)
+                        await commands.delete_this_message(event)
+                        return
                 if not event.text:
                     await send_name_request(event)
                     await commands.delete_this_message(event)
                     return
                 await sql_mgt.update_user_async(event.from_user.id, {"name": event.text})
-                await sql_mgt.set_param(event.from_user.id, "REG_STAGE", "done")
+                await set_registration_stage(event.from_user.id, "done")
                 answer_message = await event.answer(f"Очень приятно, {event.text}!")
                 await commands.delete_answer_leater(answer_message)
                 await sql_mgt.set_param(event.chat.id, "DELETE_LAST_MESSAGE", "yes")
@@ -175,7 +225,11 @@ async def send_name_request(message: Message):
 
 @router.callback_query(F.data == "reg_continue")
 async def reg_continue_handler(call: CallbackQuery):
-    await sql_mgt.set_param(call.from_user.id, "REG_STAGE", "phone")
+    await set_registration_stage(call.from_user.id, "phone")
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
     await commands.delete_this_message(call.message)
     await send_phone_request(call.message)
     await call.answer()
@@ -184,7 +238,7 @@ async def reg_continue_handler(call: CallbackQuery):
 @router.callback_query(F.data == "age_yes")
 async def age_yes_handler(call: CallbackQuery):
     await sql_mgt.update_user_async(call.from_user.id, {"age_18": True})
-    await sql_mgt.set_param(call.from_user.id, "REG_STAGE", "privacy")
+    await set_registration_stage(call.from_user.id, "privacy")
     try:
         await call.message.edit_reply_markup(reply_markup=None)
     except Exception:
@@ -199,7 +253,7 @@ async def age_no_handler(call: CallbackQuery):
     kb = InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="Вернуться", callback_data="age_retry")]]
     )
-    await sql_mgt.set_param(call.from_user.id, "REG_STAGE", "age")
+    await set_registration_stage(call.from_user.id, "age")
     await call.message.edit_text(
         "Обязательно возвращайтесь, когда вам исполнится 18 лет. До новых встреч! 👋",
         reply_markup=kb,
@@ -209,6 +263,7 @@ async def age_no_handler(call: CallbackQuery):
 
 @router.callback_query(F.data == "age_retry")
 async def age_retry_handler(call: CallbackQuery):
+    await set_registration_stage(call.from_user.id, "age")
     await commands.delete_this_message(call.message)
     await send_age_question(call.message)
     await call.answer()
@@ -217,9 +272,13 @@ async def age_retry_handler(call: CallbackQuery):
 @router.callback_query(F.data == "privacy_yes")
 async def privacy_yes_handler(call: CallbackQuery):
     await sql_mgt.set_param(call.from_user.id, "policy_agreed", "yes")
-    await sql_mgt.set_param(call.from_user.id, "REG_STAGE", "name")
+    await set_registration_stage(call.from_user.id, "name")
     try:
         await commands.delete_message_by_id(call.message.chat.id, call.message.message_id - 1)
+    except Exception:
+        pass
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
     await commands.delete_this_message(call.message)
@@ -236,7 +295,7 @@ async def privacy_no_handler(call: CallbackQuery):
         await commands.delete_message_by_id(call.message.chat.id, call.message.message_id - 1)
     except Exception:
         pass
-    await sql_mgt.set_param(call.from_user.id, "REG_STAGE", "start")
+    await set_registration_stage(call.from_user.id, "start")
     await call.message.edit_text(
         "Обязательно возвращайтесь, если передумаете. До новых встреч! 👋",
         reply_markup=kb,
@@ -246,6 +305,7 @@ async def privacy_no_handler(call: CallbackQuery):
 
 @router.callback_query(F.data == "start_over")
 async def start_over_handler(call: CallbackQuery):
+    await set_registration_stage(call.from_user.id, "start")
     await commands.delete_this_message(call.message)
     await send_greeting(call.message)
     await call.answer()
@@ -255,7 +315,7 @@ async def start_over_handler(call: CallbackQuery):
 async def contact_handler(message: Message):
     phone_number = message.contact.phone_number
     await sql_mgt.update_user_async(message.from_user.id, {"phone": phone_number})
-    await sql_mgt.set_param(message.from_user.id, "REG_STAGE", "age")
+    await set_registration_stage(message.from_user.id, "age")
     answer_message = await message.answer(
         "Спасибо! Ваш номер сохранён.", reply_markup=ReplyKeyboardRemove()
     )

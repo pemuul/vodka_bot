@@ -250,7 +250,10 @@ async def cmd_remove_me(message: Message):
 @router.callback_query(F.data.startswith("remove_me_"))
 async def callbacks_remove_me(callback: CallbackQuery):
     if callback.data == "remove_me_yes":
-        await sql_mgt.delete_all_user_data(callback.from_user.id)
+        await sql_mgt.delete_all_user_data(
+            callback.from_user.id,
+            keep_admin=True,
+        )
         await callback.message.answer("Ваши данные удалены.")
 
     await global_objects.bot.delete_message(
@@ -345,7 +348,10 @@ async def set_commands():
     ]
 
     commands_name = list(global_objects.command_dict.keys())
+    hidden_menu_commands = {"settings", "about_bot"}
     for command in commands_name:
+        if command in hidden_menu_commands:
+            continue
         commands.append(
                 BotCommand(
                     command=command,
@@ -353,20 +359,6 @@ async def set_commands():
                 )
             )
         
-    commands.append(
-            BotCommand(
-            command='settings',
-            description='Настройки'
-        )
-    )
-
-    commands.append(
-            BotCommand(
-            command='about_bot',
-            description='О боте'
-        )
-    )
-
     commands.append(
             BotCommand(
             command='remove_me',

@@ -1431,47 +1431,67 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
     update_values = {"status": upd.status}
     if has_receipt_draw_id():
         update_values["draw_id"] = upd.draw_id
+
+    manual_comment_note = "Изменено пользователем"
+    comment_value = (upd.comment or "").strip()
     if has_receipt_comment():
-        update_values["comment"] = upd.comment
+        if manual_comment_note.lower() not in comment_value.lower():
+            if comment_value:
+                comment_value = f"{comment_value} ({manual_comment_note})"
+            else:
+                comment_value = manual_comment_note
+        update_values["comment"] = comment_value
     await database.execute(
         receipts_table.update()
         .where(receipts_table.c.id == receipt_id)
         .values(**update_values)
     )
-    if (
-        old_row
-        and has_receipt_status()
-        and old_row.get("status") != upd.status
-        and has_receipt_msg_id()
-    ):
-        if old_row.get("message_id") and old_row.get("user_tg_id"):
-            text = None
-            status_messages = {
-                "Подтверждён": "Чек подтверждён",
-                "Нет товара в чеке": "В чеке не найден нужный товар",
-            }
-            text = status_messages.get(upd.status)
-            if text:
-                try:
-                    await bot.send_message(
-                        old_row["user_tg_id"],
-                        text,
-                        reply_to_message_id=old_row["message_id"],
+    if old_row and has_receipt_status() and has_receipt_msg_id():
+        if hasattr(old_row, "_mapping"):
+            row_data = dict(old_row._mapping)
+        else:
+            row_data = dict(old_row)
+        if row_data.get("status") != upd.status:
+            message_id = row_data.get("message_id")
+            user_tg_id = row_data.get("user_tg_id")
+            if message_id and user_tg_id:
+                bot = get_bot()
+                if not bot:
+                    logger.warning(
+                        "Receipt %s status changed to %s but bot token is unavailable",
+                        receipt_id,
+                        upd.status,
                     )
-                    log_values = {
-                        "user_tg_id": old_row["user_tg_id"],
-                        "sender": "admin",
-                        "text": text,
-                        "buttons": None,
-                        "media": None,
+                else:
+                    status_messages = {
+                        "Подтверждён": "✅ Чек подтверждён",
+                        "Нет товара в чеке": "❌ В чеке не найден нужный товар",
                     }
-                    if HAS_PM_IS_ANSWER:
-                        log_values["is_answer"] = True
-                    await database.execute(
-                        participant_messages_table.insert().values(**log_values)
-                    )
-                except Exception as e:
-                    print(f"Failed to send receipt status message: {e}")
+                    text = status_messages.get(upd.status)
+                    if text:
+                        try:
+                            await bot.send_message(
+                                user_tg_id,
+                                text,
+                                reply_to_message_id=message_id,
+                            )
+                            log_values = {
+                                "user_tg_id": user_tg_id,
+                                "sender": "admin",
+                                "text": text,
+                                "buttons": None,
+                                "media": None,
+                            }
+                            if HAS_PM_IS_ANSWER:
+                                log_values["is_answer"] = True
+                            await database.execute(
+                                participant_messages_table.insert().values(**log_values)
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Failed to send receipt status message for receipt %s",
+                                receipt_id,
+                            )
     return {"success": True}
 
 @app.delete("/api/receipts/{receipt_id}")

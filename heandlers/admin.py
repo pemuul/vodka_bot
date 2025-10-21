@@ -10,8 +10,7 @@ from aiogram.enums import ParseMode
 import sql_mgt
 from keys import DELETE_MESSAGES
 #from sql_mgt import sql_mgt.get_param, sql_mgt.add_admin
-from heandlers import admin_answer_button, menu
-from heandlers.import_files import get_next_filename
+from heandlers import admin_answer_button, menu, import_files
 from keys import MAIN_JSON_FILE, SPLITTER_STR
 from json_data_mgt import TreeObject
 from keyboards import admin_kb
@@ -128,7 +127,7 @@ async def except_message(message: Message, except_message_name: str):
 
 async def replace_data():
     tree_item = global_objects.tree_data.get_obj_from_path(SPLITTER_STR)
-    file_name = get_next_filename() + '.json'
+    file_name = import_files.get_next_filename() + '.json'
     tree_item.save_to_file('./load_files/' + file_name)
     global_objects.tree_data.check_json_file_valid('./load_files/' + file_name)
 

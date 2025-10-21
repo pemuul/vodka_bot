@@ -46,7 +46,9 @@ def get_menu_kb(message, path, extra_rows: list[str] | None = None) -> ReplyKeyb
     # if len(next_buttons) == 0:
     #     keyboard.append([KeyboardButton(text='Закрепить 📌')])
 
-    if tree_item.path != SPLITTER_STR:
+    hide_back_button = getattr(tree_item, 'item_id', None) in {"pure_form", "cocktail"}
+
+    if tree_item.path != SPLITTER_STR and not hide_back_button:
         previus_path = SPLITTER_STR.join(tree_item.path.split(SPLITTER_STR)[:-1])
         if not previus_path:
             previus_path = SPLITTER_STR
