@@ -22,7 +22,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Set
 import datetime
 from pydantic import BaseModel
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -77,6 +77,35 @@ SCHEDULE_ALLOWED_STATUSES = {
 SCHEDULE_MAX_ERROR_LENGTH = 800
 _schedule_lock = asyncio.Lock()
 
+SCHEDULED_MESSAGES_EXPECTED_COLUMNS: Tuple[Tuple[str, str], ...] = (
+    ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+    ("name", "TEXT NOT NULL"),
+    ("content", "TEXT NOT NULL"),
+    ("schedule_dt", "TIMESTAMP"),
+    ("status", "TEXT NOT NULL DEFAULT 'Черновик'"),
+    ("auto_send", "INTEGER NOT NULL DEFAULT 0"),
+    ("media", "TEXT"),
+    ("last_attempt_dt", "TIMESTAMP"),
+    ("sent_dt", "TIMESTAMP"),
+    ("last_error", "TEXT"),
+    ("success_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("failure_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("created_at", "TIMESTAMP"),
+    ("updated_at", "TIMESTAMP"),
+)
+
+SCHEDULED_MESSAGES_COPY_DEFAULTS: Dict[str, str] = {
+    "auto_send": "0",
+    "media": "NULL",
+    "last_attempt_dt": "NULL",
+    "sent_dt": "NULL",
+    "last_error": "NULL",
+    "success_count": "0",
+    "failure_count": "0",
+    "created_at": "CURRENT_TIMESTAMP",
+    "updated_at": "CURRENT_TIMESTAMP",
+}
+
 
 def _ensure_receipts_schema() -> None:
     """Ensure the receipts table has the expected primary key and comment column."""
@@ -95,37 +124,77 @@ _ensure_receipts_schema()
 
 def _ensure_scheduled_messages_schema() -> None:
     """Ensure the scheduled_messages table exists with the expected columns."""
+
     def add_column(
         connection: "sqlalchemy.engine.Connection",
         existing: Dict[str, Any],
         column_name: str,
         ddl: str,
-        post_add_sql: Optional[str] = None,
-    ) -> None:
+    ) -> bool:
         if column_name in existing:
-            return
+            return True
         try:
             connection.exec_driver_sql(
                 f"ALTER TABLE scheduled_messages ADD COLUMN {column_name} {ddl}"
             )
-            if post_add_sql:
-                connection.exec_driver_sql(post_add_sql)
             existing[column_name] = True
+            return True
         except OperationalError:
             logger.exception(
                 "Failed to add %s column to scheduled_messages", column_name
             )
+            return False
+        except Exception:
+            logger.exception(
+                "Unexpected error while adding %s to scheduled_messages", column_name
+            )
+            return False
+
+    def rebuild_table(connection: "sqlalchemy.engine.Connection") -> Dict[str, Any]:
+        column_def_sql = ",\n                ".join(
+            f"{name} {ddl}" for name, ddl in SCHEDULED_MESSAGES_EXPECTED_COLUMNS
+        )
+        temp_table = "scheduled_messages_tmp"
+        connection.exec_driver_sql(f"DROP TABLE IF EXISTS {temp_table}")
+        connection.exec_driver_sql(
+            f"""
+            CREATE TABLE {temp_table} (
+                {column_def_sql}
+            )
+            """
+        )
+        existing_columns = {
+            row[1]: True
+            for row in connection.exec_driver_sql(
+                "PRAGMA table_info(scheduled_messages)"
+            )
+        }
+        insert_columns = [name for name, _ in SCHEDULED_MESSAGES_EXPECTED_COLUMNS]
+        select_parts = []
+        for name in insert_columns:
+            if name in existing_columns:
+                select_parts.append(name)
+            else:
+                select_parts.append(SCHEDULED_MESSAGES_COPY_DEFAULTS.get(name, "NULL"))
+        connection.exec_driver_sql(
+            f"INSERT INTO {temp_table} ({', '.join(insert_columns)}) "
+            f"SELECT {', '.join(select_parts)} FROM scheduled_messages"
+        )
+        connection.exec_driver_sql("DROP TABLE scheduled_messages")
+        connection.exec_driver_sql(
+            f"ALTER TABLE {temp_table} RENAME TO scheduled_messages"
+        )
+        return {name: True for name, _ in SCHEDULED_MESSAGES_EXPECTED_COLUMNS}
 
     try:
         with engine.begin() as connection:
+            base_columns_sql = ",\n                ".join(
+                f"{name} {ddl}" for name, ddl in SCHEDULED_MESSAGES_EXPECTED_COLUMNS[:5]
+            )
             connection.exec_driver_sql(
-                """
+                f"""
                 CREATE TABLE IF NOT EXISTS scheduled_messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    schedule_dt TIMESTAMP,
-                    status TEXT NOT NULL DEFAULT 'Черновик'
+                    {base_columns_sql}
                 )
                 """
             )
@@ -135,27 +204,25 @@ def _ensure_scheduled_messages_schema() -> None:
                     "PRAGMA table_info(scheduled_messages)"
                 )
             }
-            add_column(connection, existing_columns, "auto_send", "INTEGER NOT NULL DEFAULT 0")
-            add_column(connection, existing_columns, "media", "TEXT")
-            add_column(connection, existing_columns, "last_attempt_dt", "TIMESTAMP")
-            add_column(connection, existing_columns, "sent_dt", "TIMESTAMP")
-            add_column(connection, existing_columns, "last_error", "TEXT")
-            add_column(connection, existing_columns, "success_count", "INTEGER NOT NULL DEFAULT 0")
-            add_column(connection, existing_columns, "failure_count", "INTEGER NOT NULL DEFAULT 0")
-            add_column(
-                connection,
-                existing_columns,
-                "created_at",
-                "TIMESTAMP",
-                "UPDATE scheduled_messages SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL",
-            )
-            add_column(
-                connection,
-                existing_columns,
-                "updated_at",
-                "TIMESTAMP",
-                "UPDATE scheduled_messages SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL",
-            )
+            failed: List[str] = []
+            for name, ddl in SCHEDULED_MESSAGES_EXPECTED_COLUMNS[5:]:
+                if add_column(connection, existing_columns, name, ddl):
+                    continue
+                failed.append(name)
+            if failed:
+                logger.warning(
+                    "Rebuilding scheduled_messages table because columns %s could not be added",
+                    ", ".join(failed),
+                )
+                existing_columns = rebuild_table(connection)
+            if "created_at" in existing_columns:
+                connection.exec_driver_sql(
+                    "UPDATE scheduled_messages SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
+                )
+            if "updated_at" in existing_columns:
+                connection.exec_driver_sql(
+                    "UPDATE scheduled_messages SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL"
+                )
     except Exception:
         logger.exception("Failed to ensure scheduled_messages schema")
 
@@ -186,7 +253,9 @@ sales_line_table           = Table("sales_line", metadata, autoload_with=engine)
 additional_field_table     = Table("additional_field", metadata, autoload_with=engine)
 questions_table            = Table("questions", metadata, autoload_with=engine)
 question_messages_table    = Table("question_messages", metadata, autoload_with=engine)
-scheduled_messages_table   = Table("scheduled_messages", metadata, autoload_with=engine)
+scheduled_messages_table   = Table(
+    "scheduled_messages", metadata, autoload_with=engine, extend_existing=True
+)
 prize_draws_table          = Table("prize_draws", metadata, autoload_with=engine)
 prize_draw_stages_table    = Table("prize_draw_stages", metadata, autoload_with=engine)
 prize_draw_winners_table   = Table("prize_draw_winners", metadata, autoload_with=engine)
@@ -196,10 +265,58 @@ participant_messages_table = Table("participant_messages", metadata, autoload_wi
 # Some deployments may still use an older database schema without the
 # `is_answer` column.  Detect its presence so we can behave gracefully
 # when reading or writing data.
+def _get_table_column_names(table_name: str) -> Set[str]:
+    try:
+        with engine.connect() as connection:
+            return {
+                row[1]
+                for row in connection.exec_driver_sql(
+                    f"PRAGMA table_info({table_name})"
+                )
+            }
+    except Exception:
+        logger.exception("Failed to inspect %s columns", table_name)
+        return set()
+
+
+SCHEDULED_MESSAGES_COLUMN_NAMES = _get_table_column_names("scheduled_messages")
+
 HAS_PM_IS_ANSWER = 'is_answer' in participant_messages_table.c
 HAS_QM_IS_ANSWER = 'is_answer' in question_messages_table.c
-HAS_SM_AUTO_SEND = 'auto_send' in scheduled_messages_table.c
-HAS_SM_MEDIA = 'media' in scheduled_messages_table.c
+HAS_SM_AUTO_SEND = "auto_send" in SCHEDULED_MESSAGES_COLUMN_NAMES
+HAS_SM_MEDIA = "media" in SCHEDULED_MESSAGES_COLUMN_NAMES
+
+
+def _scheduled_messages_columns() -> List[Any]:
+    columns: List[Any] = [
+        scheduled_messages_table.c.id,
+        scheduled_messages_table.c.name,
+        scheduled_messages_table.c.content,
+        scheduled_messages_table.c.schedule_dt,
+        scheduled_messages_table.c.status,
+    ]
+    optional_map = {
+        "auto_send": getattr(scheduled_messages_table.c, "auto_send", None),
+        "media": getattr(scheduled_messages_table.c, "media", None),
+        "last_attempt_dt": getattr(scheduled_messages_table.c, "last_attempt_dt", None),
+        "sent_dt": getattr(scheduled_messages_table.c, "sent_dt", None),
+        "last_error": getattr(scheduled_messages_table.c, "last_error", None),
+        "success_count": getattr(scheduled_messages_table.c, "success_count", None),
+        "failure_count": getattr(scheduled_messages_table.c, "failure_count", None),
+        "created_at": getattr(scheduled_messages_table.c, "created_at", None),
+        "updated_at": getattr(scheduled_messages_table.c, "updated_at", None),
+    }
+    for name, column in optional_map.items():
+        if name in SCHEDULED_MESSAGES_COLUMN_NAMES and column is not None:
+            columns.append(column)
+    return columns
+
+
+def _scheduled_messages_select() -> "sqlalchemy.sql.Select":
+    return (
+        sqlalchemy.select(*_scheduled_messages_columns())
+        .select_from(scheduled_messages_table)
+    )
 HAS_PDW_RECEIPT_ID = 'receipt_id' in prize_draw_winners_table.c
 receipts_table             = Table("receipts", metadata, autoload_with=engine)
 images_table               = Table("images", metadata, autoload_with=engine)
@@ -960,47 +1077,51 @@ async def delete_media(name: str):
 
 @app.get("/scheduled-messages", response_class=HTMLResponse)
 async def scheduled_messages(request: Request):
-    rows = await database.fetch_all(
-        scheduled_messages_table.select().order_by(scheduled_messages_table.c.schedule_dt.is_(None), scheduled_messages_table.c.schedule_dt)
+    query = _scheduled_messages_select().order_by(
+        scheduled_messages_table.c.schedule_dt.is_(None),
+        scheduled_messages_table.c.schedule_dt,
     )
+    rows = await database.fetch_all(query)
     messages = []
     now_utc = datetime.datetime.utcnow().replace(tzinfo=UTC)
-    for r in rows:
-        schedule_val = _coerce_datetime(r.get("schedule_dt"))
+    for record in rows:
+        row = dict(record)
+        schedule_val = _coerce_datetime(row.get("schedule_dt"))
         schedule_iso = ""
         schedule_display = ""
         if isinstance(schedule_val, datetime.datetime):
             aware = schedule_val if schedule_val.tzinfo else schedule_val.replace(tzinfo=UTC)
             schedule_iso = aware.astimezone(UTC).strftime("%Y-%m-%dT%H:%M")
             schedule_display = aware.astimezone(MSK_TZ).strftime("%d.%m.%Y %H:%M")
+        raw_media = row.get("media")
         try:
-            media = json.loads(r["media"]) if HAS_SM_MEDIA and r["media"] else []
+            media = json.loads(raw_media) if HAS_SM_MEDIA and raw_media else []
         except Exception:
             media = []
-        status = _normalize_legacy_status(r.get("status")) or "Черновик"
-        auto_flag = bool(r.get("auto_send") or 0) if HAS_SM_AUTO_SEND else False
-        last_attempt_dt = _coerce_datetime(r.get("last_attempt_dt"))
-        sent_dt = _coerce_datetime(r.get("sent_dt"))
+        status = _normalize_legacy_status(row.get("status")) or "Черновик"
+        auto_flag = bool(row.get("auto_send") or 0) if HAS_SM_AUTO_SEND else False
+        last_attempt_dt = _coerce_datetime(row.get("last_attempt_dt"))
+        sent_dt = _coerce_datetime(row.get("sent_dt"))
         next_attempt_dt = _calc_next_attempt(
             auto_send=auto_flag,
             status=status,
             schedule_dt=schedule_val,
             last_attempt_dt=last_attempt_dt,
         )
-        success_count = r.get("success_count")
+        success_count = row.get("success_count")
         try:
             success_count = int(success_count) if success_count is not None else None
         except (TypeError, ValueError):
             success_count = None
-        failure_count = r.get("failure_count")
+        failure_count = row.get("failure_count")
         try:
             failure_count = int(failure_count) if failure_count is not None else None
         except (TypeError, ValueError):
             failure_count = None
         messages.append({
-            "id": r["id"],
-            "name": r["name"],
-            "content": r["content"],
+            "id": row["id"],
+            "name": row["name"],
+            "content": row["content"],
             "schedule": schedule_iso,
             "schedule_display": schedule_display,
             "status": status,
@@ -1016,7 +1137,7 @@ async def scheduled_messages(request: Request):
             ),
             "success_count": success_count,
             "failure_count": failure_count,
-            "last_error": r.get("last_error") or "",
+            "last_error": row.get("last_error") or "",
         })
     return templates.TemplateResponse(
         "scheduled_messages.html",
@@ -1235,7 +1356,7 @@ async def _process_due_scheduled_messages() -> None:
     candidates: List[Dict[str, Any]] = []
     async with _schedule_lock:
         query = (
-            scheduled_messages_table.select()
+            _scheduled_messages_select()
             .where(scheduled_messages_table.c.auto_send == 1)
             .where(scheduled_messages_table.c.schedule_dt != None)
             .where(scheduled_messages_table.c.schedule_dt <= now)
@@ -1341,7 +1462,7 @@ async def save_scheduled_message(msg: ScheduledMessageIn):
         return {"success": True, "id": new_id}
     else:
         existing = await database.fetch_one(
-            scheduled_messages_table.select().where(scheduled_messages_table.c.id == msg.id)
+            _scheduled_messages_select().where(scheduled_messages_table.c.id == msg.id)
         )
         if not existing:
             raise HTTPException(404, "Message not found")
@@ -1383,7 +1504,7 @@ async def save_scheduled_message(msg: ScheduledMessageIn):
 @app.delete("/scheduled-messages/{message_id}")
 async def delete_scheduled_message(message_id: int):
     existing = await database.fetch_one(
-        scheduled_messages_table.select().where(scheduled_messages_table.c.id == message_id)
+        _scheduled_messages_select().where(scheduled_messages_table.c.id == message_id)
     )
     if not existing:
         raise HTTPException(404, "Message not found")
@@ -1396,7 +1517,7 @@ async def delete_scheduled_message(message_id: int):
 @app.post("/scheduled-messages/{message_id}/test")
 async def test_send_scheduled_message(message_id: int):
     msg = await database.fetch_one(
-        scheduled_messages_table.select().where(scheduled_messages_table.c.id == message_id)
+        _scheduled_messages_select().where(scheduled_messages_table.c.id == message_id)
     )
     if not msg:
         raise HTTPException(404, "Message not found")
@@ -1419,7 +1540,7 @@ async def test_send_scheduled_message(message_id: int):
 @app.post("/scheduled-messages/{message_id}/send")
 async def send_scheduled_message(message_id: int):
     msg = await database.fetch_one(
-        scheduled_messages_table.select().where(scheduled_messages_table.c.id == message_id)
+        _scheduled_messages_select().where(scheduled_messages_table.c.id == message_id)
     )
     if not msg:
         raise HTTPException(404, "Message not found")
