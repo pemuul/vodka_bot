@@ -664,8 +664,12 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
             vodka_found = await loop.run_in_executor(
                 None, _check_vodka_in_receipt, qr_data, keywords
             )
-        except Exception as exc:
-            print(f"FNS check failed for receipt {receipt_id}: {exc}")
+        except Exception:
+            logger.exception(
+                "[QR] FNS check failed for receipt %s with QR %s",
+                receipt_id,
+                qr_data,
+            )
             vodka_found = None
         logger.info("[QR] Receipt %s FNS result: %s", receipt_id, vodka_found)
         if vodka_found is None:

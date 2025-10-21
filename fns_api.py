@@ -1,12 +1,14 @@
 """Client for FNS Open API to fetch receipt data via QR code."""
 
+import json
+import logging
 import os
 import time
 from datetime import datetime
 from typing import Optional
+
 import requests
 import xml.etree.ElementTree as ET
-import json
 
 AUTH_ENDPOINT = os.getenv(
     "FNS_AUTH_ENDPOINT",
@@ -25,6 +27,25 @@ NAMESPACES = {
     "auth": "urn://x-artefacts-gnivc-ru/ais3/kkt/AuthService/types/1.0",
     "kkt": "urn://x-artefacts-gnivc-ru/ais3/kkt/KktTicketService/types/1.0",
 }
+
+
+logger = logging.getLogger(__name__)
+
+
+def _truncate_payload(data: object, limit: int = 800) -> str:
+    """Format payload objects for logging without flooding the console."""
+
+    if isinstance(data, str):
+        text = data
+    else:
+        try:
+            text = json.dumps(data, ensure_ascii=False, default=str)
+        except Exception:
+            text = repr(data)
+    text = text.replace("\n", " ")
+    if len(text) > limit:
+        return f"{text[:limit]}… (truncated)"
+    return text
 
 
 def _post_soap(url: str, soap_action: str, xml_body: str, extra_headers: Optional[dict] = None) -> ET.Element:
@@ -135,6 +156,12 @@ def poll_message(access_token: str, message_id: str, timeout: int = 60) -> ET.El
 def parse_ticket(env: ET.Element) -> dict:
     """Extract JSON ticket from response."""
     ticket_text = env.findtext(".//kkt:Ticket", namespaces=NAMESPACES)
+    if ticket_text is None:
+        logger.error(
+            "[FNS] В ответе отсутствует элемент Ticket: %s",
+            _truncate_payload(ET.tostring(env, encoding="unicode")),
+        )
+        raise RuntimeError("FNS ticket payload is missing")
     return json.loads(ticket_text)
 
 
@@ -164,12 +191,19 @@ def get_receipt_by_qr(qr: str) -> Optional[dict]:
     if not MASTER_TOKEN:
         return None
     try:
+        logger.info("[FNS] Запрос по QR: %s", qr)
         token, _ = get_access_token()
         params = qr_to_params(qr)
+        logger.info("[FNS] Параметры запроса: %s", _truncate_payload(params))
         msg_id = send_get_ticket(token, params)
+        logger.info("[FNS] Получен MessageId: %s", msg_id)
         env = poll_message(token, msg_id)
+        raw_xml = ET.tostring(env, encoding="unicode")
+        logger.info("[FNS] Ответ сервиса (XML): %s", _truncate_payload(raw_xml))
         ticket = parse_ticket(env)
+        logger.info("[FNS] Распарсенный чек: %s", _truncate_payload(ticket))
         return ticket
     except Exception as e:
+        logger.exception("[FNS] Ошибка получения чека по QR: %s", qr)
         raise RuntimeError(f"FNS API error: {e}") from e
 
