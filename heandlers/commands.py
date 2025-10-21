@@ -250,7 +250,10 @@ async def cmd_remove_me(message: Message):
 @router.callback_query(F.data.startswith("remove_me_"))
 async def callbacks_remove_me(callback: CallbackQuery):
     if callback.data == "remove_me_yes":
-        await sql_mgt.delete_all_user_data(callback.from_user.id)
+        await sql_mgt.delete_all_user_data(
+            callback.from_user.id,
+            keep_admin=True,
+        )
         await callback.message.answer("Ваши данные удалены.")
 
     await global_objects.bot.delete_message(

@@ -1655,7 +1655,12 @@ async def delete_receipt(receipt_id: int, conn=None) -> None:
     await conn.commit()
 
 @with_connection
-async def delete_all_user_data(user_tg_id: int, conn=None):
+async def delete_all_user_data(
+    user_tg_id: int,
+    *,
+    keep_admin: bool = False,
+    conn=None,
+):
     cursor = await conn.cursor()
 
     tables = [
@@ -1680,6 +1685,8 @@ async def delete_all_user_data(user_tg_id: int, conn=None):
     ]
 
     for table, column in tables:
+        if keep_admin and table == "admins":
+            continue
         await cursor.execute(
             f"DELETE FROM {table} WHERE {column} = ?", (user_tg_id,)
         )
