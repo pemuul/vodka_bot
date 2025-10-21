@@ -21,6 +21,7 @@ from sqlalchemy import MetaData, Table, create_engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import OperationalError
 from typing import List, Optional, Dict, Any, Tuple
 import datetime
 from pydantic import BaseModel
@@ -94,6 +95,27 @@ _ensure_receipts_schema()
 
 def _ensure_scheduled_messages_schema() -> None:
     """Ensure the scheduled_messages table exists with the expected columns."""
+    def add_column(
+        connection: "sqlalchemy.engine.Connection",
+        existing: Dict[str, Any],
+        column_name: str,
+        ddl: str,
+        post_add_sql: Optional[str] = None,
+    ) -> None:
+        if column_name in existing:
+            return
+        try:
+            connection.exec_driver_sql(
+                f"ALTER TABLE scheduled_messages ADD COLUMN {column_name} {ddl}"
+            )
+            if post_add_sql:
+                connection.exec_driver_sql(post_add_sql)
+            existing[column_name] = True
+        except OperationalError:
+            logger.exception(
+                "Failed to add %s column to scheduled_messages", column_name
+            )
+
     try:
         with engine.begin() as connection:
             connection.exec_driver_sql(
@@ -108,27 +130,32 @@ def _ensure_scheduled_messages_schema() -> None:
                 """
             )
             existing_columns = {
-                row[1]: row
+                row[1]: True
                 for row in connection.exec_driver_sql(
                     "PRAGMA table_info(scheduled_messages)"
                 )
             }
-            required_columns = {
-                "auto_send": "INTEGER NOT NULL DEFAULT 0",
-                "media": "TEXT",
-                "last_attempt_dt": "TIMESTAMP",
-                "sent_dt": "TIMESTAMP",
-                "last_error": "TEXT",
-                "success_count": "INTEGER NOT NULL DEFAULT 0",
-                "failure_count": "INTEGER NOT NULL DEFAULT 0",
-                "created_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-                "updated_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-            }
-            for column_name, ddl in required_columns.items():
-                if column_name not in existing_columns:
-                    connection.exec_driver_sql(
-                        f"ALTER TABLE scheduled_messages ADD COLUMN {column_name} {ddl}"
-                    )
+            add_column(connection, existing_columns, "auto_send", "INTEGER NOT NULL DEFAULT 0")
+            add_column(connection, existing_columns, "media", "TEXT")
+            add_column(connection, existing_columns, "last_attempt_dt", "TIMESTAMP")
+            add_column(connection, existing_columns, "sent_dt", "TIMESTAMP")
+            add_column(connection, existing_columns, "last_error", "TEXT")
+            add_column(connection, existing_columns, "success_count", "INTEGER NOT NULL DEFAULT 0")
+            add_column(connection, existing_columns, "failure_count", "INTEGER NOT NULL DEFAULT 0")
+            add_column(
+                connection,
+                existing_columns,
+                "created_at",
+                "TIMESTAMP",
+                "UPDATE scheduled_messages SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL",
+            )
+            add_column(
+                connection,
+                existing_columns,
+                "updated_at",
+                "TIMESTAMP",
+                "UPDATE scheduled_messages SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL",
+            )
     except Exception:
         logger.exception("Failed to ensure scheduled_messages schema")
 
