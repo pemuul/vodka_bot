@@ -1455,32 +1455,43 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
             message_id = row_data.get("message_id")
             user_tg_id = row_data.get("user_tg_id")
             if message_id and user_tg_id:
-                status_messages = {
-                    "Подтверждён": "✅ Чек подтверждён",
-                    "Нет товара в чеке": "❌ В чеке не найден нужный товар",
-                }
-                text = status_messages.get(upd.status)
-                if text:
-                    try:
-                        await bot.send_message(
-                            user_tg_id,
-                            text,
-                            reply_to_message_id=message_id,
-                        )
-                        log_values = {
-                            "user_tg_id": user_tg_id,
-                            "sender": "admin",
-                            "text": text,
-                            "buttons": None,
-                            "media": None,
-                        }
-                        if HAS_PM_IS_ANSWER:
-                            log_values["is_answer"] = True
-                        await database.execute(
-                            participant_messages_table.insert().values(**log_values)
-                        )
-                    except Exception as e:
-                        print(f"Failed to send receipt status message: {e}")
+                bot = get_bot()
+                if not bot:
+                    logger.warning(
+                        "Receipt %s status changed to %s but bot token is unavailable",
+                        receipt_id,
+                        upd.status,
+                    )
+                else:
+                    status_messages = {
+                        "Подтверждён": "✅ Чек подтверждён",
+                        "Нет товара в чеке": "❌ В чеке не найден нужный товар",
+                    }
+                    text = status_messages.get(upd.status)
+                    if text:
+                        try:
+                            await bot.send_message(
+                                user_tg_id,
+                                text,
+                                reply_to_message_id=message_id,
+                            )
+                            log_values = {
+                                "user_tg_id": user_tg_id,
+                                "sender": "admin",
+                                "text": text,
+                                "buttons": None,
+                                "media": None,
+                            }
+                            if HAS_PM_IS_ANSWER:
+                                log_values["is_answer"] = True
+                            await database.execute(
+                                participant_messages_table.insert().values(**log_values)
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Failed to send receipt status message for receipt %s",
+                                receipt_id,
+                            )
     return {"success": True}
 
 @app.delete("/api/receipts/{receipt_id}")
