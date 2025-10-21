@@ -355,20 +355,6 @@ async def set_commands():
         
     commands.append(
             BotCommand(
-            command='settings',
-            description='Настройки'
-        )
-    )
-
-    commands.append(
-            BotCommand(
-            command='about_bot',
-            description='О боте'
-        )
-    )
-
-    commands.append(
-            BotCommand(
             command='remove_me',
             description='Удалить мои данные'
         )
