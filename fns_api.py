@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime
 from urllib.parse import parse_qsl, unquote_plus, urlsplit
@@ -169,32 +170,38 @@ def parse_ticket(env: ET.Element) -> dict:
 def _parse_qr_datetime(value: str) -> datetime:
     """Parse the QR timestamp supporting multiple formats.
 
-    The FNS QR specification allows both ``YYYYMMDDTHHMM`` and
-    ``YYYYMMDDTHHMMSS`` forms (optionally with ``:`` separators).  Older code
-    only supported the shorter variant and silently substituted the current
-    server time when parsing failed, which produced invalid FNS requests.  We
-    now try a set of known layouts and raise a clear error if none match.
+    We tolerate timestamps with or without separators and with minute or
+    second precision.  ``datetime.strptime`` happily *misparses* a value like
+    ``20250412T1942`` against a ``%H%M%S`` mask (yielding ``19:04:02``), so we
+    normalise the string before selecting the appropriate layout.
     """
 
     cleaned = unquote_plus(value or "").strip()
     if not cleaned:
         raise ValueError("QR timestamp (t=) is missing")
 
-    # Some providers URL-encode the separator or add a trailing Z suffix.
+    cleaned = cleaned.upper()
     if cleaned.endswith("Z"):
         cleaned = cleaned[:-1]
 
-    candidates = (
-        "%Y%m%dT%H%M%S",
-        "%Y%m%dT%H%M",
-        "%Y%m%dT%H:%M:%S",
-        "%Y%m%dT%H:%M",
-    )
-    for fmt in candidates:
+    # Try strict ISO parsing first (handles "2025-04-12T19:42" etc.).
+    for candidate in (cleaned, cleaned.replace(" ", "T")):
         try:
-            return datetime.strptime(cleaned, fmt)
+            return datetime.fromisoformat(candidate)
         except ValueError:
-            continue
+            pass
+
+    # Remove separators to inspect the raw digit sequence while keeping the "T".
+    normalized = cleaned.replace("-", "").replace(":", "")
+    match = re.fullmatch(r"(\d{8})T(\d{2})(\d{2})(\d{2})?", normalized)
+    if match:
+        date_part, hour, minute, second = match.groups()
+        iso_value = (
+            f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:]}T"
+            f"{hour}:{minute}:{second or '00'}"
+        )
+        return datetime.fromisoformat(iso_value)
+
     raise ValueError(
         "Не удалось распарсить время из QR (ожидаются форматы YYYYMMDDTHHMM или YYYYMMDDTHHMMSS)"
     )
