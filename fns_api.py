@@ -1,12 +1,16 @@
 """Client for FNS Open API to fetch receipt data via QR code."""
 
+import json
+import logging
 import os
+import re
 import time
 from datetime import datetime
-from typing import Optional
+from urllib.parse import parse_qsl, unquote_plus, urlsplit
+from typing import Optional, Tuple
+
 import requests
 import xml.etree.ElementTree as ET
-import json
 
 AUTH_ENDPOINT = os.getenv(
     "FNS_AUTH_ENDPOINT",
@@ -25,6 +29,25 @@ NAMESPACES = {
     "auth": "urn://x-artefacts-gnivc-ru/ais3/kkt/AuthService/types/1.0",
     "kkt": "urn://x-artefacts-gnivc-ru/ais3/kkt/KktTicketService/types/1.0",
 }
+
+
+logger = logging.getLogger(__name__)
+
+
+def _truncate_payload(data: object, limit: int = 800) -> str:
+    """Format payload objects for logging without flooding the console."""
+
+    if isinstance(data, str):
+        text = data
+    else:
+        try:
+            text = json.dumps(data, ensure_ascii=False, default=str)
+        except Exception:
+            text = repr(data)
+    text = text.replace("\n", " ")
+    if len(text) > limit:
+        return f"{text[:limit]}… (truncated)"
+    return text
 
 
 def _post_soap(url: str, soap_action: str, xml_body: str, extra_headers: Optional[dict] = None) -> ET.Element:
@@ -135,41 +158,131 @@ def poll_message(access_token: str, message_id: str, timeout: int = 60) -> ET.El
 def parse_ticket(env: ET.Element) -> dict:
     """Extract JSON ticket from response."""
     ticket_text = env.findtext(".//kkt:Ticket", namespaces=NAMESPACES)
+    if ticket_text is None:
+        logger.error(
+            "[FNS] В ответе отсутствует элемент Ticket: %s",
+            _truncate_payload(ET.tostring(env, encoding="unicode")),
+        )
+        raise RuntimeError("FNS ticket payload is missing")
     return json.loads(ticket_text)
+
+
+def _parse_qr_datetime(value: str) -> datetime:
+    """Parse the QR timestamp supporting multiple formats.
+
+    We tolerate timestamps with or without separators and with minute or
+    second precision.  ``datetime.strptime`` happily *misparses* a value like
+    ``20250412T1942`` against a ``%H%M%S`` mask (yielding ``19:04:02``), so we
+    normalise the string before selecting the appropriate layout.
+    """
+
+    cleaned = unquote_plus(value or "").strip()
+    if not cleaned:
+        raise ValueError("QR timestamp (t=) is missing")
+
+    cleaned = cleaned.upper()
+    if cleaned.endswith("Z"):
+        cleaned = cleaned[:-1]
+
+    # Try strict ISO parsing first (handles "2025-04-12T19:42" etc.).
+    for candidate in (cleaned, cleaned.replace(" ", "T")):
+        try:
+            return datetime.fromisoformat(candidate)
+        except ValueError:
+            pass
+
+    # Remove separators to inspect the raw digit sequence while keeping the "T".
+    normalized = cleaned.replace("-", "").replace(":", "")
+    match = re.fullmatch(r"(\d{8})T(\d{2})(\d{2})(\d{2})?", normalized)
+    if match:
+        date_part, hour, minute, second = match.groups()
+        iso_value = (
+            f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:]}T"
+            f"{hour}:{minute}:{second or '00'}"
+        )
+        return datetime.fromisoformat(iso_value)
+
+    raise ValueError(
+        "Не удалось распарсить время из QR (ожидаются форматы YYYYMMDDTHHMM или YYYYMMDDTHHMMSS)"
+    )
+
+
+def _split_qr_query(qr: str) -> dict:
+    """Return dict of parameters from QR string or URL."""
+
+    qr = qr.strip()
+    if not qr:
+        return {}
+    # Strip leading URL parts if someone passed the full link.
+    if "?" in qr or "=" not in qr.split("&", 1)[0]:
+        qr = urlsplit(qr).query or qr.split("?", 1)[-1]
+
+    # parse_qsl handles URL decoding and duplicate keys gracefully.
+    return {key.lower(): value for key, value in parse_qsl(qr, keep_blank_values=True)}
 
 
 def qr_to_params(qr: str) -> dict:
     """Convert qr query string into FNS fiscal parameters."""
-    parts = dict(item.split("=", 1) for item in qr.split("&"))
-    date_raw = parts.get("t", "")
+
+    parts = _split_qr_query(qr)
+    if not parts:
+        raise ValueError("QR строка не содержит параметров")
+
+    dt = _parse_qr_datetime(parts.get("t", ""))
+    date_iso = dt.strftime("%Y-%m-%dT%H:%M:%S")
+
     try:
-        dt = datetime.strptime(date_raw, "%Y%m%dT%H%M")
-        date_iso = dt.strftime("%Y-%m-%dT%H:%M:%S")
-    except ValueError:
-        date_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
-    sum_value = int(float(parts.get("s", "0")) * 100)
-    return {
+        sum_value = int(round(float(parts.get("s", "0")) * 100))
+    except ValueError as exc:
+        raise ValueError("Некорректная сумма в QR (s=)") from exc
+
+    required_fields = {"fn": "Fn", "i": "FiscalDocumentId", "fp": "FiscalSign"}
+    params = {
         "Sum": sum_value,
         "Date": date_iso,
-        "Fn": parts.get("fn", ""),
-        "TypeOperation": int(parts.get("n", "1")),
-        "FiscalDocumentId": int(parts.get("i", "0")),
-        "FiscalSign": parts.get("fp", ""),
+        "TypeOperation": int(parts.get("n", "1") or 1),
         "RawData": True,
     }
+    for key, dest in required_fields.items():
+        value = parts.get(key)
+        if value in (None, ""):
+            raise ValueError(f"В QR отсутствует обязательный параметр {key}=*")
+        params[dest] = int(value) if dest == "FiscalDocumentId" else value
+
+    return params
 
 
-def get_receipt_by_qr(qr: str) -> Optional[dict]:
-    """Fetch receipt info by QR string. Returns ticket dict or None."""
+def _describe_exception(exc: Exception) -> str:
+    """Return a compact description of an exception for logs and UI."""
+
+    name = exc.__class__.__name__
+    message = str(exc) or name
+    return f"{name}: {message}" if message != name else name
+
+
+def get_receipt_by_qr(qr: str) -> Tuple[Optional[dict], Optional[str]]:
+    """Fetch receipt info by QR string.
+
+    Returns a tuple of (ticket dict or None, error text or None).
+    """
     if not MASTER_TOKEN:
-        return None
+        warning = "FNS master token is not configured"
+        logger.warning("[FNS] %s", warning)
+        return None, warning
     try:
+        logger.info("[FNS] Запрос по QR: %s", qr)
         token, _ = get_access_token()
         params = qr_to_params(qr)
+        logger.info("[FNS] Параметры запроса: %s", _truncate_payload(params))
         msg_id = send_get_ticket(token, params)
+        logger.info("[FNS] Получен MessageId: %s", msg_id)
         env = poll_message(token, msg_id)
+        raw_xml = ET.tostring(env, encoding="unicode")
+        logger.info("[FNS] Ответ сервиса (XML): %s", _truncate_payload(raw_xml))
         ticket = parse_ticket(env)
-        return ticket
+        logger.info("[FNS] Распарсенный чек: %s", _truncate_payload(ticket))
+        return ticket, None
     except Exception as e:
-        raise RuntimeError(f"FNS API error: {e}") from e
+        logger.exception("[FNS] Ошибка получения чека по QR: %s", qr)
+        return None, _describe_exception(e)
 
