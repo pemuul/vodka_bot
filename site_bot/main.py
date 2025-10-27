@@ -21,7 +21,8 @@ from sqlalchemy import MetaData, Table, create_engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import sessionmaker
-from typing import List, Optional, Dict, Any, Tuple
+from sqlalchemy.exc import OperationalError
+from typing import List, Optional, Dict, Any, Tuple, Set
 import datetime
 from pydantic import BaseModel
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -29,6 +30,8 @@ import logging
 
 # Админ-панель через SQLAdmin
 from sqladmin import Admin, ModelView
+import asyncio
+import contextlib
 import json
 import os
 import uuid
@@ -44,14 +47,32 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from sql_mgt import ensure_receipt_comment_column_sync
+from sql_mgt import (
+    ensure_receipt_comment_column_sync,
+    get_table_schema_columns,
+    get_table_schema_sql,
+)
 
 # aiogram is imported lazily when sending messages
 
 # ==============================
 # Настройка БД
 # ==============================
-DATABASE_URL = "sqlite:///../../tg_base.sqlite"
+def _resolve_database_file(default_path: str) -> Path:
+    raw_path = Path(default_path)
+    if raw_path.is_absolute():
+        return raw_path
+    base_dir = Path(__file__).resolve().parent
+    search_roots = [base_dir, *base_dir.parents]
+    for root in search_roots:
+        candidate = (root / raw_path).resolve()
+        if candidate.exists():
+            return candidate
+    return (base_dir / raw_path).resolve()
+
+
+DATABASE_FILE = _resolve_database_file("../../tg_base.sqlite")
+DATABASE_URL = f"sqlite:///{DATABASE_FILE}"
 
 database = Database(DATABASE_URL)
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
@@ -60,6 +81,62 @@ logger = logging.getLogger(__name__)
 
 UTC = datetime.timezone.utc
 MSK_TZ = datetime.timezone(datetime.timedelta(hours=3), name="MSK")
+
+SCHEDULE_POLL_SECONDS = int(os.getenv("SCHEDULE_POLL_SECONDS", "60"))
+SCHEDULE_RETRY_MINUTES = int(os.getenv("SCHEDULE_RETRY_MINUTES", "5"))
+SCHEDULE_RETRY_INTERVAL = datetime.timedelta(minutes=SCHEDULE_RETRY_MINUTES)
+SCHEDULE_ALLOWED_STATUSES = {
+    "Черновик",
+    "Запланирована",
+    "Идёт отправка",
+    "Отправлено",
+    "Ошибка",
+}
+SCHEDULE_MAX_ERROR_LENGTH = 800
+_schedule_lock = asyncio.Lock()
+
+_SCHEDULED_MESSAGES_SCHEMA_SQL = get_table_schema_sql("scheduled_messages")
+_SCHEDULED_MESSAGES_COLUMNS = get_table_schema_columns("scheduled_messages")
+
+if _SCHEDULED_MESSAGES_COLUMNS:
+    SCHEDULED_MESSAGES_EXPECTED_COLUMNS: Tuple[Tuple[str, str], ...] = tuple(
+        _SCHEDULED_MESSAGES_COLUMNS
+    )
+else:
+    SCHEDULED_MESSAGES_EXPECTED_COLUMNS = (
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("name", "TEXT NOT NULL"),
+        ("content", "TEXT NOT NULL"),
+        ("schedule_dt", "TIMESTAMP"),
+        ("status", "TEXT NOT NULL DEFAULT 'Черновик'"),
+        ("auto_send", "INTEGER DEFAULT 0"),
+        ("media", "TEXT"),
+        ("last_attempt_dt", "TIMESTAMP"),
+        ("sent_dt", "TIMESTAMP"),
+        ("last_error", "TEXT"),
+        ("success_count", "INTEGER DEFAULT 0"),
+        ("failure_count", "INTEGER DEFAULT 0"),
+        ("created_at", "TIMESTAMP"),
+        ("updated_at", "TIMESTAMP"),
+    )
+
+SCHEDULED_MESSAGES_CREATE_STATEMENT = (
+    _SCHEDULED_MESSAGES_SCHEMA_SQL
+    or "scheduled_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, content TEXT NOT NULL, schedule_dt TIMESTAMP, status TEXT NOT NULL DEFAULT 'Черновик', auto_send INTEGER DEFAULT 0, media TEXT, last_attempt_dt TIMESTAMP, sent_dt TIMESTAMP, last_error TEXT, success_count INTEGER DEFAULT 0, failure_count INTEGER DEFAULT 0, created_at TIMESTAMP, updated_at TIMESTAMP)"
+)
+
+SCHEDULED_MESSAGES_COPY_DEFAULTS: Dict[str, str] = {
+    "status": "'Черновик'",
+    "auto_send": "0",
+    "media": "NULL",
+    "last_attempt_dt": "NULL",
+    "sent_dt": "NULL",
+    "last_error": "NULL",
+    "success_count": "0",
+    "failure_count": "0",
+    "created_at": "CURRENT_TIMESTAMP",
+    "updated_at": "CURRENT_TIMESTAMP",
+}
 
 
 def _ensure_receipts_schema() -> None:
@@ -75,6 +152,93 @@ def _ensure_receipts_schema() -> None:
 
 
 _ensure_receipts_schema()
+
+
+def _ensure_scheduled_messages_schema() -> None:
+    """Ensure the scheduled_messages table exists with the expected columns."""
+
+    if not SCHEDULED_MESSAGES_EXPECTED_COLUMNS:
+        logger.warning(
+            "No scheduled_messages schema definition was found; skipping auto migration"
+        )
+        return
+
+    column_def_sql = ",\n                ".join(
+        f"{name} {ddl}" for name, ddl in SCHEDULED_MESSAGES_EXPECTED_COLUMNS
+    )
+
+    def rebuild_table(connection: "sqlalchemy.engine.Connection") -> Dict[str, Any]:
+        temp_table = "scheduled_messages_tmp"
+        connection.exec_driver_sql(f"DROP TABLE IF EXISTS {temp_table}")
+        connection.exec_driver_sql(
+            f"""
+            CREATE TABLE {temp_table} (
+                {column_def_sql}
+            )
+            """
+        )
+        existing_columns = {
+            row[1]: True
+            for row in connection.exec_driver_sql(
+                "PRAGMA table_info(scheduled_messages)"
+            )
+        }
+        insert_columns = [name for name, _ in SCHEDULED_MESSAGES_EXPECTED_COLUMNS]
+        select_parts = []
+        for name in insert_columns:
+            if name in existing_columns:
+                select_parts.append(name)
+            else:
+                select_parts.append(SCHEDULED_MESSAGES_COPY_DEFAULTS.get(name, "NULL"))
+        connection.exec_driver_sql(
+            f"INSERT INTO {temp_table} ({', '.join(insert_columns)}) "
+            f"SELECT {', '.join(select_parts)} FROM scheduled_messages"
+        )
+        connection.exec_driver_sql("DROP TABLE scheduled_messages")
+        connection.exec_driver_sql(
+            f"ALTER TABLE {temp_table} RENAME TO scheduled_messages"
+        )
+        return {name: True for name, _ in SCHEDULED_MESSAGES_EXPECTED_COLUMNS}
+
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                f"CREATE TABLE IF NOT EXISTS {SCHEDULED_MESSAGES_CREATE_STATEMENT}"
+            )
+            existing_columns = {
+                row[1]: True
+                for row in connection.exec_driver_sql(
+                    "PRAGMA table_info(scheduled_messages)"
+                )
+            }
+            for name, ddl in SCHEDULED_MESSAGES_EXPECTED_COLUMNS:
+                if name in existing_columns:
+                    continue
+                try:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE scheduled_messages ADD COLUMN {name} {ddl}"
+                    )
+                    existing_columns[name] = True
+                except OperationalError:
+                    logger.warning(
+                        "Rebuilding scheduled_messages table to add missing column %s",
+                        name,
+                    )
+                    existing_columns = rebuild_table(connection)
+                    break
+            if "created_at" in existing_columns:
+                connection.exec_driver_sql(
+                    "UPDATE scheduled_messages SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
+                )
+            if "updated_at" in existing_columns:
+                connection.exec_driver_sql(
+                    "UPDATE scheduled_messages SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL"
+                )
+    except Exception:
+        logger.exception("Failed to ensure scheduled_messages schema")
+
+
+_ensure_scheduled_messages_schema()
 
 # Рефлексия всех таблиц
 metadata.reflect(bind=engine)
@@ -100,7 +264,9 @@ sales_line_table           = Table("sales_line", metadata, autoload_with=engine)
 additional_field_table     = Table("additional_field", metadata, autoload_with=engine)
 questions_table            = Table("questions", metadata, autoload_with=engine)
 question_messages_table    = Table("question_messages", metadata, autoload_with=engine)
-scheduled_messages_table   = Table("scheduled_messages", metadata, autoload_with=engine)
+scheduled_messages_table   = Table(
+    "scheduled_messages", metadata, autoload_with=engine, extend_existing=True
+)
 prize_draws_table          = Table("prize_draws", metadata, autoload_with=engine)
 prize_draw_stages_table    = Table("prize_draw_stages", metadata, autoload_with=engine)
 prize_draw_winners_table   = Table("prize_draw_winners", metadata, autoload_with=engine)
@@ -110,9 +276,81 @@ participant_messages_table = Table("participant_messages", metadata, autoload_wi
 # Some deployments may still use an older database schema without the
 # `is_answer` column.  Detect its presence so we can behave gracefully
 # when reading or writing data.
+def _get_table_column_names(table_name: str) -> Set[str]:
+    try:
+        with engine.connect() as connection:
+            return {
+                row[1]
+                for row in connection.exec_driver_sql(
+                    f"PRAGMA table_info({table_name})"
+                )
+            }
+    except Exception:
+        logger.exception("Failed to inspect %s columns", table_name)
+        return set()
+
+
+SCHEDULED_MESSAGES_COLUMN_NAMES: Set[str] = set()
+HAS_SM_AUTO_SEND = False
+HAS_SM_MEDIA = False
+
+
+def _set_scheduled_messages_column_flags(column_names: Set[str]) -> None:
+    global SCHEDULED_MESSAGES_COLUMN_NAMES, HAS_SM_AUTO_SEND, HAS_SM_MEDIA
+    SCHEDULED_MESSAGES_COLUMN_NAMES = set(column_names)
+    HAS_SM_AUTO_SEND = "auto_send" in SCHEDULED_MESSAGES_COLUMN_NAMES
+    HAS_SM_MEDIA = "media" in SCHEDULED_MESSAGES_COLUMN_NAMES
+
+
+_set_scheduled_messages_column_flags(_get_table_column_names("scheduled_messages"))
+
 HAS_PM_IS_ANSWER = 'is_answer' in participant_messages_table.c
 HAS_QM_IS_ANSWER = 'is_answer' in question_messages_table.c
-HAS_SM_MEDIA = 'media' in scheduled_messages_table.c
+
+
+def _scheduled_messages_columns() -> List[Any]:
+    columns: List[Any] = [
+        scheduled_messages_table.c.id,
+        scheduled_messages_table.c.name,
+        scheduled_messages_table.c.content,
+        scheduled_messages_table.c.schedule_dt,
+        scheduled_messages_table.c.status,
+    ]
+    optional_map = {
+        "auto_send": getattr(scheduled_messages_table.c, "auto_send", None),
+        "media": getattr(scheduled_messages_table.c, "media", None),
+        "last_attempt_dt": getattr(scheduled_messages_table.c, "last_attempt_dt", None),
+        "sent_dt": getattr(scheduled_messages_table.c, "sent_dt", None),
+        "last_error": getattr(scheduled_messages_table.c, "last_error", None),
+        "success_count": getattr(scheduled_messages_table.c, "success_count", None),
+        "failure_count": getattr(scheduled_messages_table.c, "failure_count", None),
+        "created_at": getattr(scheduled_messages_table.c, "created_at", None),
+        "updated_at": getattr(scheduled_messages_table.c, "updated_at", None),
+    }
+    for name, column in optional_map.items():
+        if name in SCHEDULED_MESSAGES_COLUMN_NAMES and column is not None:
+            columns.append(column)
+    return columns
+
+
+def _scheduled_messages_select() -> "sqlalchemy.sql.Select":
+    return (
+        sqlalchemy.select(*_scheduled_messages_columns())
+        .select_from(scheduled_messages_table)
+    )
+
+
+async def _refresh_scheduled_messages_column_flags() -> None:
+    try:
+        rows = await database.fetch_all("PRAGMA table_info(scheduled_messages)")
+    except Exception:
+        logger.exception("Failed to refresh scheduled_messages column metadata")
+        return
+    column_names = {row["name"] for row in rows if "name" in row}
+    if not column_names and rows:
+        # Databases Record may expose tuple-style access
+        column_names = {row[1] for row in rows}
+    _set_scheduled_messages_column_flags(column_names)
 HAS_PDW_RECEIPT_ID = 'receipt_id' in prize_draw_winners_table.c
 receipts_table             = Table("receipts", metadata, autoload_with=engine)
 images_table               = Table("images", metadata, autoload_with=engine)
@@ -182,9 +420,16 @@ for name, model in Base.classes.items():
 @app.on_event("startup")
 async def on_startup():
     await database.connect()
+    await _refresh_scheduled_messages_column_flags()
+    app.state.scheduler_task = asyncio.create_task(_scheduled_sender_loop())
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    task = getattr(app.state, "scheduler_task", None)
+    if task:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
     await database.disconnect()
 
 # ==============================
@@ -630,26 +875,28 @@ async def api_notifications():
     """Return receipts with problem receipts and unanswered questions."""
     notifications = []
 
-    if has_receipt_status():
-        problematic_statuses = [
-            "Нет товара в чеке",
-            "Ошибка",
-            "Не распознан",
-        ]
+    if has_receipt_status() and has_receipt_comment():
+        comment_col = receipts_table.c.comment
         rec_rows = await database.fetch_all(
             sqlalchemy.select(
                 receipts_table.c.id,
                 receipts_table.c.number,
                 receipts_table.c.status,
-            ).where(receipts_table.c.status.in_(problematic_statuses))
+                comment_col,
+            ).where(
+                sqlalchemy.and_(
+                    receipts_table.c.status == "Ошибка",
+                    comment_col.isnot(None),
+                    comment_col.like("Бот:%"),
+                )
+            )
         )
-        status_text = {
-            "Нет товара в чеке": "нет нужного товара",
-            "Ошибка": "ошибка обработки",
-            "Не распознан": "не распознан",
-        }
         for r in rec_rows:
-            descr = status_text.get(r["status"], r["status"].lower())
+            comment_val = r["comment"] or ""
+            if comment_val.startswith("Бот:"):
+                descr = comment_val.split(":", 1)[1].strip() or "ошибка автоматической обработки"
+            else:
+                descr = comment_val or "ошибка автоматической обработки"
             text = f"Чек {r['number'] or r['id']} – {descr}"
             notifications.append({
                 "type": "receipt",
@@ -867,33 +1114,67 @@ async def delete_media(name: str):
 
 @app.get("/scheduled-messages", response_class=HTMLResponse)
 async def scheduled_messages(request: Request):
-    rows = await database.fetch_all(scheduled_messages_table.select())
+    query = _scheduled_messages_select().order_by(
+        scheduled_messages_table.c.schedule_dt.is_(None),
+        scheduled_messages_table.c.schedule_dt,
+    )
+    rows = await database.fetch_all(query)
     messages = []
-    for r in rows:
-        schedule_val = r["schedule_dt"]
+    now_utc = datetime.datetime.utcnow().replace(tzinfo=UTC)
+    for record in rows:
+        row = dict(record)
+        schedule_val = _coerce_datetime(row.get("schedule_dt"))
         schedule_iso = ""
         schedule_display = ""
-        if isinstance(schedule_val, str):
-            try:
-                schedule_val = datetime.datetime.fromisoformat(schedule_val)
-            except ValueError:
-                schedule_val = None
         if isinstance(schedule_val, datetime.datetime):
             aware = schedule_val if schedule_val.tzinfo else schedule_val.replace(tzinfo=UTC)
-            schedule_iso = aware.astimezone(UTC).strftime("%Y-%m-%dT%H:%M")
+            schedule_iso = aware.astimezone(MSK_TZ).strftime("%Y-%m-%dT%H:%M")
             schedule_display = aware.astimezone(MSK_TZ).strftime("%d.%m.%Y %H:%M")
+        raw_media = row.get("media")
         try:
-            media = json.loads(r["media"]) if HAS_SM_MEDIA and r["media"] else []
+            media = json.loads(raw_media) if HAS_SM_MEDIA and raw_media else []
         except Exception:
             media = []
+        status = _normalize_legacy_status(row.get("status")) or "Черновик"
+        auto_flag = bool(row.get("auto_send") or 0) if HAS_SM_AUTO_SEND else False
+        last_attempt_dt = _coerce_datetime(row.get("last_attempt_dt"))
+        sent_dt = _coerce_datetime(row.get("sent_dt"))
+        next_attempt_dt = _calc_next_attempt(
+            auto_send=auto_flag,
+            status=status,
+            schedule_dt=schedule_val,
+            last_attempt_dt=last_attempt_dt,
+        )
+        success_count = row.get("success_count")
+        try:
+            success_count = int(success_count) if success_count is not None else None
+        except (TypeError, ValueError):
+            success_count = None
+        failure_count = row.get("failure_count")
+        try:
+            failure_count = int(failure_count) if failure_count is not None else None
+        except (TypeError, ValueError):
+            failure_count = None
         messages.append({
-            "id": r["id"],
-            "name": r["name"],
-            "content": r["content"],
+            "id": row["id"],
+            "name": row["name"],
+            "content": row["content"],
             "schedule": schedule_iso,
             "schedule_display": schedule_display,
-            "status": r["status"],
+            "status": status,
             "media": media,
+            "auto_send": auto_flag,
+            "last_attempt_display": _format_msk(last_attempt_dt),
+            "sent_display": _format_msk(sent_dt),
+            "next_attempt_display": _format_msk(next_attempt_dt),
+            "is_overdue": bool(
+                next_attempt_dt
+                and (next_attempt_dt.replace(tzinfo=UTC) if next_attempt_dt.tzinfo is None else next_attempt_dt.astimezone(UTC))
+                < now_utc
+            ),
+            "success_count": success_count,
+            "failure_count": failure_count,
+            "last_error": row.get("last_error") or "",
         })
     return templates.TemplateResponse(
         "scheduled_messages.html",
@@ -905,7 +1186,8 @@ class ScheduledMessageIn(BaseModel):
     name: str
     content: str
     schedule: Optional[datetime.datetime] = None
-    status: Optional[str] = "Новый"
+    status: Optional[str] = None
+    auto_send: Optional[bool] = None
     media: Optional[List[Dict[str, str]]] = None
 
 
@@ -915,6 +1197,269 @@ def _to_utc_naive(value: Optional[datetime.datetime]) -> Optional[datetime.datet
     if value.tzinfo is not None:
         return value.astimezone(UTC).replace(tzinfo=None)
     return value
+
+
+def _coerce_datetime(value: Any) -> Optional[datetime.datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime.datetime):
+        return value
+    if isinstance(value, str):
+        for fmt in (None, "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+            try:
+                if fmt is None:
+                    return datetime.datetime.fromisoformat(value)
+                return datetime.datetime.strptime(value, fmt)
+            except ValueError:
+                continue
+    return None
+
+
+def _format_msk(value: Optional[datetime.datetime]) -> str:
+    if not value:
+        return ""
+    aware = value if value.tzinfo else value.replace(tzinfo=UTC)
+    return aware.astimezone(MSK_TZ).strftime("%d.%m.%Y %H:%M")
+
+
+def _sanitize_status(value: Optional[str], default: str) -> str:
+    if value in SCHEDULE_ALLOWED_STATUSES:
+        return value
+    return default
+
+
+def _normalize_legacy_status(value: Optional[str]) -> Optional[str]:
+    if value == "Новый":
+        return "Черновик"
+    if value == "Ожидает отправки":
+        return "Запланирована"
+    return value
+
+
+def _determine_status(
+    *,
+    requested: Optional[str],
+    auto_send: bool,
+    schedule_dt: Optional[datetime.datetime],
+    fallback: str,
+) -> str:
+    status = _sanitize_status(_normalize_legacy_status(requested), _normalize_legacy_status(fallback) or "Черновик")
+    if auto_send and schedule_dt and status not in {"Отправлено", "Идёт отправка"}:
+        status = "Запланирована"
+    if not auto_send and status == "Запланирована":
+        status = "Черновик"
+    if status == "Идёт отправка" and not auto_send:
+        status = "Черновик"
+    return status
+
+
+def _calc_next_attempt(
+    *,
+    auto_send: bool,
+    status: str,
+    schedule_dt: Optional[datetime.datetime],
+    last_attempt_dt: Optional[datetime.datetime],
+) -> Optional[datetime.datetime]:
+    if not auto_send or status == "Отправлено":
+        return None
+    candidates: List[datetime.datetime] = []
+    if schedule_dt:
+        candidates.append(schedule_dt)
+    if status == "Ошибка" and last_attempt_dt:
+        candidates.append(last_attempt_dt + SCHEDULE_RETRY_INTERVAL)
+    if not candidates:
+        return None
+    return max(candidates)
+
+
+def _load_media_list(row: Dict[str, Any]) -> List[Dict[str, str]]:
+    if not HAS_SM_MEDIA:
+        return []
+    raw = row.get("media")
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return raw
+    try:
+        return json.loads(raw)
+    except Exception:
+        return []
+
+
+def _build_media_blueprint(media_list: List[Dict[str, str]]) -> List[Tuple[str, Optional[Path], Optional[str]]]:
+    blueprint: List[Tuple[str, Optional[Path], Optional[str]]] = []
+    for item in media_list[:10]:
+        typ = item.get("type")
+        name = item.get("file") or item.get("file_id")
+        if typ not in ("photo", "video") or not name:
+            continue
+        local_path = UPLOAD_DIR / name
+        if local_path.exists():
+            blueprint.append((typ, local_path, None))
+        else:
+            blueprint.append((typ, None, name))
+    return blueprint
+
+
+def _instantiate_media(blueprint: List[Tuple[str, Optional[Path], Optional[str]]]) -> List[Tuple[str, object]]:
+    media_payload: List[Tuple[str, object]] = []
+    if not blueprint:
+        return media_payload
+    try:
+        from aiogram.types import FSInputFile  # type: ignore
+    except Exception:
+        FSInputFile = None  # type: ignore
+    for typ, path, file_id in blueprint:
+        if path is not None and FSInputFile is not None:
+            media_payload.append((typ, FSInputFile(path)))
+        elif file_id:
+            media_payload.append((typ, file_id))
+    return media_payload
+
+
+async def _broadcast_scheduled_message(
+    message_id: int,
+    row: Dict[str, Any],
+    *,
+    initiated_by_scheduler: bool = False,
+) -> Tuple[int, int, Optional[str]]:
+    users = await database.fetch_all(users_table.select())
+    recipient_ids = []
+    for u in users:
+        row_user = dict(u)
+        tg_id = row_user.get("tg_id")
+        if tg_id:
+            recipient_ids.append(tg_id)
+    media_blueprint = _build_media_blueprint(_load_media_list(row))
+    sent_count = 0
+    failed_count = 0
+    error_messages: List[str] = []
+    has_recipients = bool(recipient_ids)
+    if not recipient_ids:
+        error_messages.append("Нет пользователей для рассылки")
+        failed_count = max(failed_count, 1)
+    for uid in recipient_ids:
+        try:
+            files = _instantiate_media(media_blueprint)
+            await send_and_log_message(uid, row.get("content"), files if files else None)
+            sent_count += 1
+        except Exception as exc:
+            failed_count += 1
+            error_messages.append(str(exc))
+    if recipient_ids and sent_count == 0 and failed_count == 0:
+        # No exceptions were raised but nothing was sent
+        error_messages.append("Не удалось отправить сообщения")
+        failed_count = len(recipient_ids)
+    combined_error: Optional[str] = None
+    if error_messages:
+        preview = "; ".join(error_messages[:3])
+        if len(error_messages) > 3:
+            preview += f" и ещё {len(error_messages) - 3}"
+        combined_error = preview[:SCHEDULE_MAX_ERROR_LENGTH]
+    status = "Отправлено" if sent_count > 0 else "Ошибка"
+    if not has_recipients:
+        status = "Ошибка"
+    if status == "Отправлено":
+        combined_error = None
+    now = datetime.datetime.utcnow()
+    auto_send_after = 0
+    update_values: Dict[str, Any] = {
+        "status": status,
+        "last_attempt_dt": now,
+        "updated_at": now,
+        "success_count": sent_count,
+        "failure_count": failed_count,
+        "last_error": combined_error,
+    }
+    if HAS_SM_AUTO_SEND:
+        update_values["auto_send"] = auto_send_after
+    if status == "Отправлено":
+        update_values["sent_dt"] = now
+        update_values["last_error"] = None
+    else:
+        update_values.setdefault("sent_dt", row.get("sent_dt"))
+    await database.execute(
+        scheduled_messages_table.update()
+        .where(scheduled_messages_table.c.id == message_id)
+        .values(**update_values)
+    )
+    return sent_count, failed_count, combined_error
+
+
+async def _process_due_scheduled_messages() -> None:
+    if not (HAS_SM_AUTO_SEND and hasattr(scheduled_messages_table.c, "auto_send")):
+        return
+    now = datetime.datetime.utcnow()
+    candidates: List[Dict[str, Any]] = []
+    async with _schedule_lock:
+        query = (
+            _scheduled_messages_select()
+            .where(scheduled_messages_table.c.auto_send == 1)
+            .where(scheduled_messages_table.c.schedule_dt != None)
+            .where(scheduled_messages_table.c.schedule_dt <= now)
+            .where(scheduled_messages_table.c.status != "Отправлено")
+            .where(scheduled_messages_table.c.status != "Идёт отправка")
+        )
+        rows = await database.fetch_all(query)
+        for row in rows:
+            row_map = dict(row)
+            last_attempt = _coerce_datetime(row_map.get("last_attempt_dt"))
+            if (
+                row_map.get("status") == "Ошибка"
+                and last_attempt
+                and last_attempt + SCHEDULE_RETRY_INTERVAL > now
+            ):
+                continue
+            await database.execute(
+                scheduled_messages_table.update()
+                .where(scheduled_messages_table.c.id == row_map["id"])
+                .values(
+                    status="Идёт отправка",
+                    last_attempt_dt=now,
+                    updated_at=now,
+                    last_error=None,
+                )
+            )
+            row_map["status"] = "Идёт отправка"
+            row_map["last_attempt_dt"] = now
+            candidates.append(row_map)
+    for row in candidates:
+        try:
+            sent, failed, error = await _broadcast_scheduled_message(
+                row["id"], row, initiated_by_scheduler=True
+            )
+            if error:
+                logger.warning(
+                    "Auto mailing %s finished with errors: %s", row["id"], error
+                )
+            else:
+                logger.info(
+                    "Auto mailing %s sent to %s users", row["id"], sent
+                )
+        except Exception:
+            logger.exception("Auto mailing %s failed", row["id"])
+            await database.execute(
+                scheduled_messages_table.update()
+                .where(scheduled_messages_table.c.id == row["id"])
+                .values(
+                    status="Ошибка",
+                    last_error="Не удалось выполнить рассылку",
+                    updated_at=datetime.datetime.utcnow(),
+                )
+            )
+
+
+async def _scheduled_sender_loop() -> None:
+    try:
+        # allow the application to finish startup work
+        await asyncio.sleep(5)
+        while True:
+            await _process_due_scheduled_messages()
+            await asyncio.sleep(SCHEDULE_POLL_SECONDS)
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        logger.exception("Scheduled sender loop terminated unexpectedly")
 
 @app.post("/scheduled-messages")
 async def save_scheduled_message(msg: ScheduledMessageIn):
@@ -927,32 +1472,65 @@ async def save_scheduled_message(msg: ScheduledMessageIn):
                 continue
             safe_media.append({"type": typ, "file": name})
     media_json = json.dumps(safe_media) if safe_media else None
+    schedule_dt = _to_utc_naive(msg.schedule)
+    auto_flag = bool(msg.auto_send) if (HAS_SM_AUTO_SEND and msg.auto_send is not None) else False
+    if auto_flag and schedule_dt is None:
+        auto_flag = False
+    now = datetime.datetime.utcnow()
     if msg.id is None:
+        status_value = _determine_status(
+            requested=msg.status,
+            auto_send=auto_flag,
+            schedule_dt=schedule_dt,
+            fallback="Черновик",
+        )
         new_id = await database.execute(
             scheduled_messages_table.insert().values(
                 name=msg.name,
                 content=msg.content,
-                schedule_dt=_to_utc_naive(msg.schedule) or datetime.datetime.utcnow(),
-                status=msg.status,
-                **({"media": media_json} if HAS_SM_MEDIA else {})
+                schedule_dt=schedule_dt,
+                status=status_value,
+                **({"auto_send": 1 if auto_flag else 0} if HAS_SM_AUTO_SEND else {}),
+                created_at=now,
+                updated_at=now,
+                **({"media": media_json} if HAS_SM_MEDIA else {}),
             )
         )
         return {"success": True, "id": new_id}
     else:
         existing = await database.fetch_one(
-            scheduled_messages_table.select().where(scheduled_messages_table.c.id == msg.id)
+            _scheduled_messages_select().where(scheduled_messages_table.c.id == msg.id)
         )
         if not existing:
             raise HTTPException(404, "Message not found")
+        existing_map = dict(existing)
         fields_set = getattr(msg, "__fields_set__", set())
+        schedule_value = schedule_dt
+        if "schedule" not in fields_set:
+            schedule_value = _coerce_datetime(existing_map.get("schedule_dt"))
+        auto_flag_existing = bool(existing_map.get("auto_send") or 0) if HAS_SM_AUTO_SEND else False
+        if HAS_SM_AUTO_SEND and "auto_send" in fields_set:
+            auto_flag = bool(msg.auto_send)
+            if auto_flag and schedule_value is None:
+                auto_flag = False
+        else:
+            auto_flag = auto_flag_existing
+        status_value = _determine_status(
+            requested=msg.status if "status" in fields_set else existing_map.get("status"),
+            auto_send=auto_flag,
+            schedule_dt=schedule_value,
+            fallback=existing_map.get("status") or "Черновик",
+        )
         update_values = {
             "name": msg.name,
             "content": msg.content,
-            "status": msg.status,
-            **({"media": media_json} if HAS_SM_MEDIA else {})
+            "status": status_value,
+            "updated_at": now,
+            **({"auto_send": 1 if auto_flag else 0} if HAS_SM_AUTO_SEND else {}),
+            **({"media": media_json} if HAS_SM_MEDIA else {}),
         }
         if "schedule" in fields_set:
-            update_values["schedule_dt"] = _to_utc_naive(msg.schedule) or datetime.datetime.utcnow()
+            update_values["schedule_dt"] = schedule_value
         await database.execute(
             scheduled_messages_table.update()
             .where(scheduled_messages_table.c.id == msg.id)
@@ -963,7 +1541,7 @@ async def save_scheduled_message(msg: ScheduledMessageIn):
 @app.delete("/scheduled-messages/{message_id}")
 async def delete_scheduled_message(message_id: int):
     existing = await database.fetch_one(
-        scheduled_messages_table.select().where(scheduled_messages_table.c.id == message_id)
+        _scheduled_messages_select().where(scheduled_messages_table.c.id == message_id)
     )
     if not existing:
         raise HTTPException(404, "Message not found")
@@ -976,7 +1554,7 @@ async def delete_scheduled_message(message_id: int):
 @app.post("/scheduled-messages/{message_id}/test")
 async def test_send_scheduled_message(message_id: int):
     msg = await database.fetch_one(
-        scheduled_messages_table.select().where(scheduled_messages_table.c.id == message_id)
+        _scheduled_messages_select().where(scheduled_messages_table.c.id == message_id)
     )
     if not msg:
         raise HTTPException(404, "Message not found")
@@ -985,25 +1563,11 @@ async def test_send_scheduled_message(message_id: int):
         participant_settings_table.select().where(participant_settings_table.c.tester == True)
     )
     ids = [r["user_tg_id"] for r in testers]
-    media = []
-    if HAS_SM_MEDIA:
-        try:
-            media = json.loads(msg["media"]) if msg["media"] else []
-        except Exception:
-            media = []
+    msg_map = dict(msg)
+    media_blueprint = _build_media_blueprint(_load_media_list(msg_map))
     for uid in ids:
         try:
-            files = []
-            for m in media[:10]:
-                typ = m.get("type")
-                fname = m.get("file") or m.get("file_id")
-                if typ not in ("photo", "video") or not fname:
-                    continue
-                local = UPLOAD_DIR / fname
-                from aiogram.types import FSInputFile  # type: ignore
-                obj = FSInputFile(local) if local.exists() else fname
-                files.append((typ, obj))
-
+            files = _instantiate_media(media_blueprint)
             await send_and_log_message(uid, msg["content"], files if files else None)
         except Exception as e:
             print("send test error", e)
@@ -1013,45 +1577,17 @@ async def test_send_scheduled_message(message_id: int):
 @app.post("/scheduled-messages/{message_id}/send")
 async def send_scheduled_message(message_id: int):
     msg = await database.fetch_one(
-        scheduled_messages_table.select().where(scheduled_messages_table.c.id == message_id)
+        _scheduled_messages_select().where(scheduled_messages_table.c.id == message_id)
     )
     if not msg:
         raise HTTPException(404, "Message not found")
-
-    users = await database.fetch_all(users_table.select())
-    ids = [u["tg_id"] for u in users]
-
-    media = []
-    if HAS_SM_MEDIA:
-        try:
-            media = json.loads(msg["media"]) if msg["media"] else []
-        except Exception:
-            media = []
-
-    for uid in ids:
-        try:
-            files = []
-            for m in media[:10]:
-                typ = m.get("type")
-                fname = m.get("file") or m.get("file_id")
-                if typ not in ("photo", "video") or not fname:
-                    continue
-                local = UPLOAD_DIR / fname
-                from aiogram.types import FSInputFile  # type: ignore
-                obj = FSInputFile(local) if local.exists() else fname
-                files.append((typ, obj))
-
-            await send_and_log_message(uid, msg["content"], files if files else None)
-        except Exception as e:
-            print("send mailing error", e)
-
-    now = datetime.datetime.utcnow()
-    await database.execute(
-        scheduled_messages_table.update()
-        .where(scheduled_messages_table.c.id == message_id)
-        .values(schedule_dt=now, status="Отправлено")
-    )
-    return {"success": True}
+    if msg["status"] == "Идёт отправка":
+        raise HTTPException(409, "Mailing is already in progress")
+    msg_map = dict(msg)
+    sent, failed, error_text = await _broadcast_scheduled_message(message_id, msg_map)
+    if error_text:
+        logger.warning("Scheduled mailing %s finished with errors: %s", message_id, error_text)
+    return {"success": True, "sent": sent, "failed": failed}
 
 
 @app.get("/settings", response_class=HTMLResponse)
