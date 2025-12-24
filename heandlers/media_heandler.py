@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 from aiogram.types import Message
 import time
@@ -12,6 +13,7 @@ import uuid
 import multiprocessing as mp
 import signal
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Any
 from fns_api import get_receipt_by_qr
@@ -359,27 +361,129 @@ def _detect_qr(path: str) -> str | None:
         return None
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    candidates: list[str] = []
+
+    # 1) Сначала пробуем WeChat и собираем все варианты
+    wechat_candidates = _decode_with_wechat(img)
+    if wechat_candidates:
+        candidates.extend(wechat_candidates)
+        selected = _select_qr_candidate(wechat_candidates, accept_fallback=False)
+        logger.info("[QR] WeChat candidates: %s; selected=%s", wechat_candidates, selected)
+        if selected:
+            return selected
+
+    # 2) Базовый pyzbar
     decoded_objects = decode(gray, symbols=[ZBarSymbol.QRCODE])
     if decoded_objects:
-        data = decoded_objects[0].data.decode("utf-8")
-        logger.info("[QR] Found QR via pyzbar: %s", data)
-        return data
+        pyzbar_candidates = [obj.data.decode("utf-8") for obj in decoded_objects if obj.data]
+        candidates.extend(pyzbar_candidates)
+        selected = _select_qr_candidate(pyzbar_candidates, accept_fallback=False)
+        logger.info("[QR] pyzbar candidates: %s; selected=%s", pyzbar_candidates, selected)
+        if selected:
+            return selected
 
+    # 3) OpenCV detector (multi + single)
     detector = cv2.QRCodeDetector()
-    data, points, _ = detector.detectAndDecode(gray)
+    detect_multi = getattr(detector, "detectAndDecodeMulti", None)
+    if callable(detect_multi):
+        try:
+            multi_data, multi_points, _ = detector.detectAndDecodeMulti(gray)
+        except Exception:
+            multi_data, multi_points = [], None
+        if multi_points is not None:
+            cv_multi = [str(item).strip() for item in multi_data if item]
+            candidates.extend(cv_multi)
+            selected = _select_qr_candidate(cv_multi, accept_fallback=False)
+            logger.info("[QR] cv2 detectAndDecodeMulti candidates: %s; selected=%s", cv_multi, selected)
+            if selected:
+                return selected
+    try:
+        data, points, _ = detector.detectAndDecode(gray)
+    except Exception:
+        data, points = None, None
     if points is not None and data:
         decoded = data.strip()
-        logger.info("[QR] Found QR via cv2.QRCodeDetector: %s", decoded)
-        return decoded
+        candidates.append(decoded)
+        selected = _select_qr_candidate([decoded], accept_fallback=False)
+        logger.info("[QR] cv2.QRCodeDetector single candidate=%s; selected=%s", decoded, selected)
+        if selected:
+            return selected
 
     _log_memory_usage("detect_qr:post-basic")
 
-    wechat_decoded = _decode_with_wechat(img)
-    if wechat_decoded:
-        return wechat_decoded
+    # 4) Усиленный проход + ZXing fallback
+    _log_memory_usage("detect_qr:after-enhanced")
+    enhanced = _enhanced_qr(gray)
+    if enhanced:
+        candidates.append(enhanced)
+        selected = _select_qr_candidate([enhanced], accept_fallback=False)
+        logger.info("[QR] enhanced candidate=%s; selected=%s", enhanced, selected)
+        if selected:
+            return selected
 
     _log_memory_usage("detect_qr:pre-enhanced")
-    return _enhanced_qr(gray)
+
+    # 5) Если ничего не подтвердили по шаблону — вернём первый найденный вариант (если он был)
+    final_choice = _select_qr_candidate(candidates, accept_fallback=True)
+    if final_choice:
+        logger.info("[QR] Fallback selected candidate=%s from %s", final_choice, candidates)
+    else:
+        logger.info("[QR] QR not detected by any method")
+    return final_choice
+
+
+def _select_qr_candidate(candidates: list[str], accept_fallback: bool) -> str | None:
+    """Choose the most plausible QR payload among candidates.
+
+    Preference:
+    1. Первое значение, похожее на фискальный QR (ключи t,s,fn,i,fp,n).
+    2. При включённом accept_fallback — первое непустое значение.
+    """
+    seen = set()
+    valids: list[str] = []
+    others: list[str] = []
+    for raw in candidates:
+        if not raw:
+            continue
+        candidate = raw.strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        if _looks_like_fns_qr(candidate):
+            valids.append(candidate)
+        else:
+            others.append(candidate)
+    if valids:
+        return valids[0]
+    if accept_fallback and others:
+        return others[0]
+    return None
+
+
+def _looks_like_fns_qr(payload: str) -> bool:
+    """Heuristic: check that QR string contains fiscal params before sending to FNS."""
+    if not payload:
+        return False
+    normalized = payload.strip()
+    if "?" in normalized:
+        normalized = normalized.split("?", 1)[1]
+    parts = urllib.parse.parse_qs(normalized, keep_blank_values=True)
+    required = ("t", "s", "fn", "i", "fp", "n")
+    if not all(key in parts and parts[key] and parts[key][0].strip() for key in required):
+        return False
+    ts = parts["t"][0].strip()
+    if not re.match(r"^\d{8}T\d{4}$", ts):
+        return False
+    amount_raw = parts["s"][0].replace(",", ".").strip()
+    try:
+        float(amount_raw)
+    except Exception:
+        return False
+    for key in ("fn", "i", "fp", "n"):
+        value = parts[key][0].strip()
+        if not value.isdigit():
+            return False
+    return True
 
 
 def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str | None]:
@@ -516,15 +620,15 @@ def _init_wechat_detector_locked() -> Any | None:
     return _WECHAT_DETECTOR
 
 
-def _decode_with_wechat(img) -> str | None:
-    """Try to decode a QR code using the WeChat QR detector."""
+def _decode_with_wechat(img) -> list[str]:
+    """Try to decode QR codes using the WeChat QR detector, returning all hits."""
     global _WECHAT_INIT_FAILED
     if _WECHAT_INIT_FAILED:
-        return None
+        return []
 
     with _WECHAT_LOCK:
         if _init_wechat_detector_locked() is None:
-            return None
+            return []
 
     rotations = [("original", img)]
     for rc, label in (
@@ -538,12 +642,13 @@ def _decode_with_wechat(img) -> str | None:
             continue
 
     scales = (1.0, 1.3, 1.6, 2.0)
+    candidates: list[str] = []
     for label, frame in rotations:
         for scale in scales:
             with _WECHAT_LOCK:
                 detector = _init_wechat_detector_locked()
                 if detector is None:
-                    return None
+                    return []
                 try:
                     detector.setScaleFactor(float(scale))
                 except Exception:
@@ -552,15 +657,7 @@ def _decode_with_wechat(img) -> str | None:
                     decoded, _points = detector.detectAndDecode(frame)
                 except Exception:
                     decoded = []
-            value = _first_wechat_result(decoded)
-            if value:
-                logger.info(
-                    "[QR] Found QR via WeChat detector (%s, scaleFactor=%s): %s",
-                    label,
-                    scale,
-                    value,
-                )
-                return value
+            candidates.extend(_collect_wechat_results(decoded))
 
         try:
             upscaled = cv2.resize(frame, None, fx=1.8, fy=1.8, interpolation=cv2.INTER_CUBIC)
@@ -569,7 +666,7 @@ def _decode_with_wechat(img) -> str | None:
         with _WECHAT_LOCK:
             detector = _init_wechat_detector_locked()
             if detector is None:
-                return None
+                return []
             try:
                 detector.setScaleFactor(1.0)
             except Exception:
@@ -578,26 +675,21 @@ def _decode_with_wechat(img) -> str | None:
                 decoded, _points = detector.detectAndDecode(upscaled)
             except Exception:
                 decoded = []
-        value = _first_wechat_result(decoded)
-        if value:
-            logger.info(
-                "[QR] Found QR via WeChat detector (upscaled %s): %s", label, value
-            )
-            return value
+        candidates.extend(_collect_wechat_results(decoded))
 
-    return None
+    if candidates:
+        logger.info("[QR] WeChat collected candidates: %s", candidates)
+    return candidates
 
 
-def _first_wechat_result(decoded) -> str | None:
-    """Return the first non-empty decoded value as a stripped string."""
+def _collect_wechat_results(decoded) -> list[str]:
+    """Normalize WeChat output (str or list) to a list of unique strings."""
     if not decoded:
-        return None
+        return []
     if isinstance(decoded, (list, tuple)):
-        for candidate in decoded:
-            if candidate:
-                return str(candidate).strip()
-        return None
-    return str(decoded).strip()
+        return [str(candidate).strip() for candidate in decoded if str(candidate).strip()]
+    value = str(decoded).strip()
+    return [value] if value else []
 
 
 def _truncate_payload(payload: object, limit: int = 1500) -> str:
