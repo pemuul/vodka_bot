@@ -50,9 +50,9 @@ async def set_text(message: Message) -> None:
         await admin.except_message(message, except_message_name)
         return
 
-    # не перехватываем сообщения в режиме загрузки чеков
     is_get_check = await sql_mgt.get_param(message.chat.id, 'GET_CHECK')
     if is_get_check == str(True):
+        await _send_default_hint(message)
         return
 
     # режим приёма вопросов
