@@ -228,7 +228,15 @@ def qr_to_params(qr: str) -> dict:
     if not parts:
         raise ValueError("QR строка не содержит параметров")
 
-    dt = _parse_qr_datetime(parts.get("t", ""))
+    # Некоторые сканеры/сервисы отдают дату под альтернативными ключами.
+    t_value = (
+        parts.get("t")
+        or parts.get("dt")
+        or parts.get("date")
+        or parts.get("datetime")
+        or ""
+    )
+    dt = _parse_qr_datetime(t_value)
     date_iso = dt.strftime("%Y-%m-%dT%H:%M:%S")
 
     try:
@@ -285,4 +293,3 @@ def get_receipt_by_qr(qr: str) -> Tuple[Optional[dict], Optional[str]]:
     except Exception as e:
         logger.exception("[FNS] Ошибка получения чека по QR: %s", qr)
         return None, _describe_exception(e)
-
