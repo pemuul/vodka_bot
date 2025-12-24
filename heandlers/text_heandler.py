@@ -1,5 +1,6 @@
 from aiogram import Router,  F
 from aiogram.types import Message
+from aiogram.exceptions import SkipHandler
 
 #from sql_mgt import sql_mgt.get_param, sql_mgt.set_param
 import sql_mgt
@@ -53,7 +54,7 @@ async def set_text(message: Message) -> None:
     # не перехватываем сообщения в режиме загрузки чеков
     is_get_check = await sql_mgt.get_param(message.chat.id, 'GET_CHECK')
     if is_get_check == str(True):
-        return
+        raise SkipHandler
 
     # режим приёма вопросов
     is_get_help = await sql_mgt.get_param(message.chat.id, 'GET_HELP')
@@ -76,19 +77,18 @@ async def set_photo(message: Message) -> None:
 
     is_get_check = await sql_mgt.get_param(message.chat.id, 'GET_CHECK')
     if is_get_check == str(True):
-        return
+        raise SkipHandler
 
     is_get_help = await sql_mgt.get_param(message.chat.id, 'GET_HELP')
+    if is_get_help != str(True):
+        raise SkipHandler
+
     media_payload = [{"type": "photo", "file_id": message.photo[-1].file_id}] if message.photo else None
     caption = message.caption or ''
 
-    if is_get_help == str(True):
-        await _process_question_message(
-            message,
-            caption,
-            media=media_payload,
-            question_type='photo'
-        )
-        return
-
-    await _send_default_hint(message)
+    await _process_question_message(
+        message,
+        caption,
+        media=media_payload,
+        question_type='photo'
+    )
