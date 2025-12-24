@@ -294,10 +294,13 @@ def get_receipt_by_qr(qr: str) -> Tuple[Optional[dict], Optional[str]]:
         warning = "FNS master token is not configured"
         logger.warning("[FNS] %s", warning)
         return None, warning
+    logger.info("[FNS] Запрос по QR: %s", qr)
     try:
-        logger.info("[FNS] Запрос по QR: %s", qr)
+        resolved_qr = _resolve_qr_link(qr)
+        if resolved_qr != qr:
+            logger.info("[FNS] QR link expanded: %s -> %s", qr, resolved_qr)
         token, _ = get_access_token()
-        params = qr_to_params(qr)
+        params = qr_to_params(resolved_qr)
         logger.info("[FNS] Параметры запроса: %s", _truncate_payload(params))
         msg_id = send_get_ticket(token, params)
         logger.info("[FNS] Получен MessageId: %s", msg_id)
@@ -307,6 +310,10 @@ def get_receipt_by_qr(qr: str) -> Tuple[Optional[dict], Optional[str]]:
         ticket = parse_ticket(env)
         logger.info("[FNS] Распарсенный чек: %s", _truncate_payload(ticket))
         return ticket, None
+    except ValueError as e:
+        warning = _describe_exception(e)
+        logger.warning("[FNS] QR не содержит необходимых данных: %s", warning)
+        return None, warning
     except Exception as e:
         logger.exception("[FNS] Ошибка получения чека по QR: %s", qr)
         return None, _describe_exception(e)
