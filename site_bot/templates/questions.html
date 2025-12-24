@@ -124,6 +124,59 @@
       let filtered    = [...questionsData];
       let currentPage = 1;
 
+      function buildMessageElement(msg) {
+        const div = document.createElement("div");
+        div.classList.add("mb-2", "p-2", "rounded");
+        div.style.maxWidth = "75%";
+        if (msg.sender === "user") {
+          div.classList.add("bg-white", "text-dark", "border");
+          div.style.alignSelf = "flex-start";
+        } else {
+          div.classList.add("bg-primary", "text-white");
+          div.style.alignSelf = "flex-end";
+        }
+
+        const fragment = document.createDocumentFragment();
+        if (msg.sender !== "user" && msg.is_answer) {
+          const label = document.createElement("small");
+          label.classList.add("d-block");
+          label.textContent = "Ответ";
+          fragment.appendChild(label);
+        }
+
+        if (msg.text) {
+          const p = document.createElement("p");
+          p.classList.add("mb-1");
+          p.textContent = msg.text;
+          fragment.appendChild(p);
+        }
+
+        if (Array.isArray(msg.media) && msg.media.length) {
+          const mediaWrap = document.createElement("div");
+          mediaWrap.classList.add("d-flex", "flex-wrap", "gap-2", "mb-1");
+          msg.media.forEach(m => {
+            if (m?.type === "photo" && m?.file_id) {
+              const img = document.createElement("img");
+              img.src = `/api/file/${m.file_id}`;
+              img.alt = "Фото";
+              img.classList.add("rounded", "border");
+              img.style.maxWidth = "160px";
+              img.style.maxHeight = "160px";
+              mediaWrap.appendChild(img);
+            }
+          });
+          fragment.appendChild(mediaWrap);
+        }
+
+        const ts = document.createElement("small");
+        ts.classList.add("text-muted");
+        ts.textContent = msg.timestamp;
+        fragment.appendChild(ts);
+
+        div.appendChild(fragment);
+        return div;
+      }
+
       function getPaginated() {
         const per = recordsPerPageSelect.value === "all"
           ? filtered.length
@@ -226,24 +279,9 @@
             history = [];
           }
         }
+        history = history || [];
         history.forEach(msg => {
-          const div = document.createElement("div");
-          div.classList.add("mb-2","p-2","rounded");
-          div.style.maxWidth = "75%";
-          if (msg.sender === "user") {
-            div.classList.add("bg-white","text-dark","border");
-            div.style.alignSelf = "flex-start";
-          } else {
-            div.classList.add("bg-primary","text-white");
-            div.style.alignSelf = "flex-end";
-          }
-          let html = `<p class="mb-1">${msg.text}</p>`;
-          if (msg.sender !== "user" && msg.is_answer) {
-            html = `<small class="d-block">Ответ</small>` + html;
-          }
-          html += `<small class="text-muted">${msg.timestamp}</small>`;
-          div.innerHTML = html;
-          chatWindow.appendChild(div);
+          chatWindow.appendChild(buildMessageElement(msg));
         });
         chatWindow.scrollTop = chatWindow.scrollHeight;
 
@@ -261,16 +299,12 @@
             if (!resp.ok) throw new Error("HTTP error");
             const data = await resp.json();
             const ts = data.timestamp;
-            const newMsg = { sender: "admin", text, timestamp: ts, is_answer: true };
+            const newMsg = { sender: "admin", text, timestamp: ts, is_answer: true, media: [] };
             history.push(newMsg);
             question.status = "Отвечено";
             renderQuestions();
 
-            const div = document.createElement("div");
-            div.classList.add("mb-2","p-2","rounded","bg-primary","text-white");
-            div.style.alignSelf = "flex-end"; div.style.maxWidth = "75%";
-            div.innerHTML = `<small class="d-block">Ответ</small><p class="mb-1">${text}</p><small class="text-muted">${ts}</small>`;
-            chatWindow.appendChild(div);
+            chatWindow.appendChild(buildMessageElement(newMsg));
             chatWindow.scrollTop = chatWindow.scrollHeight;
             input.value = "";
           } catch(err) {

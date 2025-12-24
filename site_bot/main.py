@@ -306,6 +306,7 @@ _set_scheduled_messages_column_flags(_get_table_column_names("scheduled_messages
 
 HAS_PM_IS_ANSWER = 'is_answer' in participant_messages_table.c
 HAS_QM_IS_ANSWER = 'is_answer' in question_messages_table.c
+HAS_QM_MEDIA = 'media' in question_messages_table.c
 
 
 def _scheduled_messages_columns() -> List[Any]:
@@ -1022,11 +1023,20 @@ async def questions(request: Request):
     for m in msgs:
         qid = m["question_id"]
         is_answer = bool(m["is_answer"]) if HAS_QM_IS_ANSWER and "is_answer" in m else False
+        media_list = []
+        if HAS_QM_MEDIA:
+            media_raw = m.get("media") if hasattr(m, "get") else m["media"]
+            if media_raw:
+                try:
+                    media_list = json.loads(media_raw)
+                except Exception:
+                    media_list = []
         messages_by_q.setdefault(qid, []).append({
             "sender": m["sender"],
             "text": m["text"],
             "is_answer": is_answer,
             "timestamp": m["timestamp"].isoformat(),
+            "media": media_list,
         })
     return templates.TemplateResponse(
         "questions.html",
@@ -1084,11 +1094,20 @@ async def api_get_question_messages(question_id: int):
     messages = []
     for m in rows:
         is_answer = bool(m["is_answer"]) if HAS_QM_IS_ANSWER and "is_answer" in m else False
+        media_list = []
+        if HAS_QM_MEDIA:
+            media_raw = m.get("media") if hasattr(m, "get") else m["media"]
+            if media_raw:
+                try:
+                    media_list = json.loads(media_raw)
+                except Exception:
+                    media_list = []
         messages.append({
             "sender": m["sender"],
             "text": m["text"],
             "is_answer": is_answer,
             "timestamp": m["timestamp"].isoformat(),
+            "media": media_list,
         })
     return {"messages": messages}
 
@@ -2322,6 +2341,8 @@ async def answer_question(question_id: int, ans: AnswerIn):
     }
     if HAS_QM_IS_ANSWER:
         qmsg_values["is_answer"] = True
+    if HAS_QM_MEDIA:
+        qmsg_values["media"] = None
     await database.execute(
         question_messages_table.insert().values(**qmsg_values)
     )
