@@ -842,6 +842,9 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
         logger.info("[QR] Receipt %s QR detected: %s", receipt_id, qr_data)
     else:
         logger.info("[QR] Receipt %s QR not detected", receipt_id)
+    if qr_data and not _looks_like_fns_qr(qr_data):
+        logger.info("[QR] Receipt %s QR looks non-fiscal, skipping FNS duplicate check: %s", receipt_id, qr_data)
+        qr_data = None
     ocr_result: tuple[bool, str | None] | None = None
     final_status: str | None = None
     comment_text: str | None = None
