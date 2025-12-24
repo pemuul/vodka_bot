@@ -1145,11 +1145,19 @@ async def add_question(user_tg_id: int, text: str, type_: str = 'text', status: 
 
 
 @with_connection
-async def add_question_message(question_id: int, sender: str, text: str, is_answer: bool = False, conn=None) -> int:
+async def add_question_message(
+    question_id: int,
+    sender: str,
+    text: str,
+    is_answer: bool = False,
+    media: list[dict[str, Any]] | None = None,
+    conn=None,
+) -> int:
     cursor = await conn.cursor()
+    media_json = json.dumps(media) if media else None
     await cursor.execute(
-        "INSERT INTO question_messages (question_id, sender, text, is_answer) VALUES (?, ?, ?, ?)",
-        (question_id, sender, text, int(is_answer)),
+        "INSERT INTO question_messages (question_id, sender, text, is_answer, media) VALUES (?, ?, ?, ?, ?)",
+        (question_id, sender, text, int(is_answer), media_json),
     )
     await conn.commit()
     return cursor.lastrowid

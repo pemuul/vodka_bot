@@ -271,8 +271,11 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                         replace_last_messages = False
 
     # для определённых id выполняем действия
+    is_check_section = tree_item.item_id == 'check'
+    is_help_section = tree_item.item_id == 'help'
+
     if tree_item.item_id:
-        if tree_item.item_id == 'check':
+        if is_check_section:
             if await sql_mgt.is_user_blocked(message.chat.id):
                 await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))
                 await message.answer(
@@ -284,13 +287,13 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                     await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))
                 else:
                     await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(True))
-        elif tree_item.item_id == 'help':
+        elif is_help_section:
             await sql_mgt.set_param(message.chat.id, 'GET_HELP', str(True))
-    else:
-        if await sql_mgt.get_param(message.chat.id, 'GET_CHECK') == str(True):
-            await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))
-        if await sql_mgt.get_param(message.chat.id, 'GET_HELP') == str(True):
-            await sql_mgt.set_param(message.chat.id, 'GET_HELP', str(False))
+
+    if not is_check_section and await sql_mgt.get_param(message.chat.id, 'GET_CHECK') == str(True):
+        await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))
+    if not is_help_section and await sql_mgt.get_param(message.chat.id, 'GET_HELP') == str(True):
+        await sql_mgt.set_param(message.chat.id, 'GET_HELP', str(False))
 
     # получаем список изображений из параметров
     if last_media_message_str != '':
