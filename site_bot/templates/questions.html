@@ -105,6 +105,42 @@
     // данные из бэка
     let questionsData = {{ questions_data | default([]) | tojson }};
     let messagesData  = {{ messages_data | default({}) | tojson }};
+    let imageModalRef = null;
+
+    function ensureImageModal() {
+      if (imageModalRef) return imageModalRef;
+      const overlay = document.createElement("div");
+      overlay.id = "question-image-modal";
+      overlay.style.position = "fixed";
+      overlay.style.inset = "0";
+      overlay.style.backgroundColor = "rgba(0,0,0,0.75)";
+      overlay.style.display = "flex";
+      overlay.style.alignItems = "center";
+      overlay.style.justifyContent = "center";
+      overlay.style.zIndex = "2000";
+      overlay.style.padding = "16px";
+      overlay.style.backdropFilter = "blur(2px)";
+      overlay.classList.add("d-none");
+
+      const img = document.createElement("img");
+      img.style.maxWidth = "100%";
+      img.style.maxHeight = "100%";
+      img.style.objectFit = "contain";
+      img.classList.add("rounded", "shadow");
+
+      overlay.appendChild(img);
+      overlay.addEventListener("click", () => overlay.classList.add("d-none"));
+
+      document.body.appendChild(overlay);
+      imageModalRef = { overlay, img };
+      return imageModalRef;
+    }
+
+    function openImageModal(src) {
+      const ref = ensureImageModal();
+      ref.img.src = src;
+      ref.overlay.classList.remove("d-none");
+    }
 
     document.addEventListener("DOMContentLoaded", () => {
       const listContainer        = document.getElementById("questions-list");
@@ -136,11 +172,11 @@
           div.style.alignSelf = "flex-end";
         }
 
-        const fragment = document.createDocumentFragment();
-        if (msg.sender !== "user" && msg.is_answer) {
-          const label = document.createElement("small");
-          label.classList.add("d-block");
-          label.textContent = "Ответ";
+          const fragment = document.createDocumentFragment();
+          if (msg.sender !== "user" && msg.is_answer) {
+            const label = document.createElement("small");
+            label.classList.add("d-block");
+            label.textContent = "Ответ";
           fragment.appendChild(label);
         }
 
@@ -162,6 +198,26 @@
               img.classList.add("rounded", "border");
               img.style.maxWidth = "160px";
               img.style.maxHeight = "160px";
+              img.style.cursor = "pointer";
+              img.style.display = "none";
+
+              const placeholder = document.createElement("div");
+              placeholder.classList.add("border", "rounded", "d-flex", "align-items-center", "justify-content-center");
+              placeholder.style.width = "160px";
+              placeholder.style.height = "160px";
+              placeholder.innerHTML = `<div class="spinner-border spinner-border-sm text-secondary" role="status"><span class="visually-hidden">Loading...</span></div>`;
+
+              img.onload = () => {
+                placeholder.remove();
+                img.style.display = "block";
+              };
+              img.onerror = () => {
+                placeholder.innerHTML = `<small class="text-muted">Не удалось загрузить</small>`;
+              };
+
+              img.onclick = () => openImageModal(img.src);
+
+              mediaWrap.appendChild(placeholder);
               mediaWrap.appendChild(img);
             }
           });
