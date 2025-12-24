@@ -221,10 +221,27 @@ def _split_qr_query(qr: str) -> dict:
     return {key.lower(): value for key, value in parse_qsl(qr, keep_blank_values=True)}
 
 
+def _resolve_qr_link(qr: str) -> str:
+    """Follow short links (e.g., clck.ru) to extract actual QR query."""
+
+    qr = qr.strip()
+    if not qr or not qr.lower().startswith(("http://", "https://")):
+        return qr
+    try:
+        resp = requests.get(qr, allow_redirects=True, timeout=10)
+        if resp.url and resp.url != qr:
+            logger.info("[FNS] QR link expanded: %s -> %s", qr, resp.url)
+            return resp.url
+    except Exception as exc:  # pragma: no cover - network issues
+        logger.warning("[FNS] Не удалось раскрыть QR ссылку %s: %s", qr, exc)
+    return qr
+
+
 def qr_to_params(qr: str) -> dict:
     """Convert qr query string into FNS fiscal parameters."""
 
-    parts = _split_qr_query(qr)
+    resolved_qr = _resolve_qr_link(qr)
+    parts = _split_qr_query(resolved_qr)
     if not parts:
         raise ValueError("QR строка не содержит параметров")
 
