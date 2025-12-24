@@ -412,7 +412,7 @@ def _detect_qr(path: str) -> str | None:
     _log_memory_usage("detect_qr:post-basic")
 
     # 4) Усиленный проход + ZXing fallback
-    _log_memory_usage("detect_qr:after-enhanced")
+    _log_memory_usage("detect_qr:pre-enhanced")
     enhanced = _enhanced_qr(gray)
     if enhanced:
         candidates.append(enhanced)
@@ -421,15 +421,20 @@ def _detect_qr(path: str) -> str | None:
         if selected:
             return selected
 
-    _log_memory_usage("detect_qr:pre-enhanced")
+    _log_memory_usage("detect_qr:after-enhanced")
 
-    # 5) Если ничего не подтвердили по шаблону — вернём первый найденный вариант (если он был)
-    final_choice = _select_qr_candidate(candidates, accept_fallback=True)
+    # 5) Финальный выбор: только фискальные строки
+    final_choice = _select_qr_candidate(candidates, accept_fallback=False)
+    if candidates:
+        logger.info("[QR] Collected QR candidates (deduped): %s", list(dict.fromkeys(candidates)))
     if final_choice:
-        logger.info("[QR] Fallback selected candidate=%s from %s", final_choice, candidates)
+        logger.info("[QR] Selected fiscal candidate=%s", final_choice)
+        return final_choice
+    if candidates:
+        logger.info("[QR] No fiscal-formatted QR among candidates, skipping FNS lookup")
     else:
         logger.info("[QR] QR not detected by any method")
-    return final_choice
+    return None
 
 
 def _select_qr_candidate(candidates: list[str], accept_fallback: bool) -> str | None:
