@@ -221,41 +221,14 @@ def _split_qr_query(qr: str) -> dict:
     return {key.lower(): value for key, value in parse_qsl(qr, keep_blank_values=True)}
 
 
-def _resolve_qr_link(qr: str) -> str:
-    """Follow short links (e.g., clck.ru) to extract actual QR query."""
-
-    qr = qr.strip()
-    if not qr or not qr.lower().startswith(("http://", "https://")):
-        return qr
-    try:
-        resp = requests.get(qr, allow_redirects=True, timeout=10)
-        if resp.url and resp.url != qr:
-            logger.info("[FNS] QR link expanded: %s -> %s", qr, resp.url)
-            return resp.url
-    except Exception as exc:  # pragma: no cover - network issues
-        logger.warning("[FNS] Не удалось раскрыть QR ссылку %s: %s", qr, exc)
-    return qr
-
-
 def qr_to_params(qr: str) -> dict:
     """Convert qr query string into FNS fiscal parameters."""
 
-    resolved_qr = _resolve_qr_link(qr)
-    parts = _split_qr_query(resolved_qr)
-    logger.info("[FNS] QR for parsing: %s", resolved_qr)
-    logger.info("[FNS] QR query params: %s", parts if parts else "<empty>")
+    parts = _split_qr_query(qr)
     if not parts:
         raise ValueError("QR строка не содержит параметров")
 
-    # Некоторые сканеры/сервисы отдают дату под альтернативными ключами.
-    t_value = (
-        parts.get("t")
-        or parts.get("dt")
-        or parts.get("date")
-        or parts.get("datetime")
-        or ""
-    )
-    dt = _parse_qr_datetime(t_value)
+    dt = _parse_qr_datetime(parts.get("t", ""))
     date_iso = dt.strftime("%Y-%m-%dT%H:%M:%S")
 
     try:
@@ -296,13 +269,10 @@ def get_receipt_by_qr(qr: str) -> Tuple[Optional[dict], Optional[str]]:
         warning = "FNS master token is not configured"
         logger.warning("[FNS] %s", warning)
         return None, warning
-    logger.info("[FNS] Запрос по QR: %s", qr)
     try:
-        resolved_qr = _resolve_qr_link(qr)
-        if resolved_qr != qr:
-            logger.info("[FNS] QR link expanded: %s -> %s", qr, resolved_qr)
+        logger.info("[FNS] Запрос по QR: %s", qr)
         token, _ = get_access_token()
-        params = qr_to_params(resolved_qr)
+        params = qr_to_params(qr)
         logger.info("[FNS] Параметры запроса: %s", _truncate_payload(params))
         msg_id = send_get_ticket(token, params)
         logger.info("[FNS] Получен MessageId: %s", msg_id)
@@ -312,10 +282,7 @@ def get_receipt_by_qr(qr: str) -> Tuple[Optional[dict], Optional[str]]:
         ticket = parse_ticket(env)
         logger.info("[FNS] Распарсенный чек: %s", _truncate_payload(ticket))
         return ticket, None
-    except ValueError as e:
-        warning = _describe_exception(e)
-        logger.warning("[FNS] QR не содержит необходимых данных: %s", warning)
-        return None, warning
     except Exception as e:
         logger.exception("[FNS] Ошибка получения чека по QR: %s", qr)
         return None, _describe_exception(e)
+
