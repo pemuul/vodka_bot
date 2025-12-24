@@ -242,6 +242,8 @@ def qr_to_params(qr: str) -> dict:
 
     resolved_qr = _resolve_qr_link(qr)
     parts = _split_qr_query(resolved_qr)
+    logger.info("[FNS] QR for parsing: %s", resolved_qr)
+    logger.info("[FNS] QR query params: %s", parts if parts else "<empty>")
     if not parts:
         raise ValueError("QR строка не содержит параметров")
 
