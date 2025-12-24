@@ -172,22 +172,15 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
         receipts = []
         await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', '')
         if active_draw_id is None:
-            no_promo_text = (
+            text_message = (
                 "📫-Сейчас акция не проводится\n"
                 "Следите за рассылками в чат-боте – мы обязательно сообщим о старте новых промоакций!"
             )
-            text_message = f"{text_message}\n\n{no_promo_text}" if text_message else no_promo_text
         else:
-            promo_text = (
-                "Не упустите свой шанс: FINSKY ICE проводит акцию для своих покупателей!\n"
-                "Участвовать очень просто – приобретайте продукцию FINSKY ICE, отправляйте фото или QR-код чека в чат-бот и ждите результатов✨"
-            )
-            text_message = f"{text_message}\n\n{promo_text}" if text_message else promo_text
             receipts = await sql_mgt.get_user_receipts(
                 message.chat.id, limit=None, draw_id=active_draw_id
             )
             if receipts:
-                me = await global_objects.bot.get_me()
                 text_message += "\n\nВаши чеки:\n"
                 for r in receipts:
                     ts = r.get("create_dt")
@@ -197,10 +190,9 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                         name = ts.replace("T", " ")[:16]
                     else:
                         name = f"Чек #{r['id']}"
-                    link = f"https://t.me/{me.username}?start=receipt_{r['id']}"
                     status = (r.get('status') or '').lower()
                     mark = STATUS_ICON_MAP.get(status, DEFAULT_STATUS_ICON)
-                    text_message += f'<a href="{link}">{name}</a> {mark}\n'
+                    text_message += f"{name} {mark}\n"
     else:
         await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', '')
 
