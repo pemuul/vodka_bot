@@ -15,6 +15,75 @@ global_objects = None
 db_name = None
 logger = logging.getLogger(__name__)
 
+_TABLE_SCHEME_CACHE: dict[str, str] | None = None
+
+
+def _load_table_shem() -> dict[str, str]:
+    global _TABLE_SCHEME_CACHE
+    if _TABLE_SCHEME_CACHE is not None:
+        return _TABLE_SCHEME_CACHE
+
+    current_directory = os.path.dirname(os.path.abspath(__file__))
+    table_shem_path = os.path.join(current_directory, "table_shem.json")
+    with open(table_shem_path, "rb") as table_shem_file:
+        _TABLE_SCHEME_CACHE = json.load(table_shem_file)
+    return _TABLE_SCHEME_CACHE
+
+
+def get_table_schema_sql(table_name: str) -> str | None:
+    """Return the CREATE TABLE statement body for the given table."""
+
+    table_shem = _load_table_shem()
+    return table_shem.get(table_name)
+
+
+def _split_schema_parts(body: str) -> list[str]:
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for char in body:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(depth - 1, 0)
+        if char == "," and depth == 0:
+            piece = "".join(current).strip()
+            if piece:
+                parts.append(piece)
+            current = []
+            continue
+        current.append(char)
+    trailing = "".join(current).strip()
+    if trailing:
+        parts.append(trailing)
+    return parts
+
+
+def _parse_table_schema(create_execute_script: str) -> list[tuple[str, str]]:
+    body = create_execute_script.split("(", 1)[1].rsplit(")", 1)[0]
+    parts = _split_schema_parts(body)
+    columns: list[tuple[str, str]] = []
+    for part in parts:
+        upper = part.upper()
+        if upper.startswith("UNIQUE") or upper.startswith("PRIMARY KEY") or upper.startswith("FOREIGN KEY"):
+            continue
+        tokens = part.split()
+        if not tokens:
+            continue
+        column_name = tokens[0]
+        column_type = " ".join(tokens[1:])
+        columns.append((column_name, column_type))
+    return columns
+
+
+def get_table_schema_columns(table_name: str) -> list[tuple[str, str]]:
+    """Return ordered column definitions for the requested table."""
+
+    create_execute_script = get_table_schema_sql(table_name)
+    if not create_execute_script:
+        return []
+    return _parse_table_schema(create_execute_script)
+
 RECEIPT_COLUMNS_ORDER: list[tuple[str, str]] = [
     ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
     ("number", "TEXT"),
@@ -105,9 +174,7 @@ async def recreate_table_with_new_schema(conn, table_name, new_schema, existing_
 
 async def create_or_update_tables(conn, schema_dict):
     for table_name, create_execute_script in schema_dict.items():
-        table_schema_raw = create_execute_script.split('(', 1)[1].rstrip(')')
-        columns = table_schema_raw.split(', ')
-        new_schema = {col.split()[0]: ''.join(col.split()[1]) for col in columns if not col[:6] in ['UNIQUE', 'PRIMAR']}
+        column_defs = dict(_parse_table_schema(create_execute_script))
 
         # Проверяем, существует ли таблица
         cursor = await conn.cursor()
@@ -116,21 +183,14 @@ async def create_or_update_tables(conn, schema_dict):
 
         if table_exists:
             # Обновляем таблицу, если она существует
-            await update_table(conn, table_name, new_schema)
+            await update_table(conn, table_name, column_defs)
         else:
             # Создаем таблицу, если её нет
             await create_table(conn, create_execute_script)
 
 
 async def create_db():
-    current_directory = os.path.dirname(os.path.abspath(__file__))
-    table_shem_path = os.path.join(current_directory, 'table_shem.json')
-    #print(table_shem_path)
-    #table_shem_path = '/Users/romanzhdanov/My_project/information_telegram_bot/table_shem.json'
-
-    with open(table_shem_path, 'rb') as table_shem_file:
-        # Загружаем переменные из файла
-        table_shem = json.load(table_shem_file)
+    table_shem = _load_table_shem()
 
     async with aiosqlite.connect(db_name) as conn:
         # Создаем таблицу
@@ -956,16 +1016,11 @@ async def append_additional_fields(sales_no:str, additional_fields:dict, conn:No
 # ==================================================================
 
 
-def create_db_file():   
+def create_db_file():
     # Проверяем, существует ли файл в исходном каталоге
     if not os.path.exists(db_name):
         # Если файл не существует, копируем его
-        current_directory = os.path.dirname(os.path.abspath(__file__))
-        table_shem_path = os.path.join(current_directory, 'table_shem.json')
-
-        with open(table_shem_path, 'rb') as table_shem_file:
-            # Загружаем переменные из файла
-            table_shem = json.load(table_shem_file)
+        table_shem = _load_table_shem()
         
         import sqlite3
 

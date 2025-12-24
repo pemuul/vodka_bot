@@ -244,7 +244,7 @@
 
             if (receipts.length) {
               const header = document.createElement('li');
-              header.innerHTML = '<h6 class="dropdown-header">Нераспознанные чеки</h6>';
+              header.innerHTML = '<h6 class="dropdown-header">Чеки с ошибкой автообработки</h6>';
               menu.appendChild(header);
               receipts.forEach(r => menu.appendChild(
                 createItem(`/receipts?open=${r.id}`, 'bi-receipt text-danger', r.text)

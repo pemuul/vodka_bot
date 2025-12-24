@@ -264,7 +264,11 @@ async def age_no_handler(call: CallbackQuery):
 @router.callback_query(F.data == "age_retry")
 async def age_retry_handler(call: CallbackQuery):
     await set_registration_stage(call.from_user.id, "age")
-    await commands.delete_this_message(call.message)
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await commands.delete_this_message(call.message, force=True)
     await send_age_question(call.message)
     await call.answer()
 
@@ -289,13 +293,13 @@ async def privacy_yes_handler(call: CallbackQuery):
 @router.callback_query(F.data == "privacy_no")
 async def privacy_no_handler(call: CallbackQuery):
     kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="Вернуться в начало", callback_data="start_over")]]
+        inline_keyboard=[[InlineKeyboardButton(text="Вернуться", callback_data="privacy_retry")]]
     )
     try:
         await commands.delete_message_by_id(call.message.chat.id, call.message.message_id - 1)
     except Exception:
         pass
-    await set_registration_stage(call.from_user.id, "start")
+    await set_registration_stage(call.from_user.id, "privacy")
     await call.message.edit_text(
         "Обязательно возвращайтесь, если передумаете. До новых встреч! 👋",
         reply_markup=kb,
@@ -303,11 +307,15 @@ async def privacy_no_handler(call: CallbackQuery):
     await call.answer()
 
 
-@router.callback_query(F.data == "start_over")
-async def start_over_handler(call: CallbackQuery):
-    await set_registration_stage(call.from_user.id, "start")
-    await commands.delete_this_message(call.message)
-    await send_greeting(call.message)
+@router.callback_query(F.data == "privacy_retry")
+async def privacy_retry_handler(call: CallbackQuery):
+    await set_registration_stage(call.from_user.id, "privacy")
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await commands.delete_this_message(call.message, force=True)
+    await send_privacy_policy(call.message)
     await call.answer()
 
 
