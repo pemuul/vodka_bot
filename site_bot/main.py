@@ -1025,12 +1025,17 @@ async def questions(request: Request):
         is_answer = bool(m["is_answer"]) if HAS_QM_IS_ANSWER and "is_answer" in m else False
         media_list = []
         if HAS_QM_MEDIA:
-            media_raw = m.get("media") if hasattr(m, "get") else m["media"]
-            if media_raw:
+            media_raw = None
+            try:
+                media_raw = m._mapping.get("media")  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            if media_raw is None:
                 try:
-                    media_list = json.loads(media_raw)
+                    media_raw = m["media"]
                 except Exception:
-                    media_list = []
+                    media_raw = None
+            media_list = _parse_media_field(media_raw)
         messages_by_q.setdefault(qid, []).append({
             "sender": m["sender"],
             "text": m["text"],
@@ -1096,12 +1101,17 @@ async def api_get_question_messages(question_id: int):
         is_answer = bool(m["is_answer"]) if HAS_QM_IS_ANSWER and "is_answer" in m else False
         media_list = []
         if HAS_QM_MEDIA:
-            media_raw = m.get("media") if hasattr(m, "get") else m["media"]
-            if media_raw:
+            media_raw = None
+            try:
+                media_raw = m._mapping.get("media")  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            if media_raw is None:
                 try:
-                    media_list = json.loads(media_raw)
+                    media_raw = m["media"]
                 except Exception:
-                    media_list = []
+                    media_raw = None
+            media_list = _parse_media_field(media_raw)
         messages.append({
             "sender": m["sender"],
             "text": m["text"],
@@ -2311,6 +2321,24 @@ async def api_send_message(user_tg_id: int, msg_in: SendMessageIn):
         "text": msg_in.text,
         "timestamp": ts
     }
+
+
+def _parse_media_field(raw_value: Any) -> list[dict[str, Any]]:
+    """Safely parse serialized media from the DB."""
+    if not raw_value:
+        return []
+    try:
+        if isinstance(raw_value, (bytes, bytearray)):
+            raw_value = raw_value.decode("utf-8")
+        if isinstance(raw_value, str):
+            parsed = json.loads(raw_value)
+        else:
+            parsed = raw_value
+        if isinstance(parsed, list):
+            return [m for m in parsed if isinstance(m, dict)]
+    except Exception:
+        logger.exception("Failed to parse question media")
+    return []
 
 
 class AnswerIn(BaseModel):
