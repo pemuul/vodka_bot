@@ -172,11 +172,17 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
         receipts = []
         await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', '')
         if active_draw_id is None:
-            text_message = (
-                "На данный момент активных розыгрышей нету.\n"
-                "Мы сообщим вам, когда можно будет принять участие в новом!"
+            no_promo_text = (
+                "📫-Сейчас акция не проводится\n"
+                "Следите за рассылками в чат-боте – мы обязательно сообщим о старте новых промоакций!"
             )
+            text_message = f"{text_message}\n\n{no_promo_text}" if text_message else no_promo_text
         else:
+            promo_text = (
+                "Не упустите свой шанс: FINSKY ICE проводит акцию для своих покупателей!\n"
+                "Участвовать очень просто – приобретайте продукцию FINSKY ICE, отправляйте фото или QR-код чека в чат-бот и ждите результатов✨"
+            )
+            text_message = f"{text_message}\n\n{promo_text}" if text_message else promo_text
             receipts = await sql_mgt.get_user_receipts(
                 message.chat.id, limit=None, draw_id=active_draw_id
             )

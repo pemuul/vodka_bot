@@ -31,6 +31,13 @@
         {% endif %}
         <input type="file" class="form-control" id="rules-file" name="rules_file" />
       </div>
+      <div class="mb-3">
+        <label for="catalog-file" class="form-label">Электронный каталог коктейлей</label>
+        {% if catalog_url %}
+        <p><a href="{{ catalog_url }}" target="_blank">Текущий файл</a></p>
+        {% endif %}
+        <input type="file" class="form-control" id="catalog-file" name="catalog_file" />
+      </div>
       <button type="submit" class="btn btn-primary">Сохранить</button>
     </form>
   </div>
