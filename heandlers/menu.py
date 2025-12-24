@@ -181,6 +181,7 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                 message.chat.id, limit=None, draw_id=active_draw_id
             )
             if receipts:
+                me = await global_objects.bot.get_me()
                 text_message += "\n\nВаши чеки:\n"
                 for r in receipts:
                     ts = r.get("create_dt")
@@ -190,9 +191,10 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                         name = ts.replace("T", " ")[:16]
                     else:
                         name = f"Чек #{r['id']}"
+                    link = f"https://t.me/{me.username}?start=receipt_{r['id']}"
                     status = (r.get('status') or '').lower()
                     mark = STATUS_ICON_MAP.get(status, DEFAULT_STATUS_ICON)
-                    text_message += f"{name} {mark}\n"
+                    text_message += f'<a href="{link}">{name}</a> {mark}\n'
     else:
         await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', '')
 
@@ -214,13 +216,19 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
             print(f"Не удалось удалить служебное сообщение меню: {error}")
 
         if replace:
-            await message.edit_text(text_message, reply_markup=inline_kb, parse_mode=ParseMode.HTML)
+            await message.edit_text(
+                text_message,
+                reply_markup=inline_kb,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
         else:
             last_message = await message.answer(
                 text_message,
                 reply_markup=inline_kb,
                 parse_mode=ParseMode.HTML,
-                disable_notification=True
+                disable_notification=True,
+                disable_web_page_preview=True,
             )
             last_message_id_new = last_message.message_id
             await sql_mgt.set_param(message.chat.id, 'LAST_MESSAGE_ID', str(last_message_id_new))
@@ -242,13 +250,19 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                         replace_last_messages = False
     else:
         if replace:
-            await message.edit_text(text_message, reply_markup=reply_kb, parse_mode=ParseMode.HTML)
+            await message.edit_text(
+                text_message,
+                reply_markup=reply_kb,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
         else:
             last_message = await message.answer(
                 text_message,
                 reply_markup=reply_kb,
                 parse_mode=ParseMode.HTML,
-                disable_notification=True
+                disable_notification=True,
+                disable_web_page_preview=True,
             )
             last_message_id_new = last_message.message_id
             await sql_mgt.set_param(message.chat.id, 'LAST_MESSAGE_ID', str(last_message_id_new))
