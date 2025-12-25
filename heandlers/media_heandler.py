@@ -249,6 +249,7 @@ def _ocr_worker_job(path: str, keywords: list[str], log_token: str) -> tuple[boo
         _worker_log(log_token, "extract-text:start")
         text = _extract_text(str(image_path))
         _worker_log(log_token, f"extract-text:done length={len(text)}")
+        _worker_log(log_token, f"extract-text:excerpt={_log_excerpt(text)}")
         _worker_log_memory(log_token, "after-extract")
     except FileNotFoundError:
         _worker_log(log_token, "extract-text:error file-not-found")
@@ -267,7 +268,21 @@ def _ocr_worker_job(path: str, keywords: list[str], log_token: str) -> tuple[boo
 
     lower = text.casefold()
     vodka = any(k in lower for k in keywords)
-    _worker_log(log_token, f"keywords:found={vodka}")
+    if vodka:
+        _worker_log(log_token, f"keywords:found={vodka}")
+    else:
+        try:
+            _worker_log(log_token, "extract-text-fallback:start langs=ru,en")
+            text_fb = _extract_text(str(image_path), languages=("ru", "en"))
+            _worker_log(log_token, f"extract-text-fallback:done length={len(text_fb)}")
+            _worker_log(log_token, f"extract-text-fallback:excerpt={_log_excerpt(text_fb)}")
+            vodka = any(k in text_fb.casefold() for k in keywords)
+            _worker_log(log_token, f"keywords:found={vodka} (fallback ru+en)")
+        except Exception as exc:
+            _worker_log(log_token, f"extract-text-fallback:error {exc}")
+            pass
+    if not vodka:
+        _worker_log(log_token, "keywords:found=False")
     _worker_log_memory(log_token, "after-keywords")
     _worker_log(log_token, "worker-exit")
     return vodka, None
@@ -517,6 +532,7 @@ def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str 
     logger.info("[OCR-TRACE] running OCR inline")
     try:
         text = extract_text(path)
+        logger.info("[OCR-TRACE] ocr-text length=%s excerpt=%s", len(text), _log_excerpt(text))
     except FileNotFoundError:
         logger.warning("[QR] OCR image missing: %s", path)
         return False, "изображение не найдено"
@@ -530,7 +546,18 @@ def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str 
 
     lower = text.casefold()
     vodka = any(k in lower for k in keywords)
-    logger.info("[OCR-TRACE] inline result vodka=%s", vodka)
+    if vodka:
+        logger.info("[OCR-TRACE] inline result vodka=%s", vodka)
+    else:
+        try:
+            logger.info("[OCR-TRACE] inline fallback OCR langs=ru,en start")
+            text_fb = extract_text(path, languages=("ru", "en"))
+            logger.info("[OCR-TRACE] inline fallback ocr-text length=%s excerpt=%s", len(text_fb), _log_excerpt(text_fb))
+            vodka = any(k in text_fb.casefold() for k in keywords)
+            logger.info("[OCR-TRACE] inline result vodka=%s (fallback ru+en)", vodka)
+        except Exception:
+            logger.exception("[QR] Inline OCR fallback failed for %s", path)
+            logger.info("[OCR-TRACE] inline result vodka=%s (fallback exception)", vodka)
     return vodka, None
 
 
@@ -695,6 +722,16 @@ def _collect_wechat_results(decoded) -> list[str]:
         return [str(candidate).strip() for candidate in decoded if str(candidate).strip()]
     value = str(decoded).strip()
     return [value] if value else []
+
+
+def _log_excerpt(text: str, limit: int = 400) -> str:
+    """Return a sanitized excerpt of OCR text for logs."""
+    if text is None:
+        return "<none>"
+    safe = text.replace("\n", "\\n").replace("\r", "\\r")
+    if len(safe) > limit:
+        return f"{safe[:limit]}… (truncated, total={len(safe)})"
+    return safe
 
 
 def _truncate_payload(payload: object, limit: int = 1500) -> str:
