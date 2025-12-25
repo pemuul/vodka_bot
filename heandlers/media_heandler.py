@@ -249,6 +249,7 @@ def _ocr_worker_job(path: str, keywords: list[str], log_token: str) -> tuple[boo
         _worker_log(log_token, "extract-text:start")
         text = _extract_text(str(image_path))
         _worker_log(log_token, f"extract-text:done length={len(text)}")
+        _worker_log(log_token, f"extract-text:excerpt={_log_excerpt(text)}")
         _worker_log_memory(log_token, "after-extract")
     except FileNotFoundError:
         _worker_log(log_token, "extract-text:error file-not-found")
@@ -267,7 +268,21 @@ def _ocr_worker_job(path: str, keywords: list[str], log_token: str) -> tuple[boo
 
     lower = text.casefold()
     vodka = any(k in lower for k in keywords)
-    _worker_log(log_token, f"keywords:found={vodka}")
+    if vodka:
+        _worker_log(log_token, f"keywords:found={vodka}")
+    else:
+        try:
+            _worker_log(log_token, "extract-text-fallback:start langs=ru,en")
+            text_fb = _extract_text(str(image_path), languages=("ru", "en"))
+            _worker_log(log_token, f"extract-text-fallback:done length={len(text_fb)}")
+            _worker_log(log_token, f"extract-text-fallback:excerpt={_log_excerpt(text_fb)}")
+            vodka = any(k in text_fb.casefold() for k in keywords)
+            _worker_log(log_token, f"keywords:found={vodka} (fallback ru+en)")
+        except Exception as exc:
+            _worker_log(log_token, f"extract-text-fallback:error {exc}")
+            pass
+    if not vodka:
+        _worker_log(log_token, "keywords:found=False")
     _worker_log_memory(log_token, "after-keywords")
     _worker_log(log_token, "worker-exit")
     return vodka, None
@@ -423,18 +438,18 @@ def _detect_qr(path: str) -> str | None:
 
     _log_memory_usage("detect_qr:after-enhanced")
 
-    # 5) Финальный выбор: только фискальные строки
-    final_choice = _select_qr_candidate(candidates, accept_fallback=False)
+    # 5) Финальный выбор: предпочитаем фискальные, иначе берём первый найденный
+    final_choice = _select_qr_candidate(candidates, accept_fallback=True)
     if candidates:
         logger.info("[QR] Collected QR candidates (deduped): %s", list(dict.fromkeys(candidates)))
     if final_choice:
-        logger.info("[QR] Selected fiscal candidate=%s", final_choice)
-        return final_choice
-    if candidates:
-        logger.info("[QR] No fiscal-formatted QR among candidates, skipping FNS lookup")
+        if _looks_like_fns_qr(final_choice):
+            logger.info("[QR] Selected fiscal candidate=%s", final_choice)
+        else:
+            logger.info("[QR] Selected non-fiscal candidate=%s (will be validated later)", final_choice)
     else:
         logger.info("[QR] QR not detected by any method")
-    return None
+    return final_choice
 
 
 def _select_qr_candidate(candidates: list[str], accept_fallback: bool) -> str | None:
@@ -517,6 +532,7 @@ def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str 
     logger.info("[OCR-TRACE] running OCR inline")
     try:
         text = extract_text(path)
+        logger.info("[OCR-TRACE] ocr-text length=%s excerpt=%s", len(text), _log_excerpt(text))
     except FileNotFoundError:
         logger.warning("[QR] OCR image missing: %s", path)
         return False, "изображение не найдено"
@@ -530,7 +546,18 @@ def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str 
 
     lower = text.casefold()
     vodka = any(k in lower for k in keywords)
-    logger.info("[OCR-TRACE] inline result vodka=%s", vodka)
+    if vodka:
+        logger.info("[OCR-TRACE] inline result vodka=%s", vodka)
+    else:
+        try:
+            logger.info("[OCR-TRACE] inline fallback OCR langs=ru,en start")
+            text_fb = extract_text(path, languages=("ru", "en"))
+            logger.info("[OCR-TRACE] inline fallback ocr-text length=%s excerpt=%s", len(text_fb), _log_excerpt(text_fb))
+            vodka = any(k in text_fb.casefold() for k in keywords)
+            logger.info("[OCR-TRACE] inline result vodka=%s (fallback ru+en)", vodka)
+        except Exception:
+            logger.exception("[QR] Inline OCR fallback failed for %s", path)
+            logger.info("[OCR-TRACE] inline result vodka=%s (fallback exception)", vodka)
     return vodka, None
 
 
@@ -697,6 +724,16 @@ def _collect_wechat_results(decoded) -> list[str]:
     return [value] if value else []
 
 
+def _log_excerpt(text: str, limit: int = 400) -> str:
+    """Return a sanitized excerpt of OCR text for logs."""
+    if text is None:
+        return "<none>"
+    safe = text.replace("\n", "\\n").replace("\r", "\\r")
+    if len(safe) > limit:
+        return f"{safe[:limit]}… (truncated, total={len(safe)})"
+    return safe
+
+
 def _truncate_payload(payload: object, limit: int = 1500) -> str:
     """Serialize payload objects for logging without flooding the console."""
 
@@ -842,8 +879,9 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
         logger.info("[QR] Receipt %s QR detected: %s", receipt_id, qr_data)
     else:
         logger.info("[QR] Receipt %s QR not detected", receipt_id)
+    raw_qr_data = qr_data
     if qr_data and not _looks_like_fns_qr(qr_data):
-        logger.info("[QR] Receipt %s QR looks non-fiscal, skipping FNS duplicate check: %s", receipt_id, qr_data)
+        logger.info("[QR] Receipt %s QR looks non-fiscal, skipping FNS duplicate check/FNS call: %s", receipt_id, qr_data)
         qr_data = None
     ocr_result: tuple[bool, str | None] | None = None
     final_status: str | None = None
