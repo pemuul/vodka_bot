@@ -6,7 +6,7 @@ import math
 import os
 import re
 import threading
-from aiogram.types import Message
+from aiogram.types import Message, FSInputFile
 import time
 import random
 import uuid
@@ -1031,6 +1031,17 @@ async def set_photo(message: Message) -> None:
         if await sql_mgt.is_user_blocked(message.chat.id):
             await message.reply('Вы заблокированы и не можете участвовать в розыгрыше')
             return
+        draw_id = await sql_mgt.get_active_draw_id()
+        if draw_id is None:
+            await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))
+            await message.reply(
+                "📫-Сейчас акция не проводится\n"
+                "Следите за рассылками в чат-боте – мы обязательно сообщим о старте новых промоакций!"
+            )
+            return
+        existing_receipts = await sql_mgt.get_user_receipts(
+            message.chat.id, limit=None, draw_id=draw_id
+        )
         photo = message.photo[-1]
         try:
             photo_file = await global_objects.bot.download(photo.file_id)
@@ -1040,7 +1051,6 @@ async def set_photo(message: Message) -> None:
                 f.write(photo_file.getvalue())
 
             web_path = f"/static/uploads/{fname}"
-            draw_id = await sql_mgt.get_active_draw_id()
             receipt_id = await sql_mgt.add_receipt(
                 web_path,
                 message.chat.id,
@@ -1049,9 +1059,28 @@ async def set_photo(message: Message) -> None:
                 draw_id=draw_id,
             )
             await sql_mgt.enqueue_receipt_ocr(receipt_id)
-            await message.reply(
-                'Чек загружен и находится в статусе Проверка. Как проверка будет пройдена, мы вам сообщим.'
-            )
+            receipts_total = len(existing_receipts) + 1
+            if receipts_total == 1:
+                first_receipt_text = (
+                    "Поздравляем! Теперь вы участвуете в розыгрыше призов 🎁\n"
+                    "Держите подарок – электронный каталог коктейлей FINSKY ICE🧊\n"
+                    "Чем больше чеков, тем выше шансы на победу! Хотите загрузить еще чеки?🧾"
+                )
+                catalog_path = await sql_mgt.get_param(0, "CATALOG_FILE")
+                if catalog_path:
+                    catalog_local = Path(__file__).resolve().parent.parent / "site_bot" / catalog_path.lstrip("/")
+                    if catalog_local.exists():
+                        await message.reply_document(
+                            FSInputFile(catalog_local, filename=catalog_local.name),
+                            caption=first_receipt_text,
+                        )
+                        return
+                await message.reply(first_receipt_text)
+            else:
+                await message.reply(
+                    "Чек загружен и находится в статусе Проверка.\n"
+                    "Хотите загрузить еще, чтобы повысить шансы на выигрыш? 🎁 "
+                )
             return
         except Exception:
             await message.reply('Ошибка при обработке чека. Попробуйте ещё раз.')

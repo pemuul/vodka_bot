@@ -173,8 +173,8 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
         await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', '')
         if active_draw_id is None:
             text_message = (
-                "На данный момент активных розыгрышей нету.\n"
-                "Мы сообщим вам, когда можно будет принять участие в новом!"
+                "📫-Сейчас акция не проводится\n"
+                "Следите за рассылками в чат-боте – мы обязательно сообщим о старте новых промоакций!"
             )
         else:
             receipts = await sql_mgt.get_user_receipts(
@@ -216,13 +216,19 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
             print(f"Не удалось удалить служебное сообщение меню: {error}")
 
         if replace:
-            await message.edit_text(text_message, reply_markup=inline_kb, parse_mode=ParseMode.HTML)
+            await message.edit_text(
+                text_message,
+                reply_markup=inline_kb,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
         else:
             last_message = await message.answer(
                 text_message,
                 reply_markup=inline_kb,
                 parse_mode=ParseMode.HTML,
-                disable_notification=True
+                disable_notification=True,
+                disable_web_page_preview=True,
             )
             last_message_id_new = last_message.message_id
             await sql_mgt.set_param(message.chat.id, 'LAST_MESSAGE_ID', str(last_message_id_new))
@@ -244,13 +250,19 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                         replace_last_messages = False
     else:
         if replace:
-            await message.edit_text(text_message, reply_markup=reply_kb, parse_mode=ParseMode.HTML)
+            await message.edit_text(
+                text_message,
+                reply_markup=reply_kb,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
         else:
             last_message = await message.answer(
                 text_message,
                 reply_markup=reply_kb,
                 parse_mode=ParseMode.HTML,
-                disable_notification=True
+                disable_notification=True,
+                disable_web_page_preview=True,
             )
             last_message_id_new = last_message.message_id
             await sql_mgt.set_param(message.chat.id, 'LAST_MESSAGE_ID', str(last_message_id_new))

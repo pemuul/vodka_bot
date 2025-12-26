@@ -1639,6 +1639,12 @@ async def settings(request: Request):
         .where(params_table.c.param_name == "RULE_PDF")
     )
     rules_url = row_rules["value"] if row_rules else ""
+    row_catalog = await database.fetch_one(
+        params_table.select()
+        .where(params_table.c.user_tg_id == 0)
+        .where(params_table.c.param_name == "CATALOG_FILE")
+    )
+    catalog_url = row_catalog["value"] if row_catalog else ""
     return templates.TemplateResponse(
         "settings.html",
         {
@@ -1647,6 +1653,7 @@ async def settings(request: Request):
             "keywords": keywords,
             "policy_url": policy_url,
             "rules_url": rules_url,
+            "catalog_url": catalog_url,
             "version": app.state.static_version,
         },
     )
@@ -1657,6 +1664,7 @@ async def save_settings(
     product_names: str = Form(""),
     privacy_file: UploadFile | None = File(None),
     rules_file: UploadFile | None = File(None),
+    catalog_file: UploadFile | None = File(None),
 ):
     query = sqlite_insert(params_table).values(
         user_tg_id=0, param_name="product_keywords", value=product_names
@@ -1686,6 +1694,8 @@ async def save_settings(
         await _save_upload(privacy_file, "privacy", "privacy_policy_file")
     if rules_file and rules_file.filename:
         await _save_upload(rules_file, "rules", "RULE_PDF")
+    if catalog_file and catalog_file.filename:
+        await _save_upload(catalog_file, "catalog", "CATALOG_FILE")
     return RedirectResponse("/settings", status_code=303)
 
 @app.get("/participants", response_class=HTMLResponse)
@@ -2154,6 +2164,7 @@ async def get_settings_site_all(request: Request):
             "PAYMENTS_TOKEN": data.get("PAYMENTS_TOKEN", ""),
             "privacy_policy_file": data.get("privacy_policy_file", ""),
             "RULE_PDF": data.get("RULE_PDF", ""),
+            "CATALOG_FILE": data.get("CATALOG_FILE", ""),
         }
     }
 
@@ -2165,6 +2176,7 @@ async def update_settings_site(
     payment_token: str = Form(""),
     privacy_file: UploadFile | None = File(None),
     rules_file: UploadFile | None = File(None),
+    catalog_file: UploadFile | None = File(None),
 ):
     for name, value in (("min_amount", min_order), ("PAYMENTS_TOKEN", payment_token)):
         if value:
@@ -2196,6 +2208,8 @@ async def update_settings_site(
         await _save_upload(privacy_file, "privacy", "privacy_policy_file")
     if rules_file and rules_file.filename:
         await _save_upload(rules_file, "rules", "RULE_PDF")
+    if catalog_file and catalog_file.filename:
+        await _save_upload(catalog_file, "catalog", "CATALOG_FILE")
     return {"success": True}
 
 
