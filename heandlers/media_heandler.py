@@ -64,6 +64,7 @@ _OCR_FORCE_RELEASE = _env_flag("OCR_FORCE_RELEASE", default=False)
 # память, занятая EasyOCR/PyTorch, гарантированно возвращалась системе.
 _OCR_IN_SUBPROCESS = _env_flag("OCR_IN_SUBPROCESS", default=True)
 _OCR_SUBPROCESS_TIMEOUT = int(os.getenv("OCR_SUBPROCESS_TIMEOUT", "45"))
+UNEXPECTED_MEDIA_MESSAGE = "Если вы хотите что-то уточнить, перейдите в раздел «Задать вопрос»"
 
 
 def init_object(global_objects_inp):
@@ -1071,7 +1072,10 @@ async def set_photo(message: Message) -> None:
                     catalog_local = Path(__file__).resolve().parent.parent / "site_bot" / catalog_path.lstrip("/")
                     if catalog_local.exists():
                         await message.reply_document(
-                            FSInputFile(catalog_local, filename=catalog_local.name),
+                            FSInputFile(
+                                catalog_local,
+                                filename="Finsky_Ice_Сocktails.pdf",
+                            ),
                             caption=first_receipt_text,
                         )
                         return
@@ -1087,7 +1091,7 @@ async def set_photo(message: Message) -> None:
             return
     
     if not message.chat.id in global_objects.admin_list:
-        await message.answer("Миленько, но что с этим делать, я не знаю) (если вы не админ)")
+        await message.answer(UNEXPECTED_MEDIA_MESSAGE)
         return
     
     except_message_name = await sql_mgt.get_param(message.chat.id, 'EXCEPT_MESSAGE')
@@ -1095,7 +1099,7 @@ async def set_photo(message: Message) -> None:
         await add_admin_media(message)
         return
 
-    await import_files.set_new_image(message)
+    await message.answer(UNEXPECTED_MEDIA_MESSAGE)
 
 
 async def add_admin_media(message: Message, type_file:str = 'image'):
@@ -1141,7 +1145,7 @@ async def set_video(message: Message) -> None:
     await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', 'yes')
 
     if not message.chat.id in global_objects.admin_list:
-        await message.answer("Миленько, но что с этим делать, я не знаю) (если вы не админ)")
+        await message.answer(UNEXPECTED_MEDIA_MESSAGE)
         return   
 
     except_message_name = await sql_mgt.get_param(message.chat.id, 'EXCEPT_MESSAGE')
@@ -1149,7 +1153,7 @@ async def set_video(message: Message) -> None:
         await add_admin_media(message, type_file='video')
         return
 
-    await global_objects.bot.send_message(message.from_user.id, f"У видео id:\n{message.video.file_id}", reply_to_message_id=message.message_id)
+    await message.answer(UNEXPECTED_MEDIA_MESSAGE)
 
 
 
@@ -1157,7 +1161,7 @@ async def set_video_file(message: Message) -> None:
     await sql_mgt.set_param(message.chat.id, 'DELETE_LAST_MESSAGE', 'yes')
 
     if not message.chat.id in global_objects.admin_list:
-        await message.answer("Миленько, но что с этим делать, я не знаю) (если вы не админ)")
+        await message.answer(UNEXPECTED_MEDIA_MESSAGE)
         return   
 
     except_message_name = await sql_mgt.get_param(message.chat.id, 'EXCEPT_MESSAGE')
@@ -1165,4 +1169,4 @@ async def set_video_file(message: Message) -> None:
         await add_admin_media(message, type_file='video_file')
         return
 
-    await global_objects.bot.send_message(message.from_user.id, f"У видео id:\n{message.document.file_id}", reply_to_message_id=message.message_id)
+    await message.answer(UNEXPECTED_MEDIA_MESSAGE)
