@@ -1,0 +1,506 @@
+/* ==========================================================================
+   FINSKY ICE — дизайн-система админ-панели
+   Продолжает стиль страницы входа (login.html): ледяная сине-голубая
+   палитра, Inter, мягкие тени, скруглённые карточки.
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+:root {
+  /* --- Палитра --- */
+  --ice-50:  #f4fbfd;
+  --ice-100: #eaf6fb;
+  --ice-200: #cdeaf5;
+  --ice-300: #a9dced;
+  --ice-400: #5ec6e0;
+  --ice-500: #2fb6d9;
+  --ice-600: #1a94b8;
+  --ice-700: #0f6e8c;
+  --ice-800: #0d5670;
+  --ice-900: #0a3f52;
+
+  --ink:      #16333d;
+  --ink-soft: #5b7986;
+  --ink-mute: #8aa3ad;
+
+  --surface:      #ffffff;
+  --surface-alt:  #f4fbfd;
+  --border-soft:  #dbeaf1;
+
+  --success:      #1aa971;
+  --success-soft: #e3f7ee;
+  --warning:      #e2952c;
+  --warning-soft: #fdf1de;
+  --danger:       #e34850;
+  --danger-soft:  #fdeaec;
+  --info:         #2fb6d9;
+  --info-soft:    #e6f6fb;
+  --secondary:    #6b8794;
+  --secondary-soft: #edf3f5;
+
+  --radius-sm: 0.6rem;
+  --radius:    0.9rem;
+  --radius-lg: 1.25rem;
+
+  --shadow-xs: 0 1px 2px rgba(15, 60, 75, 0.05);
+  --shadow-sm: 0 4px 14px -6px rgba(15, 90, 115, 0.12);
+  --shadow:    0 10px 30px -12px rgba(15, 110, 140, 0.25);
+  --shadow-lg: 0 20px 45px -15px rgba(15, 110, 140, 0.35);
+
+  /* --- Мост в переменные Bootstrap 5.3 (каскадируются в text-*/bg-*/border-* утилиты) --- */
+  --bs-primary: var(--ice-600);
+  --bs-primary-rgb: 26, 148, 184;
+  --bs-secondary: var(--secondary);
+  --bs-secondary-rgb: 107, 135, 148;
+  --bs-success: var(--success);
+  --bs-success-rgb: 26, 169, 113;
+  --bs-danger: var(--danger);
+  --bs-danger-rgb: 227, 72, 80;
+  --bs-warning: var(--warning);
+  --bs-warning-rgb: 226, 149, 44;
+  --bs-info: var(--info);
+  --bs-info-rgb: 47, 182, 217;
+  --bs-link-color: var(--ice-700);
+  --bs-link-color-rgb: 15, 110, 140;
+  --bs-link-hover-color: var(--ice-800);
+  --bs-link-hover-color-rgb: 13, 86, 112;
+  --bs-body-color: var(--ink);
+  --bs-body-color-rgb: 22, 51, 61;
+  --bs-body-bg: var(--surface-alt);
+  --bs-border-color: var(--border-soft);
+  --bs-border-color-translucent: var(--border-soft);
+  --bs-border-radius: var(--radius-sm);
+  --bs-border-radius-sm: 0.5rem;
+  --bs-border-radius-lg: var(--radius);
+  --bs-border-radius-xl: var(--radius-lg);
+  --bs-box-shadow: var(--shadow);
+  --bs-box-shadow-sm: var(--shadow-sm);
+  --bs-body-font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* ==========================================================================
+   База
+   ========================================================================== */
+
+html, body {
+  height: 100%;
+}
+
+body {
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow: hidden;
+  background:
+    radial-gradient(1100px 500px at 12% -15%, var(--ice-100) 0%, transparent 55%),
+    radial-gradient(800px 450px at 105% 0%, #eaf7fb 0%, transparent 50%),
+    var(--surface-alt);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.text-muted {
+  color: var(--ink-mute) !important;
+}
+
+::selection {
+  background: var(--ice-200);
+  color: var(--ink);
+}
+
+/* тонкий скроллбар в стиле бренда */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ice-300) transparent;
+}
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background-color: var(--ice-300); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background-color: var(--ice-400); }
+
+/* ==========================================================================
+   Layout: topbar + sidebar (см. base.html)
+   ========================================================================== */
+
+.main-container {
+  display: flex;
+  height: calc(100% - 64px);
+}
+
+/* --- Topbar --- */
+.topbar {
+  height: 64px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-soft);
+  box-shadow: var(--shadow-xs);
+  z-index: 10;
+}
+
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.35rem;
+  height: 2.35rem;
+  border-radius: 0.75rem;
+  background: linear-gradient(135deg, var(--ice-500), var(--ice-700));
+  color: #fff;
+  font-size: 1.15rem;
+  box-shadow: 0 6px 16px -6px rgba(26, 148, 184, 0.55);
+  flex-shrink: 0;
+}
+
+.brand-text {
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: 0.02em;
+  color: var(--ice-800);
+  white-space: nowrap;
+}
+
+.topbar .btn-icon {
+  width: 2.35rem;
+  height: 2.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  color: var(--ink-soft);
+  background: var(--surface);
+  transition: all .15s ease;
+}
+.topbar .btn-icon:hover {
+  background: var(--ice-50);
+  color: var(--ice-700);
+  border-color: var(--ice-200);
+}
+
+#notificationsDropdown {
+  color: var(--ink-soft);
+}
+#notificationsDropdown:hover { color: var(--ice-700); }
+#notificationsDropdown .badge {
+  background: linear-gradient(135deg, var(--ice-500), var(--ice-700)) !important;
+  font-size: 0.65rem;
+}
+
+/* --- Sidebar --- */
+.sidebar {
+  width: 17.5rem;
+  background: var(--surface);
+  border-right: 1px solid var(--border-soft);
+}
+
+.sidebar .nav-pills .nav-link {
+  --bs-nav-pills-link-active-bg: transparent;
+  color: var(--ink-soft);
+  font-weight: 500;
+  font-size: 0.925rem;
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  align-items: center;
+  transition: background-color .15s ease, color .15s ease;
+}
+
+.sidebar .nav-pills .nav-link i {
+  color: var(--ink-mute);
+  font-size: 1.05rem;
+  transition: color .15s ease;
+}
+
+.sidebar .nav-pills .nav-link:hover {
+  background: var(--ice-50);
+  color: var(--ice-800);
+}
+.sidebar .nav-pills .nav-link:hover i { color: var(--ice-600); }
+
+.sidebar .nav-pills .nav-link.active {
+  background: linear-gradient(90deg, var(--ice-100), rgba(47, 182, 217, 0.05));
+  color: var(--ice-800);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--ice-600);
+}
+.sidebar .nav-pills .nav-link.active i { color: var(--ice-700); }
+
+@media (max-width: 992px) {
+  .sidebar.show {
+    box-shadow: var(--shadow-lg);
+  }
+}
+
+/* ==========================================================================
+   Заголовок страницы / хлебные крошки
+   ========================================================================== */
+
+main > .breadcrumb,
+main .breadcrumb {
+  --bs-breadcrumb-divider-color: var(--ink-mute);
+  font-size: 0.8rem;
+  margin-bottom: 0.35rem;
+}
+.breadcrumb-item a { color: var(--ink-soft); }
+.breadcrumb-item.active { color: var(--ink-mute); }
+
+main h1.h3 {
+  font-size: 1.5rem;
+  letter-spacing: -0.01em;
+}
+
+/* ==========================================================================
+   Кнопки
+   ========================================================================== */
+
+.btn {
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.btn-primary {
+  --bs-btn-color: #fff;
+  --bs-btn-bg: var(--ice-600);
+  --bs-btn-border-color: var(--ice-600);
+  --bs-btn-hover-color: #fff;
+  --bs-btn-hover-bg: var(--ice-700);
+  --bs-btn-hover-border-color: var(--ice-700);
+  --bs-btn-active-bg: var(--ice-800);
+  --bs-btn-active-border-color: var(--ice-800);
+  --bs-btn-focus-shadow-rgb: 26, 148, 184;
+  --bs-btn-disabled-bg: var(--ice-400);
+  --bs-btn-disabled-border-color: var(--ice-400);
+  background-image: linear-gradient(135deg, var(--ice-500), var(--ice-700));
+  border: none;
+  box-shadow: 0 8px 18px -8px rgba(26, 148, 184, 0.55);
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.btn-primary:hover { transform: translateY(-1px); box-shadow: 0 12px 22px -8px rgba(26, 148, 184, 0.65); }
+.btn-primary:active { transform: translateY(0); }
+
+.btn-outline-primary {
+  --bs-btn-color: var(--ice-700);
+  --bs-btn-border-color: var(--ice-400);
+  --bs-btn-hover-color: #fff;
+  --bs-btn-hover-bg: var(--ice-600);
+  --bs-btn-hover-border-color: var(--ice-600);
+  --bs-btn-active-bg: var(--ice-700);
+  --bs-btn-active-border-color: var(--ice-700);
+  --bs-btn-focus-shadow-rgb: 26, 148, 184;
+}
+
+.btn-secondary {
+  --bs-btn-bg: var(--secondary);
+  --bs-btn-border-color: var(--secondary);
+  --bs-btn-hover-bg: #56707c;
+  --bs-btn-hover-border-color: #56707c;
+}
+
+.btn-outline-secondary {
+  --bs-btn-color: var(--ink-soft);
+  --bs-btn-border-color: var(--border-soft);
+  --bs-btn-hover-bg: var(--secondary);
+  --bs-btn-hover-border-color: var(--secondary);
+}
+
+.btn-success { --bs-btn-bg: var(--success); --bs-btn-border-color: var(--success); --bs-btn-hover-bg: #158a5c; --bs-btn-hover-border-color: #158a5c; }
+.btn-outline-danger { --bs-btn-color: var(--danger); --bs-btn-border-color: #f3c3c6; --bs-btn-hover-bg: var(--danger); --bs-btn-hover-border-color: var(--danger); }
+.btn-outline-info { --bs-btn-color: var(--ice-700); --bs-btn-border-color: var(--ice-300); --bs-btn-hover-bg: var(--ice-500); --bs-btn-hover-border-color: var(--ice-500); }
+.btn-link { color: var(--ice-700); font-weight: 600; text-decoration: none; }
+.btn-link:hover { color: var(--ice-800); }
+
+/* ==========================================================================
+   Формы
+   ========================================================================== */
+
+.form-control, .form-select {
+  border-radius: var(--radius-sm);
+  border-color: var(--border-soft);
+}
+.form-control:focus, .form-select:focus {
+  border-color: var(--ice-500);
+  box-shadow: 0 0 0 0.2rem rgba(47, 182, 217, 0.18);
+}
+.form-label {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--ink);
+}
+.form-text { color: var(--ink-mute); }
+.form-check-input:checked {
+  background-color: var(--ice-600);
+  border-color: var(--ice-600);
+}
+.form-check-input:focus {
+  border-color: var(--ice-400);
+  box-shadow: 0 0 0 0.2rem rgba(47, 182, 217, 0.18);
+}
+.input-group-text {
+  background: var(--surface-alt);
+  border-color: var(--border-soft);
+  color: var(--ink-soft);
+}
+
+/* ==========================================================================
+   Карточки
+   ========================================================================== */
+
+.card {
+  --bs-card-border-color: var(--border-soft);
+  --bs-card-cap-bg: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+.card-header {
+  font-weight: 600;
+  border-bottom-color: var(--border-soft);
+}
+.card-footer {
+  background: var(--surface);
+  border-top-color: var(--border-soft);
+}
+
+/* ==========================================================================
+   Таблицы
+   ========================================================================== */
+
+.table {
+  --bs-table-color: var(--ink);
+  --bs-table-hover-bg: var(--ice-50);
+  margin-bottom: 0;
+}
+.table thead th {
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  color: var(--ink-mute);
+  font-weight: 700;
+  border-bottom-width: 1px;
+  border-bottom-color: var(--border-soft);
+  background: var(--surface-alt);
+}
+.table td {
+  border-bottom-color: var(--border-soft);
+  vertical-align: middle;
+}
+.table-hover tbody tr {
+  transition: background-color .1s ease;
+}
+
+/* ==========================================================================
+   Значки статусов (мягкие пилюли)
+   ========================================================================== */
+
+.badge {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  border-radius: 50rem;
+  padding: 0.4em 0.85em;
+}
+
+.badge.bg-primary   { background-color: var(--info-soft) !important;      color: var(--ice-700) !important; }
+.badge.bg-info      { background-color: var(--info-soft) !important;      color: var(--ice-700) !important; }
+.badge.bg-secondary { background-color: var(--secondary-soft) !important; color: var(--ink-soft) !important; }
+.badge.bg-success   { background-color: var(--success-soft) !important;   color: var(--success) !important; }
+.badge.bg-danger    { background-color: var(--danger-soft) !important;    color: var(--danger) !important; }
+.badge.bg-warning   { background-color: var(--warning-soft) !important;   color: var(--warning) !important; }
+.badge.bg-light     { background-color: var(--surface-alt) !important;    color: var(--ink-soft) !important; border: 1px solid var(--border-soft); }
+
+/* ==========================================================================
+   Пагинация
+   ========================================================================== */
+
+.pagination {
+  --bs-pagination-color: var(--ink-soft);
+  --bs-pagination-bg: var(--surface);
+  --bs-pagination-border-color: var(--border-soft);
+  --bs-pagination-hover-bg: var(--ice-50);
+  --bs-pagination-hover-color: var(--ice-700);
+  --bs-pagination-hover-border-color: var(--ice-200);
+  --bs-pagination-active-bg: var(--ice-600);
+  --bs-pagination-active-border-color: var(--ice-600);
+  --bs-pagination-focus-box-shadow: 0 0 0 0.2rem rgba(47, 182, 217, 0.18);
+}
+.page-link { border-radius: var(--radius-sm); margin: 0 2px; }
+
+/* ==========================================================================
+   Вкладки / пилюли внутри страниц (например, этапы розыгрыша)
+   ========================================================================== */
+
+.nav-tabs {
+  --bs-nav-tabs-border-color: var(--border-soft);
+  --bs-nav-tabs-link-active-color: var(--ice-700);
+  --bs-nav-tabs-link-active-bg: var(--surface);
+  --bs-nav-tabs-link-active-border-color: var(--border-soft) var(--border-soft) var(--surface);
+  --bs-nav-tabs-link-hover-border-color: var(--border-soft) var(--border-soft) var(--border-soft);
+}
+.nav-tabs .nav-link {
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+.nav-tabs .nav-link.active {
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   Модалки / выпадающие меню / уведомления
+   ========================================================================== */
+
+.modal-content {
+  border-radius: var(--radius-lg);
+  border: none;
+  box-shadow: var(--shadow-lg);
+}
+.modal-header {
+  border-bottom-color: var(--border-soft);
+}
+.modal-footer {
+  border-top-color: var(--border-soft);
+}
+
+.dropdown-menu {
+  border-radius: var(--radius);
+  border-color: var(--border-soft);
+  box-shadow: var(--shadow);
+  padding: 0.5rem;
+}
+.dropdown-item {
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.75rem;
+}
+.dropdown-item:hover, .dropdown-item:focus {
+  background-color: var(--ice-50);
+  color: var(--ice-800);
+}
+.dropdown-header {
+  color: var(--ink-mute);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.alert {
+  border-radius: var(--radius);
+  border: none;
+}
+.alert-danger { background: var(--danger-soft); color: #a4333a; }
+.alert-success { background: var(--success-soft); color: #0f7a4e; }
+.alert-warning { background: var(--warning-soft); color: #9c6414; }
+.alert-info { background: var(--info-soft); color: var(--ice-800); }
+
+/* ==========================================================================
+   Блоки-подсказки (details.help-block, используются на нескольких страницах)
+   ========================================================================== */
+
+details.help-block {
+  border-radius: var(--radius);
+}
+details.help-block summary {
+  font-weight: 600;
+}
+details.help-block > div {
+  background: var(--ice-50) !important;
+  border-color: var(--border-soft) !important;
+  border-radius: var(--radius-sm);
+}

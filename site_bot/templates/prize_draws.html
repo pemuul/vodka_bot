@@ -1,7 +1,15 @@
 {% extends "base.html" %}
-{% block title %}Розыгрыши Призов – rtd-bot{% endblock %}
+{% block title %}Розыгрыши Призов – FINSKY ICE{% endblock %}
 
 {% block content %}
+  <style>
+    .help-icon { cursor: help; font-size: 0.85em; vertical-align: middle; opacity: 0.75; }
+    .help-icon:hover { opacity: 1; }
+    details.help-block summary { cursor: pointer; user-select: none; list-style: none; }
+    details.help-block summary::-webkit-details-marker { display: none; }
+    details.help-block summary::before { content: "▸ "; }
+    details.help-block[open] summary::before { content: "▾ "; }
+  </style>
   <!-- Навигация -->
   <nav aria-label="breadcrumb">
     <ol class="breadcrumb mb-2">
@@ -14,8 +22,8 @@
     </ol>
   </nav>
   <div class="d-flex justify-content-between align-items-center mb-4">
-    <h1 class="h3">Розыгрыши призов</h1>
-    <button id="btn-new-draw" class="btn btn-primary">Создать новый розыгрыш</button>
+    <h1 class="h3 mb-0"><i class="bi bi-trophy text-primary me-2"></i>Розыгрыши призов</h1>
+    <button id="btn-new-draw" class="btn btn-primary"><i class="bi bi-plus-lg me-1"></i>Создать новый розыгрыш</button>
   </div>
 
   <!-- Таблица -->
@@ -44,6 +52,38 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
         </div>
         <div class="modal-body d-flex flex-column" style="height: 80vh;">
+          <!-- Подсказка: как работает проверка чеков -->
+          <div class="px-3 pt-3">
+            <details class="help-block mb-3">
+              <summary class="text-primary">
+                <i class="bi bi-info-circle"></i> Как работает проверка чеков — нажмите, чтобы прочитать
+              </summary>
+              <div class="small text-muted mt-2 p-3 bg-light rounded border">
+                <p class="mb-2">
+                  <strong>Авто-валидация чеков</strong> (чекбокс ниже) — если включена, каждый
+                  загруженный чек бот проверяет сам: сканирует QR-код на фото, запрашивает данные
+                  у ФНС, а если QR не найден или ФНС недоступна — распознаёт текст на фото (OCR).
+                  Если выключена — все чеки этой акции сразу попадают к вам на страницу
+                  «Чеки» со статусом «На ручной проверке», бот их вообще не трогает.
+                </p>
+                <p class="mb-2">
+                  <strong>Правила проверки товара</strong> (список ниже, под кнопками этапов) —
+                  задают, какой именно товар и в каком количестве должен быть в чеке, чтобы он
+                  подтвердился автоматически. Каждое правило — это один товар: варианты написания
+                  (алиасы) + минимальное количество. Если у акции нет ни одного правила —
+                  используются общие ключевые слова из <a href="/settings" target="_blank">настроек
+                  сайта</a> (без проверки количества — как было раньше).
+                </p>
+                <p class="mb-0">
+                  <strong>Главный принцип безопасности:</strong> если бот не может однозначно
+                  подтвердить чек — он <u>никогда</u> не отклоняет его автоматически, а
+                  отправляет на статус «На ручной проверке». Статус «Нет товара в чеке»
+                  бот ставит только для акций без правил (старое поведение по ключевым словам).
+                  Отклонить или подтвердить чек вручную всегда можно на странице «Чеки».
+                </p>
+              </div>
+            </details>
+          </div>
           <!-- Основные поля -->
           <div class="mb-4 px-3">
             <div class="row g-3 align-items-end">
@@ -69,6 +109,16 @@
                   <option value="finished">Завершён</option>
                 </select>
               </div>
+              <div class="col-md-2">
+                <div class="form-check mt-4">
+                  <input type="checkbox" id="edit-draw-auto-validation" class="form-check-input" checked />
+                  <label for="edit-draw-auto-validation" class="form-check-label">
+                    Авто-валидация чеков
+                    <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="top"
+                       title="Включено (по умолчанию) — чек проверяется автоматически: QR → ФНС → правила ниже (или общие ключевые слова, если правил нет). Выключено — все чеки этой акции сразу уходят на ручную проверку, бот их не трогает."></i>
+                  </label>
+                </div>
+              </div>
               <div class="col-md-2 text-end">
                 <button id="btn-copy-draw" class="btn btn-outline-secondary">Копировать розыгрыш</button>
               </div>
@@ -81,6 +131,53 @@
               <button id="btn-add-stage" class="btn btn-outline-primary">Добавить этап</button>
               <button id="btn-delete-draw" class="btn btn-outline-danger">Удалить розыгрыш</button>
             </div>
+          </div>
+
+          <!-- Правила проверки чеков -->
+          <div class="px-3 mb-3">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+              <h6 class="mb-0">
+                Правила проверки чеков
+                <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="right"
+                   title="Правило описывает один товар: как он может быть написан в чеке и сколько штук нужно, чтобы чек подтвердился автоматически. Если ни одно правило не выполнено — чек уходит на ручную проверку, а не отклоняется."></i>
+              </h6>
+              <button id="btn-add-rule" class="btn btn-sm btn-outline-primary">Добавить правило</button>
+            </div>
+            <p class="text-muted small mb-2">
+              Если правил нет — используются общие ключевые слова из
+              <a href="/settings" target="_blank">настроек сайта</a> (без проверки количества).
+            </p>
+
+            <div class="row g-2 small text-muted mb-1 d-none d-md-flex">
+              <div class="col-md-3">
+                Название
+                <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
+                   title="Для вашего удобства — не участвует в проверке чека"></i>
+              </div>
+              <div class="col-md-2">
+                SKU / код
+                <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
+                   title="Необязательный внутренний артикул товара — не используется в проверке, только для вашей отчётности"></i>
+              </div>
+              <div class="col-md-3">
+                Алиасы (через ;)
+                <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
+                   title="Варианты написания товара в чеке через точку с запятой. Проверка ищет любой из вариантов как часть названия позиции, без учёта регистра. Пример: finsky;фински;финская водка"></i>
+              </div>
+              <div class="col-md-2">
+                Мин. кол-во
+                <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
+                   title="Сколько единиц товара нужно найти в чеке. Считается ТОЛЬКО по данным ФНС (реальное количество). При значении 1 чек может подтвердиться даже по фото (OCR), если ФНС недоступна."></i>
+              </div>
+              <div class="col-md-1">
+                Активно
+                <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
+                   title="Выключенные правила игнорируются при проверке чеков, но остаются сохранёнными — можно включить обратно в любой момент."></i>
+              </div>
+              <div class="col-md-1"></div>
+            </div>
+
+            <div id="draw-rules-list"></div>
           </div>
 
           <!-- Вкладки -->
@@ -135,12 +232,41 @@
     </div>
   </template>
 
+  <!-- Шаблон правила -->
+  <template id="tpl-rule-row">
+    <div class="row g-2 align-items-center mb-2 rule-row">
+      <div class="col-md-3">
+        <input type="text" class="form-control form-control-sm rule-title" placeholder="Название" />
+      </div>
+      <div class="col-md-2">
+        <input type="text" class="form-control form-control-sm rule-sku" placeholder="SKU / код товара" />
+      </div>
+      <div class="col-md-3">
+        <input type="text" class="form-control form-control-sm rule-aliases" placeholder="Алиасы через ;" />
+      </div>
+      <div class="col-md-2">
+        <input type="number" min="1" class="form-control form-control-sm rule-min-quantity" placeholder="Мин. кол-во" />
+      </div>
+      <div class="col-md-1 form-check">
+        <input type="checkbox" class="form-check-input rule-is-active" checked />
+        <label class="form-check-label small">Активно</label>
+      </div>
+      <div class="col-md-1 text-end">
+        <button type="button" class="btn btn-sm btn-outline-danger btn-delete-rule"><i class="bi bi-trash"></i></button>
+      </div>
+    </div>
+  </template>
+
   <!-- JS -->
   <script>
     document.addEventListener("DOMContentLoaded", () => {
       const drawsData = {{ draws_data | default([]) | tojson }};
       const drawsTableBody = document.getElementById("draws-table-body");
       let currentDraw = null, stageCount = 0;
+
+      document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(
+        el => new bootstrap.Tooltip(el)
+      );
 
       function renderDrawRow(draw) {
         const tr = document.createElement("tr");
@@ -170,6 +296,7 @@
         document.getElementById("edit-draw-start").value = currentDraw.start;
         document.getElementById("edit-draw-end").value = currentDraw.end;
         document.getElementById("main-draw-status").value = currentDraw.status;
+        document.getElementById("edit-draw-auto-validation").checked = currentDraw.auto_validation_enabled !== false;
         document.getElementById("edit-draw-start").classList.remove("is-invalid");
         document.getElementById("edit-draw-end").classList.remove("is-invalid");
         // чистим старые вкладки
@@ -177,8 +304,36 @@
         document.getElementById("drawStagesTabsContent").innerHTML = "";
         stageCount = 0;
         currentDraw.stages.forEach(createStageTab);
+        // правила проверки чеков
+        document.getElementById("draw-rules-list").innerHTML = "";
+        currentDraw.rules = currentDraw.rules || [];
+        currentDraw.rules.forEach(createRuleRow);
         bsModal.show();
       }
+
+      function createRuleRow(ruleData) {
+        const row = document.getElementById("tpl-rule-row").content.cloneNode(true).children[0];
+        row.querySelector(".rule-title").value = ruleData.title || "";
+        row.querySelector(".rule-sku").value = ruleData.sku_code || "";
+        row.querySelector(".rule-aliases").value = ruleData.aliases || "";
+        row.querySelector(".rule-min-quantity").value = ruleData.min_quantity || 1;
+        row.querySelector(".rule-is-active").checked = ruleData.is_active !== false;
+        row._ruleData = ruleData;
+        row.querySelector(".btn-delete-rule").onclick = () => {
+          const idx = currentDraw.rules.indexOf(ruleData);
+          if (idx !== -1) currentDraw.rules.splice(idx, 1);
+          row.remove();
+        };
+        document.getElementById("draw-rules-list").appendChild(row);
+      }
+
+      // кнопка «Добавить правило»
+      document.getElementById("btn-add-rule").onclick = () => {
+        if (!currentDraw) return;
+        const newRule = { id: null, title: "", sku_code: "", aliases: "", min_quantity: 1, is_active: true };
+        currentDraw.rules.push(newRule);
+        createRuleRow(newRule);
+      };
 
       function createStageTab(stageData) {
         stageCount++;
@@ -358,10 +513,12 @@
         document.getElementById("edit-draw-start").classList.remove("is-invalid");
         document.getElementById("edit-draw-end").classList.remove("is-invalid");
         document.getElementById("main-draw-status").value = "upcoming";
+        document.getElementById("edit-draw-auto-validation").checked = true;
         document.getElementById("drawStagesTabs").innerHTML = "";
         document.getElementById("drawStagesTabsContent").innerHTML = "";
+        document.getElementById("draw-rules-list").innerHTML = "";
         stageCount = 0;
-        currentDraw = { id: null, title: "", start: "", end: "", status: "upcoming", stages: [] };
+        currentDraw = { id: null, title: "", start: "", end: "", status: "upcoming", auto_validation_enabled: true, stages: [], rules: [] };
         bsModal.show();
       };
 
@@ -431,6 +588,15 @@
         currentDraw.start = startInput.value;
         currentDraw.end = endInput.value;
         currentDraw.status = document.getElementById("main-draw-status").value;
+        currentDraw.auto_validation_enabled = document.getElementById("edit-draw-auto-validation").checked;
+        currentDraw.rules = Array.from(document.querySelectorAll("#draw-rules-list .rule-row")).map(row => ({
+          id: row._ruleData && row._ruleData.id ? row._ruleData.id : null,
+          title: row.querySelector(".rule-title").value,
+          sku_code: row.querySelector(".rule-sku").value || null,
+          aliases: row.querySelector(".rule-aliases").value,
+          min_quantity: +row.querySelector(".rule-min-quantity").value || 1,
+          is_active: row.querySelector(".rule-is-active").checked,
+        }));
         currentDraw.stages.forEach(sd => {
           const pane = document.getElementById(`${sd.__id}-content`);
           sd.description = pane.querySelector(".stage-text").value;

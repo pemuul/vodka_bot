@@ -1,0 +1,52 @@
+# Секретные данные — никогда не коммитить!
+server_access.md
+.env
+.env.*
+secrets/
+*.secret
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Виртуальное окружение
+venv/
+env/
+.venv/
+local_demo_venv/
+
+# SQLite базы данных
+*.sqlite
+*.sqlite3
+*.db
+
+# Логи
+*.log
+logs/
+
+# Временные файлы
+*.tmp
+*.bak
+.DS_Store
+tmp_*.md
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# Загруженные файлы
+site_bot/static/uploads/
+load_files/*.json
+
+# WeChat модели
+wechat_qrcode/
+models/

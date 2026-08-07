@@ -1,3 +1,4 @@
+from __future__ import annotations
 from aiogram import Router,  F
 import asyncio
 import json
@@ -21,6 +22,7 @@ import queue
 
 #from sql_mgt import sql_mgt.get_param, sql_mgt.set_param, sql_mgt.append_param_get_old
 import sql_mgt
+import receipt_validation
 #from keys import ADMIN_ID_LIST
 from heandlers import import_files, admin
 from keyboards import admin_kb
@@ -64,6 +66,10 @@ _OCR_FORCE_RELEASE = _env_flag("OCR_FORCE_RELEASE", default=False)
 # память, занятая EasyOCR/PyTorch, гарантированно возвращалась системе.
 _OCR_IN_SUBPROCESS = _env_flag("OCR_IN_SUBPROCESS", default=True)
 _OCR_SUBPROCESS_TIMEOUT = int(os.getenv("OCR_SUBPROCESS_TIMEOUT", "45"))
+# "subprocess" (по умолчанию) — старая схема, новый процесс на каждый чек.
+# "service" — новая схема: один тёплый процесс-сервис (ocr_worker_service.py),
+# с плановым самоперезапуском и потолком памяти (см. ocr_worker_client.py).
+_OCR_ENGINE_MODE = os.getenv("OCR_ENGINE", "subprocess").strip().lower()
 UNEXPECTED_MEDIA_MESSAGE = "Если вы хотите что-то уточнить, перейдите в раздел «Задать вопрос»"
 
 
@@ -522,6 +528,15 @@ def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str 
     _release_wechat_resources()
     _log_memory_usage("ocr:before-readtext")
 
+    if _OCR_ENGINE_MODE == "service":
+        import ocr_worker_client
+
+        logger.info("[OCR-TRACE] invoking persistent OCR service")
+        vodka, error = ocr_worker_client.check_keywords(path, keywords)
+        _log_memory_usage("ocr:after-readtext")
+        logger.info("[OCR-TRACE] service result vodka=%s error=%s", vodka, error)
+        return vodka, error
+
     if _OCR_IN_SUBPROCESS:
         logger.info("[OCR-TRACE] invoking subprocess for OCR")
         vodka, error = _run_ocr_subprocess(path, keywords)
@@ -811,7 +826,7 @@ def _format_error_text(error: str | None, limit: int = 400) -> str | None:
 
 def _check_vodka_in_receipt(
     qr_data: str, keywords: list[str], receipt_id: int | None = None
-) -> tuple[bool | None, str | None]:
+) -> tuple[bool | None, str | None, list[dict]]:
     """Call FNS service and search receipt items for configured products."""
 
     data, error_text = get_receipt_by_qr(qr_data)
@@ -830,7 +845,7 @@ def _check_vodka_in_receipt(
                     "[QR] Receipt %s FNS ticket отсутствует или не получен",
                     receipt_id,
                 )
-        return None, error_text
+        return None, error_text, []
 
     if receipt_id is not None:
         logger.info(
@@ -861,8 +876,31 @@ def _check_vodka_in_receipt(
     for item in items:
         name = str(item.get("name", "")).casefold()
         if any(k in name for k in keywords):
-            return True, None
-    return False, None
+            return True, None, items
+    return False, None, items
+
+
+def _build_receipt_item_rows(items: list[dict], item_rule_map: dict[int, int]) -> list[dict]:
+    """Convert raw FNS items into rows for sql_mgt.save_receipt_items()."""
+    rows = []
+    for idx, item in enumerate(items):
+        quantity = item.get("quantity")
+        if quantity is None:
+            quantity = item.get("qty")
+        try:
+            quantity = float(quantity) if quantity is not None else None
+        except (TypeError, ValueError):
+            quantity = None
+        rows.append(
+            {
+                "raw_name": str(item.get("name", "")).strip() or None,
+                "quantity": quantity,
+                "price": item.get("price"),
+                "sum": item.get("sum"),
+                "matched_rule_id": item_rule_map.get(idx),
+            }
+        )
+    return rows
 
 
 async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int):
@@ -870,7 +908,14 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     keywords_raw = await sql_mgt.get_param(0, 'product_keywords') or ''
     keywords = [k.strip().casefold() for k in keywords_raw.split(';') if k.strip()]
 
-    logger.info("[QR] Processing receipt %s from %s", receipt_id, dest)
+    receipt_row = await sql_mgt.get_receipt(receipt_id)
+    draw_id = receipt_row.get('draw_id') if receipt_row else None
+    rules = await sql_mgt.get_draw_rules(draw_id) if draw_id else []
+    use_rules = bool(rules)
+
+    logger.info(
+        "[QR] Processing receipt %s from %s (rules=%s)", receipt_id, dest, len(rules)
+    )
     qr_data = await loop.run_in_executor(
         global_objects.ocr_pool,
         _detect_qr,
@@ -914,7 +959,7 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
             return
         await sql_mgt.update_receipt_qr(receipt_id, qr_data)
         try:
-            vodka_found, fns_error_text = await loop.run_in_executor(
+            vodka_found, fns_error_text, fns_items = await loop.run_in_executor(
                 None, _check_vodka_in_receipt, qr_data, keywords, receipt_id
             )
         except Exception as exc:
@@ -927,6 +972,7 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
             fns_error_text = _format_error_text(
                 f"{exc.__class__.__name__}: {exc}"
             )
+            fns_items = []
         logger.info("[QR] Receipt %s FNS result: %s", receipt_id, vodka_found)
         if fns_error_text:
             logger.info(
@@ -935,24 +981,45 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
         if vodka_found is None:
             fns_result = "error"
             use_vision = True
-        elif vodka_found:
-            fns_result = "success"
-            final_status = "Подтверждён"
-            comment_text = "Бот: товар найден в данных по QR"
         else:
-            fns_result = "no_goods"
-            final_status = "Нет товара в чеке"
-            comment_text = "Бот: товар не найден в данных по QR"
+            rule_match = None
+            if use_rules:
+                rule_match = receipt_validation.match_items_to_rules(fns_items, rules)
+            rows = _build_receipt_item_rows(
+                fns_items, rule_match.item_rule_map if rule_match else {}
+            )
+            await sql_mgt.save_receipt_items(receipt_id, rows)
+
+            if use_rules:
+                if rule_match.confirmed:
+                    fns_result = "success"
+                    final_status = "Подтверждён"
+                    comment_text = rule_match.reason
+                else:
+                    fns_result = "no_goods"
+                    final_status = "На ручной проверке"
+                    comment_text = rule_match.reason
+            elif vodka_found:
+                fns_result = "success"
+                final_status = "Подтверждён"
+                comment_text = "Бот: товар найден в данных по QR"
+            else:
+                fns_result = "no_goods"
+                final_status = "Нет товара в чеке"
+                comment_text = "Бот: товар не найден в данных по QR"
     else:
         use_vision = True
 
     if use_vision:
+        ocr_keywords = (
+            receipt_validation.ocr_keywords_for_rules(rules) if use_rules else keywords
+        )
         if ocr_result is None:
             ocr_result = await loop.run_in_executor(
                 global_objects.ocr_pool,
                 _check_keywords_with_ocr,
                 str(dest),
-                keywords,
+                ocr_keywords,
             )
         vodka_by_vision, vision_error = ocr_result
         logger.info(
@@ -978,6 +1045,12 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
                 comment_text = (
                     "Бот: товар найден через распознавание изображения (QR не распознан)"
                 )
+        elif use_rules:
+            final_status = "На ручной проверке"
+            comment_text = (
+                "Бот: авто-проверка не смогла подтвердить чек (QR/ФНС недоступны, "
+                "OCR не подтвердил) — требуется ручная проверка"
+            )
         else:
             final_status = "Ошибка"
             if vision_error == "изображение не прочитано":
@@ -1052,14 +1125,17 @@ async def set_photo(message: Message) -> None:
                 f.write(photo_file.getvalue())
 
             web_path = f"/static/uploads/{fname}"
+            auto_validation = await sql_mgt.get_draw_auto_validation(draw_id)
+            receipt_status = "В авто обработке" if auto_validation else "На ручной проверке"
             receipt_id = await sql_mgt.add_receipt(
                 web_path,
                 message.chat.id,
-                "В авто обработке",
+                receipt_status,
                 message_id=message.message_id,
                 draw_id=draw_id,
             )
-            await sql_mgt.enqueue_receipt_ocr(receipt_id)
+            if auto_validation:
+                await sql_mgt.enqueue_receipt_ocr(receipt_id)
             receipts_total = len(existing_receipts) + 1
             if receipts_total == 1:
                 first_receipt_text = (

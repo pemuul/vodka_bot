@@ -71,7 +71,11 @@ def _resolve_database_file(default_path: str) -> Path:
     return (base_dir / raw_path).resolve()
 
 
-DATABASE_FILE = _resolve_database_file("../../tg_base.sqlite")
+DATABASE_FILE = (
+    Path(os.environ["VODKA_DB_PATH"]).expanduser().resolve()
+    if os.getenv("VODKA_DB_PATH")
+    else _resolve_database_file("../../tg_base.sqlite")
+)
 DATABASE_URL = f"sqlite:///{DATABASE_FILE}"
 
 database = Database(DATABASE_URL)
@@ -273,6 +277,18 @@ prize_draw_winners_table   = Table("prize_draw_winners", metadata, autoload_with
 participant_settings_table = Table("participant_settings", metadata, autoload_with=engine)
 participant_messages_table = Table("participant_messages", metadata, autoload_with=engine)
 
+try:
+    prize_draw_rules_table = Table("prize_draw_rules", metadata, autoload_with=engine)
+except Exception:
+    prize_draw_rules_table = None
+
+try:
+    receipt_items_table = Table("receipt_items", metadata, autoload_with=engine)
+except Exception:
+    receipt_items_table = None
+
+HAS_DRAW_AUTO_VALIDATION = 'auto_validation_enabled' in prize_draws_table.c
+
 # Some deployments may still use an older database schema without the
 # `is_answer` column.  Detect its presence so we can behave gracefully
 # when reading or writing data.
@@ -398,8 +414,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return RedirectResponse(f"/login?next={request.url.path}", status_code=302)
         return await call_next(request)
 
+SESSION_SECRET_KEY = os.getenv("SITE_SESSION_SECRET_KEY", "YOUR_SECRET_KEY_HERE")
+ADMIN_USERNAME = os.getenv("SITE_ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("SITE_ADMIN_PASSWORD", "password")
+
 app.add_middleware(AuthMiddleware)
-app.add_middleware(SessionMiddleware, secret_key="YOUR_SECRET_KEY_HERE")
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET_KEY)
 
 app.mount("/static", NoCacheStaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
@@ -451,7 +471,7 @@ async def login_post(
     next: str = Form("/")
 ):
     # TODO: replace with real DB lookup
-    if username == "admin" and password == "password":
+    if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
         request.session["user"] = username
         return RedirectResponse(next, status_code=302)
     return templates.TemplateResponse(
@@ -476,13 +496,16 @@ async def root(request: Request):
 
 @app.get("/prize-draws", response_class=HTMLResponse)
 async def prize_draws(request: Request):
-    draw_query = sqlalchemy.select(
+    draw_select_columns = [
         prize_draws_table.c.id,
         prize_draws_table.c.title,
         sqlalchemy.cast(prize_draws_table.c.start_date, sqlalchemy.String).label("start_date"),
         sqlalchemy.cast(prize_draws_table.c.end_date, sqlalchemy.String).label("end_date"),
         prize_draws_table.c.status,
-    )
+    ]
+    if HAS_DRAW_AUTO_VALIDATION:
+        draw_select_columns.append(prize_draws_table.c.auto_validation_enabled)
+    draw_query = sqlalchemy.select(*draw_select_columns)
     draws_rows = await database.fetch_all(draw_query)
     draws = []
     for d in draws_rows:
@@ -568,15 +591,37 @@ async def prize_draws(request: Request):
                     "winners": winners,
                 }
             )
+        rules = []
+        if prize_draw_rules_table is not None:
+            rules_rows = await database.fetch_all(
+                prize_draw_rules_table.select()
+                .where(prize_draw_rules_table.c.draw_id == d["id"])
+                .order_by(prize_draw_rules_table.c.id)
+            )
+            for r in rules_rows:
+                rules.append(
+                    {
+                        "id": r["id"],
+                        "title": r["title"],
+                        "sku_code": r["sku_code"],
+                        "aliases": r["aliases"],
+                        "min_quantity": r["min_quantity"],
+                        "is_active": bool(r["is_active"]) if r["is_active"] is not None else True,
+                    }
+                )
+
         start_dt = datetime.datetime.fromisoformat(d["start_date"]).date()
         end_dt = datetime.datetime.fromisoformat(d["end_date"]).date()
+        auto_validation_value = d["auto_validation_enabled"] if HAS_DRAW_AUTO_VALIDATION else None
         draws.append({
             "id": d["id"],
             "title": d["title"],
             "start": start_dt.isoformat(),
             "end": end_dt.isoformat(),
             "status": d["status"],
+            "auto_validation_enabled": bool(auto_validation_value) if auto_validation_value is not None else True,
             "stages": stages,
+            "rules": rules,
         })
     return templates.TemplateResponse(
         "prize_draws.html",
@@ -592,13 +637,23 @@ class StageIn(BaseModel):
     textAfter: Optional[str] = None
     winners: List[Any] = []
 
+class RuleIn(BaseModel):
+    id: Optional[int] = None
+    title: str
+    sku_code: Optional[str] = None
+    aliases: str
+    min_quantity: int = 1
+    is_active: bool = True
+
 class DrawIn(BaseModel):
     id: Optional[int] = None
     title: str
     start: datetime.date
     end: datetime.date
     status: str
+    auto_validation_enabled: bool = True
     stages: List[StageIn]
+    rules: List[RuleIn] = []
 
 @app.post("/prize-draws")
 async def save_draw(draw: DrawIn):
@@ -619,26 +674,25 @@ async def save_draw(draw: DrawIn):
         if conflict:
             raise HTTPException(status_code=400, detail="Период пересекается с другим активным розыгрышем")
 
+    draw_values = {
+        "title": draw.title,
+        "start_date": draw.start,
+        "end_date": draw.end,
+        "status": draw.status,
+    }
+    if HAS_DRAW_AUTO_VALIDATION:
+        draw_values["auto_validation_enabled"] = draw.auto_validation_enabled
+
     if draw.id is None:
         new_id = await database.execute(
-            prize_draws_table.insert().values(
-                title=draw.title,
-                start_date=draw.start,
-                end_date=draw.end,
-                status=draw.status
-            )
+            prize_draws_table.insert().values(**draw_values)
         )
     else:
         new_id = draw.id
         await database.execute(
             prize_draws_table.update()
             .where(prize_draws_table.c.id == new_id)
-            .values(
-                title=draw.title,
-                start_date=draw.start,
-                end_date=draw.end,
-                status=draw.status
-            )
+            .values(**draw_values)
         )
 
     # delete old stages and winners
@@ -690,6 +744,24 @@ async def save_draw(draw: DrawIn):
                 prize_draw_winners_table.insert().values(**insert_values)
             )
 
+    # delete old rules and insert new ones (full rewrite, same pattern as stages)
+    if prize_draw_rules_table is not None:
+        await database.execute(
+            prize_draw_rules_table.delete()
+            .where(prize_draw_rules_table.c.draw_id == new_id)
+        )
+        for rule in draw.rules:
+            await database.execute(
+                prize_draw_rules_table.insert().values(
+                    draw_id=new_id,
+                    title=rule.title,
+                    sku_code=rule.sku_code,
+                    aliases=rule.aliases,
+                    min_quantity=rule.min_quantity,
+                    is_active=rule.is_active,
+                )
+            )
+
     return {"success": True, "id": new_id}
 
 
@@ -711,6 +783,12 @@ async def delete_draw(draw_id: int):
             prize_draw_stages_table.c.draw_id == draw_id
         )
     )
+    if prize_draw_rules_table is not None:
+        await database.execute(
+            prize_draw_rules_table.delete().where(
+                prize_draw_rules_table.c.draw_id == draw_id
+            )
+        )
     if has_receipt_draw_id():
         await database.execute(
             receipts_table.update()
@@ -1978,6 +2056,25 @@ async def get_receipt(receipt_id: int):
         created_at = created_at.isoformat()
     elif created_at is not None:
         created_at = str(created_at)
+
+    items = []
+    if receipt_items_table is not None:
+        items_rows = await database.fetch_all(
+            receipt_items_table.select()
+            .where(receipt_items_table.c.receipt_id == receipt_id)
+            .order_by(receipt_items_table.c.id)
+        )
+        items = [
+            {
+                "raw_name": row["raw_name"],
+                "quantity": row["quantity"],
+                "price": row["price"],
+                "sum": row["sum"],
+                "matched_rule_id": row["matched_rule_id"],
+            }
+            for row in items_rows
+        ]
+
     return {
         "id": r["id"],
         "number": r.get("number"),
@@ -1991,6 +2088,7 @@ async def get_receipt(receipt_id: int):
         "draw_id": r.get("draw_id") if has_receipt_draw_id() else None,
         "draw_title": r.get("draw_title"),
         "comment": r.get("comment") if has_receipt_comment() else None,
+        "items": items,
     }
 
 class ReceiptUpdate(BaseModel):

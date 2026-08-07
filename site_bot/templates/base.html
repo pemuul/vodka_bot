@@ -4,7 +4,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{% block title %}rtd-bot{% endblock %}</title>
+    <title>{% block title %}FINSKY ICE{% endblock %}</title>
 
     <!-- Bootstrap CSS -->
     <link
@@ -25,36 +25,11 @@
     <!-- Ваши собственные стили -->
     <link rel="stylesheet" href="{{ url_for('static', path='css/app.css') }}?v={{ version }}" />
     <style>
-      /* 1. Чтобы вьюпорт страницы не прокручивался */
+      /* Структурный layout — цвета и остальной скин см. app.css */
       html,
       body {
         height: 100%;
         overflow: hidden;
-      }
-
-      body {
-        font-family: "Inter", sans-serif;
-      }
-
-      /* 2. Задаём, чтобы контейнер под шапкой и сайдбаром растягивался по оставшейся высоте */
-      .main-container {
-        display: flex;
-        height: calc(100% - 56px);
-        /* 56px — это примерно высота navbar (проверьте, если у вас она отличается) */
-      }
-
-      .sidebar {
-        width: 20rem;
-      }
-
-      .sidebar .nav-link {
-        color: #495057;
-      }
-
-      .sidebar .nav-link.active {
-        background-color: #f8f9fa;
-        font-weight: 500;
-        color: #212529;
       }
 
       @media (max-width: 992px) {
@@ -69,26 +44,27 @@
           left: 0;
           height: 100%;
           z-index: 1045;
-          background-color: #fff;
           overflow-y: auto;
-          box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
         }
       }
     </style>
   </head>
 
-  <body class="bg-light d-flex flex-column">
+  <body class="d-flex flex-column">
     <!-- === Шапка (Topbar) === -->
-    <nav class="navbar navbar-expand-lg navbar-light bg-white border-bottom">
+    <nav class="navbar navbar-expand-lg topbar">
       <div class="container-fluid">
         <button
-          class="btn btn-outline-secondary d-lg-none me-2"
+          class="btn btn-icon d-lg-none me-2"
           id="sidebarToggle"
           onclick="document.getElementById('sidebarMenu').classList.toggle('show')"
         >
           <i class="bi bi-list"></i>
         </button>
-        <a class="navbar-brand" href="/">rtd-bot</a>
+        <a class="navbar-brand d-flex align-items-center gap-2 py-0" href="/">
+          <span class="brand-mark"><i class="bi bi-snow2"></i></span>
+          <span class="brand-text">FINSKY ICE</span>
+        </a>
 
         <button
           class="navbar-toggler"
@@ -113,7 +89,7 @@
                 data-bs-toggle="dropdown"
                 aria-expanded="false"
               >
-                <i class="bi bi-bell"></i>
+                <i class="bi bi-bell fs-5"></i>
                 <span
                   class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-primary"
                 >
@@ -140,12 +116,8 @@
     <!-- === Основной контейнер (под шапкой) === -->
     <div class="main-container flex-grow-1">
       <!-- === Сайдбар === -->
-      <nav class="sidebar bg-white border-end vh-100 d-flex flex-column" id="sidebarMenu">
+      <nav class="sidebar vh-100 d-flex flex-column" id="sidebarMenu">
         <div class="p-3">
-          <a href="/" class="text-decoration-none d-flex align-items-center mb-3">
-            <i class="bi bi-house-door me-2"></i>
-            <span class="fs-5">Меню</span>
-          </a>
           <ul class="nav nav-pills flex-column">
             <li class="nav-item mb-1">
               <a

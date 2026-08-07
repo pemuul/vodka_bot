@@ -1,3 +1,4 @@
+from __future__ import annotations
 from aiogram import Router, F, Bot, BaseMiddleware
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (

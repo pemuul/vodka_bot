@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Вопросы – rtd-bot{% endblock %}
+{% block title %}Вопросы – FINSKY ICE{% endblock %}
 
 {% block content %}
   <div id="questions-list" class="h-100 overflow-auto">
@@ -12,14 +12,14 @@
       </ol>
     </nav>
     <div class="d-flex justify-content-between align-items-center mb-4">
-      <h1 class="h3 mb-0">Вопросы</h1>
+      <h1 class="h3 mb-0"><i class="bi bi-question-circle text-primary me-2"></i>Вопросы</h1>
       <div class="d-flex align-items-center gap-2">
         <select id="status-filter" class="form-select form-select-sm">
           <option value="all">Все</option>
           <option value="Новый">Новые</option>
           <option value="Отвечено">Отвеченные</option>
         </select>
-        <button id="refresh-questions" class="btn btn-outline-primary">Обновить</button>
+        <button id="refresh-questions" class="btn btn-outline-primary"><i class="bi bi-arrow-clockwise me-1"></i>Обновить</button>
       </div>
     </div>
 

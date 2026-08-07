@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import aiosqlite
 import asyncio
 import os
@@ -1230,6 +1232,82 @@ async def get_active_draw_id(date: datetime.date | None = None, conn=None) -> in
     row = await cursor.fetchone()
     await conn.commit()
     return row[0] if row else None
+
+
+@with_connection
+async def get_draw_auto_validation(draw_id: int | None, conn=None) -> bool:
+    """True, если у акции включена авто-валидация. Безопасный default — True."""
+    if draw_id is None:
+        return True
+    schema = await get_table_info(conn, "prize_draws")
+    if "auto_validation_enabled" not in schema:
+        return True
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT auto_validation_enabled FROM prize_draws WHERE id = ?", (draw_id,)
+    )
+    row = await cursor.fetchone()
+    if row is None or row[0] is None:
+        return True
+    return bool(row[0])
+
+
+@with_connection
+async def get_draw_rules(draw_id: int, only_active: bool = True, conn=None) -> list[dict]:
+    """Правила проверки чеков для акции. Пустой список = правил нет (fallback на keywords)."""
+    schema = await get_table_info(conn, "prize_draw_rules")
+    if not schema:
+        return []
+    cursor = await conn.cursor()
+    query = "SELECT * FROM prize_draw_rules WHERE draw_id = ?"
+    params: list = [draw_id]
+    if only_active:
+        query += " AND is_active = 1"
+    query += " ORDER BY id"
+    await cursor.execute(query, tuple(params))
+    rows = await cursor.fetchall()
+    columns = [col[0] for col in cursor.description]
+    return [dict(zip(columns, row)) for row in rows]
+
+
+@with_connection
+async def save_receipt_items(receipt_id: int, items: list[dict], conn=None) -> None:
+    """Заменить сохранённые позиции чека новыми (безопасно при повторной обработке)."""
+    schema = await get_table_info(conn, "receipt_items")
+    if not schema:
+        return
+    cursor = await conn.cursor()
+    await cursor.execute("DELETE FROM receipt_items WHERE receipt_id = ?", (receipt_id,))
+    for item in items:
+        await cursor.execute(
+            "INSERT INTO receipt_items (receipt_id, raw_name, quantity, price, sum, matched_rule_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                receipt_id,
+                item.get("raw_name"),
+                item.get("quantity"),
+                item.get("price"),
+                item.get("sum"),
+                item.get("matched_rule_id"),
+            ),
+        )
+    await conn.commit()
+
+
+@with_connection
+async def get_receipt_items(receipt_id: int, conn=None) -> list[dict]:
+    """Позиции чека из ФНС, сохранённые ранее (пустой список, если таблицы нет)."""
+    schema = await get_table_info(conn, "receipt_items")
+    if not schema:
+        return []
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT * FROM receipt_items WHERE receipt_id = ? ORDER BY id", (receipt_id,)
+    )
+    rows = await cursor.fetchall()
+    columns = [col[0] for col in cursor.description]
+    return [dict(zip(columns, row)) for row in rows]
+
 
 @with_connection
 async def add_receipt(

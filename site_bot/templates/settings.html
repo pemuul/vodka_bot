@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Настройки – rtd-bot{% endblock %}
+{% block title %}Настройки – FINSKY ICE{% endblock %}
 
 {% block content %}
 <div class="h-100 overflow-auto">
@@ -9,37 +9,65 @@
       <li class="breadcrumb-item active" aria-current="page">Список</li>
     </ol>
   </nav>
-  <div class="container">
-    <h1 class="h3 mb-3">Настройки</h1>
-    <form method="post" enctype="multipart/form-data">
-      <div class="mb-3">
-        <label for="product-names" class="form-label">Наименования продуктов</label>
-        <input type="text" class="form-control" id="product-names" name="product_names" value="{{ keywords }}" />
-        <div class="form-text">Введите названия через ;</div>
-      </div>
-      <div class="mb-3">
-        <label for="privacy-file" class="form-label">Файл с политикой конфиденциальности</label>
-        {% if policy_url %}
-        <p><a href="{{ policy_url }}" target="_blank">Текущий файл</a></p>
-        {% endif %}
-        <input type="file" class="form-control" id="privacy-file" name="privacy_file" />
-      </div>
-      <div class="mb-3">
-        <label for="rules-file" class="form-label">Файл с правилами акции</label>
-        {% if rules_url %}
-        <p><a href="{{ rules_url }}" target="_blank">Текущий файл</a></p>
-        {% endif %}
-        <input type="file" class="form-control" id="rules-file" name="rules_file" />
-      </div>
-      <div class="mb-3">
-        <label for="catalog-file" class="form-label">Электронный каталог коктейлей</label>
-        {% if catalog_url %}
-        <p><a href="{{ catalog_url }}" target="_blank">Текущий файл</a></p>
-        {% endif %}
-        <input type="file" class="form-control" id="catalog-file" name="catalog_file" />
-      </div>
-      <button type="submit" class="btn btn-primary">Сохранить</button>
-    </form>
+  <div class="d-flex align-items-center mb-4">
+    <h1 class="h3 mb-0"><i class="bi bi-gear text-primary me-2"></i>Настройки</h1>
+  </div>
+
+  <div class="card mb-3" style="max-width: 640px;">
+    <div class="card-body">
+      <form method="post" enctype="multipart/form-data">
+        <div class="mb-4">
+          <label for="product-names" class="form-label">
+            <i class="bi bi-tags text-primary me-1"></i> Наименования продуктов
+          </label>
+          <input type="text" class="form-control" id="product-names" name="product_names" value="{{ keywords }}" />
+          <div class="form-text">Общие ключевые слова для проверки чеков — используются, если у акции нет
+            собственных правил. Введите названия через ;</div>
+        </div>
+        <div class="mb-4">
+          <label for="privacy-file" class="form-label">
+            <i class="bi bi-shield-check text-primary me-1"></i> Файл с политикой конфиденциальности
+          </label>
+          {% if policy_url %}
+          <div class="mb-2">
+            <a href="{{ policy_url }}" target="_blank" class="d-inline-flex align-items-center gap-1">
+              <i class="bi bi-file-earmark-pdf"></i> Текущий файл
+            </a>
+          </div>
+          {% endif %}
+          <input type="file" class="form-control" id="privacy-file" name="privacy_file" />
+        </div>
+        <div class="mb-4">
+          <label for="rules-file" class="form-label">
+            <i class="bi bi-file-earmark-text text-primary me-1"></i> Файл с правилами акции
+          </label>
+          {% if rules_url %}
+          <div class="mb-2">
+            <a href="{{ rules_url }}" target="_blank" class="d-inline-flex align-items-center gap-1">
+              <i class="bi bi-file-earmark-pdf"></i> Текущий файл
+            </a>
+          </div>
+          {% endif %}
+          <input type="file" class="form-control" id="rules-file" name="rules_file" />
+        </div>
+        <div class="mb-4">
+          <label for="catalog-file" class="form-label">
+            <i class="bi bi-journal-text text-primary me-1"></i> Электронный каталог коктейлей
+          </label>
+          {% if catalog_url %}
+          <div class="mb-2">
+            <a href="{{ catalog_url }}" target="_blank" class="d-inline-flex align-items-center gap-1">
+              <i class="bi bi-file-earmark-pdf"></i> Текущий файл
+            </a>
+          </div>
+          {% endif %}
+          <input type="file" class="form-control" id="catalog-file" name="catalog_file" />
+        </div>
+        <button type="submit" class="btn btn-primary">
+          <i class="bi bi-check-lg me-1"></i> Сохранить
+        </button>
+      </form>
+    </div>
   </div>
 </div>
 {% endblock %}
