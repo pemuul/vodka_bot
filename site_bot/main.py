@@ -52,6 +52,7 @@ from sql_mgt import (
     get_table_schema_columns,
     get_table_schema_sql,
 )
+import receipt_validation
 
 # aiogram is imported lazily when sending messages
 
@@ -287,7 +288,12 @@ try:
 except Exception:
     receipt_items_table = None
 
-HAS_DRAW_AUTO_VALIDATION = 'auto_validation_enabled' in prize_draws_table.c
+HAS_STAGE_TYPE = 'stage_type' in prize_draw_stages_table.c
+HAS_STAGE_MESSAGE_TEMPLATES = 'progress_message_text' in prize_draw_stages_table.c
+HAS_STAGE_DATES = 'start_date' in prize_draw_stages_table.c
+HAS_STAGE_STATUS = 'status' in prize_draw_stages_table.c
+HAS_STAGE_AUTO_VALIDATION = 'auto_validation_enabled' in prize_draw_stages_table.c
+HAS_STAGE_RULES_DESCRIPTION = 'rules_description' in prize_draw_stages_table.c
 
 # Some deployments may still use an older database schema without the
 # `is_answer` column.  Detect its presence so we can behave gracefully
@@ -494,18 +500,263 @@ async def root(request: Request):
         "prize_draws.html", {"request": request, "active_page": "prize_draws", "version": app.state.static_version}
     )
 
+# ==============================
+# Гарантированный приз — накопительный прогресс (TZ_GUARANTEED_PRIZE_STAGE_TYPES.md)
+#
+# Веб-процесс (этот файл) использует databases/SQLAlchemy, а не sql_mgt.py (тот рассчитан
+# на aiosqlite-соединение бота, sql_mgt.db_name здесь не инициализирован) — поэтому та же
+# бизнес-логика, что в sql_mgt.evaluate_guaranteed_prize_stage() и соседних DAL-функциях,
+# продублирована здесь через database.fetch_all()/execute(), как уже сделано для остальных
+# запросов в этом файле (_format_winner_message, api_determine_winners и т.д.).
+# ==============================
+
+async def _get_stage_rules(stage_id: int, only_active: bool = False) -> List[Dict[str, Any]]:
+    if prize_draw_rules_table is None:
+        return []
+    query = prize_draw_rules_table.select().where(prize_draw_rules_table.c.stage_id == stage_id)
+    if only_active:
+        query = query.where(prize_draw_rules_table.c.is_active == True)
+    query = query.order_by(prize_draw_rules_table.c.id)
+    rows = await database.fetch_all(query)
+    return [dict(r) for r in rows]
+
+
+async def _get_user_rule_progress(
+    user_tg_id: int, draw_id: int, rule_ids: List[int]
+) -> Dict[int, float]:
+    progress: Dict[int, float] = {rid: 0.0 for rid in rule_ids}
+    if not rule_ids or receipt_items_table is None:
+        return progress
+    query = (
+        sqlalchemy.select(
+            receipt_items_table.c.matched_rule_id,
+            sqlalchemy.func.sum(receipt_items_table.c.quantity).label("total"),
+        )
+        .select_from(
+            receipt_items_table.join(
+                receipts_table, receipts_table.c.id == receipt_items_table.c.receipt_id
+            )
+        )
+        .where(receipts_table.c.user_tg_id == user_tg_id)
+        .where(receipts_table.c.draw_id == draw_id)
+        .where(receipt_items_table.c.matched_rule_id.in_(rule_ids))
+        .where(receipts_table.c.status == "Подтверждён")
+        .group_by(receipt_items_table.c.matched_rule_id)
+    )
+    rows = await database.fetch_all(query)
+    for row in rows:
+        progress[row["matched_rule_id"]] = float(row["total"]) if row["total"] is not None else 0.0
+    return progress
+
+
+async def _is_stage_winner(stage_id: int, user_tg_id: int) -> bool:
+    row = await database.fetch_one(
+        sqlalchemy.select(prize_draw_winners_table.c.id)
+        .where(prize_draw_winners_table.c.stage_id == stage_id)
+        .where(prize_draw_winners_table.c.user_tg_id == user_tg_id)
+    )
+    return row is not None
+
+
+async def _add_stage_winner(
+    stage_id: int, user_tg_id: int, receipt_id: Optional[int], winner_name: str
+) -> None:
+    insert_values = {"stage_id": stage_id, "user_tg_id": user_tg_id, "winner_name": winner_name}
+    if HAS_PDW_RECEIPT_ID:
+        insert_values["receipt_id"] = receipt_id
+    await database.execute(prize_draw_winners_table.insert().values(**insert_values))
+
+
+async def _evaluate_guaranteed_prize_stage(
+    stage: Dict[str, Any],
+    user_tg_id: int,
+    draw_id: int,
+    receipt_id: Optional[int],
+    winner_name: str,
+) -> Dict[str, Any]:
+    """Пересчитать прогресс и, если условия впервые выполнены, зафиксировать победу —
+    веб-эквивалент sql_mgt.evaluate_guaranteed_prize_stage(), см. блок-комментарий выше."""
+    if await _is_stage_winner(stage["id"], user_tg_id):
+        return {"outcome": "already_winner"}
+    rules = [r for r in await _get_stage_rules(stage["id"], only_active=True)]
+    if not rules:
+        return {"outcome": "no_rules"}
+    rule_ids = [r["id"] for r in rules]
+    progress = await _get_user_rule_progress(user_tg_id, draw_id, rule_ids)
+    rule_progress = [
+        {
+            "id": r["id"],
+            "title": r["title"],
+            "min_quantity": r.get("min_quantity") or 1,
+            "progress": progress.get(r["id"], 0.0),
+        }
+        for r in rules
+    ]
+    all_done = all(rp["progress"] >= rp["min_quantity"] for rp in rule_progress)
+    if all_done:
+        await _add_stage_winner(stage["id"], user_tg_id, receipt_id, winner_name)
+        return {"outcome": "won", "rule_progress": rule_progress}
+    return {"outcome": "progress", "rule_progress": rule_progress}
+
+
+async def _evaluate_standard_stage_progress(
+    stage: Dict[str, Any], user_tg_id: int, draw_id: int,
+) -> Dict[str, Any]:
+    """Пересчитать накопленный прогресс standard-этапа — веб-эквивалент
+    sql_mgt.evaluate_standard_stage_progress(). В отличие от _evaluate_guaranteed_prize_stage,
+    НИКОГДА не пишет в prize_draw_winners: победитель standard-этапа выбирается вручную
+    через api_determine_winners()."""
+    rules = await _get_stage_rules(stage["id"], only_active=True)
+    if not rules:
+        return {"outcome": "no_rules"}
+    rule_ids = [r["id"] for r in rules]
+    progress = await _get_user_rule_progress(user_tg_id, draw_id, rule_ids)
+    rule_progress = [
+        {
+            "id": r["id"],
+            "title": r["title"],
+            "min_quantity": r.get("min_quantity") or 1,
+            "progress": progress.get(r["id"], 0.0),
+        }
+        for r in rules
+    ]
+    all_done = all(rp["progress"] >= rp["min_quantity"] for rp in rule_progress)
+    entries_count = receipt_validation.compute_entries_count(rule_progress)
+    return {
+        "outcome": "complete" if all_done else "progress",
+        "rule_progress": rule_progress,
+        "entries_count": entries_count,
+    }
+
+
+async def _get_stage_progress(
+    stage_id: int, rules: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """Прогресс ВСЕХ пользователей этапа (для UI /prize-draws и фильтра
+    api_determine_winners) — веб-эквивалент sql_mgt.get_stage_progress()."""
+    if receipt_items_table is None or prize_draw_stages_table is None:
+        return []
+    stage_row = await database.fetch_one(
+        prize_draw_stages_table.select().where(prize_draw_stages_table.c.id == stage_id)
+    )
+    if not stage_row:
+        return []
+    if rules is None:
+        rules = await _get_stage_rules(stage_id, only_active=True)
+    if not rules:
+        return []
+
+    rule_ids = [r["id"] for r in rules]
+    draw_id = stage_row["draw_id"]
+    query = (
+        sqlalchemy.select(
+            receipts_table.c.user_tg_id,
+            receipt_items_table.c.matched_rule_id,
+            sqlalchemy.func.sum(receipt_items_table.c.quantity).label("total"),
+        )
+        .select_from(
+            receipt_items_table.join(
+                receipts_table, receipts_table.c.id == receipt_items_table.c.receipt_id
+            )
+        )
+        .where(receipts_table.c.draw_id == draw_id)
+        .where(receipt_items_table.c.matched_rule_id.in_(rule_ids))
+        .where(receipts_table.c.status == "Подтверждён")
+        .group_by(receipts_table.c.user_tg_id, receipt_items_table.c.matched_rule_id)
+    )
+    rows = await database.fetch_all(query)
+
+    progress_by_user: Dict[int, Dict[int, float]] = {}
+    for row in rows:
+        user_totals = progress_by_user.setdefault(row["user_tg_id"], {})
+        user_totals[row["matched_rule_id"]] = float(row["total"]) if row["total"] is not None else 0.0
+
+    if not progress_by_user:
+        return []
+
+    user_ids = list(progress_by_user.keys())
+    name_rows = await database.fetch_all(
+        sqlalchemy.select(users_table.c.tg_id, users_table.c.name)
+        .where(users_table.c.tg_id.in_(user_ids))
+    )
+    names = {r["tg_id"]: r["name"] for r in name_rows}
+
+    entries_query = (
+        sqlalchemy.select(receipts_table.c.user_tg_id, receipt_items_table.c.receipt_id)
+        .distinct()
+        .select_from(
+            receipt_items_table.join(
+                receipts_table, receipts_table.c.id == receipt_items_table.c.receipt_id
+            )
+        )
+        .where(receipts_table.c.draw_id == draw_id)
+        .where(receipt_items_table.c.matched_rule_id.in_(rule_ids))
+        .where(receipts_table.c.status == "Подтверждён")
+    )
+    entry_rows = await database.fetch_all(entries_query)
+    entry_receipt_ids_by_user: Dict[int, List[int]] = {}
+    for row in entry_rows:
+        entry_receipt_ids_by_user.setdefault(row["user_tg_id"], []).append(row["receipt_id"])
+
+    result = []
+    for user_tg_id, rule_totals in progress_by_user.items():
+        rule_progress = [
+            {
+                "id": r["id"],
+                "title": r["title"],
+                "min_quantity": r.get("min_quantity") or 1,
+                "progress": rule_totals.get(r["id"], 0.0),
+            }
+            for r in rules
+        ]
+        complete = all(rp["progress"] >= rp["min_quantity"] for rp in rule_progress)
+        entry_receipt_ids = entry_receipt_ids_by_user.get(user_tg_id, [])
+        result.append({
+            "user_tg_id": user_tg_id,
+            "user_name": names.get(user_tg_id),
+            "rule_progress": rule_progress,
+            "complete": complete,
+            "entry_receipt_ids": entry_receipt_ids,
+            "entries_count": receipt_validation.compute_entries_count(rule_progress),
+        })
+    return result
+
+
+async def _resolve_winner_name(user_tg_id: int) -> str:
+    row = await database.fetch_one(
+        sqlalchemy.select(users_table.c.name).where(users_table.c.tg_id == user_tg_id)
+    )
+    if row and row["name"]:
+        return row["name"]
+    return str(user_tg_id)
+
+
+async def _add_manual_receipt_item(receipt_id: int, rule_id: int, quantity: Optional[float]) -> None:
+    """Добавить позицию чека вручную, НЕ стирая уже сохранённые ФНС-позиции (раздел 4.7 ТЗ)."""
+    if receipt_items_table is None:
+        return
+    rule_row = None
+    if prize_draw_rules_table is not None:
+        rule_row = await database.fetch_one(
+            sqlalchemy.select(prize_draw_rules_table.c.title)
+            .where(prize_draw_rules_table.c.id == rule_id)
+        )
+    raw_name = f"Ручной ввод: {rule_row['title']}" if rule_row else "Ручной ввод"
+    await database.execute(
+        receipt_items_table.insert().values(
+            receipt_id=receipt_id,
+            raw_name=raw_name,
+            quantity=quantity,
+            price=None,
+            sum=None,
+            matched_rule_id=rule_id,
+        )
+    )
+
+
 @app.get("/prize-draws", response_class=HTMLResponse)
 async def prize_draws(request: Request):
-    draw_select_columns = [
-        prize_draws_table.c.id,
-        prize_draws_table.c.title,
-        sqlalchemy.cast(prize_draws_table.c.start_date, sqlalchemy.String).label("start_date"),
-        sqlalchemy.cast(prize_draws_table.c.end_date, sqlalchemy.String).label("end_date"),
-        prize_draws_table.c.status,
-    ]
-    if HAS_DRAW_AUTO_VALIDATION:
-        draw_select_columns.append(prize_draws_table.c.auto_validation_enabled)
-    draw_query = sqlalchemy.select(*draw_select_columns)
+    draw_query = sqlalchemy.select(prize_draws_table.c.id, prize_draws_table.c.title)
     draws_rows = await database.fetch_all(draw_query)
     draws = []
     for d in draws_rows:
@@ -579,6 +830,28 @@ async def prize_draws(request: Request):
                 if HAS_PDW_RECEIPT_ID and "receipt_id" in w:
                     winner_obj["receipt_id"] = w["receipt_id"]
                 winners.append(winner_obj)
+            rules = []
+            if prize_draw_rules_table is not None:
+                rules_rows = await database.fetch_all(
+                    prize_draw_rules_table.select()
+                    .where(prize_draw_rules_table.c.stage_id == s["id"])
+                    .order_by(prize_draw_rules_table.c.id)
+                )
+                for r in rules_rows:
+                    rules.append(
+                        {
+                            "id": r["id"],
+                            "title": r["title"],
+                            "sku_code": r["sku_code"],
+                            "aliases": r["aliases"],
+                            "min_quantity": r["min_quantity"],
+                            "is_active": bool(r["is_active"]) if r["is_active"] is not None else True,
+                        }
+                    )
+            start_val = s["start_date"] if HAS_STAGE_DATES else None
+            end_val = s["end_date"] if HAS_STAGE_DATES else None
+            status_val = s["status"] if HAS_STAGE_STATUS else "upcoming"
+            auto_val = s["auto_validation_enabled"] if HAS_STAGE_AUTO_VALIDATION else True
             stages.append(
                 {
                     "__id": f"stage-{s['id']}",
@@ -588,54 +861,29 @@ async def prize_draws(request: Request):
                     "winnersCount": s["winners_count"],
                     "textBefore": s["text_before"],
                     "textAfter": s["text_after"],
+                    "stageType": s["stage_type"] if HAS_STAGE_TYPE else "standard",
+                    "progressMessageText": s["progress_message_text"] if HAS_STAGE_MESSAGE_TEMPLATES else None,
+                    "winMessageText": s["win_message_text"] if HAS_STAGE_MESSAGE_TEMPLATES else None,
+                    "start": str(start_val) if start_val else "",
+                    "end": str(end_val) if end_val else "",
+                    "status": status_val or "upcoming",
+                    "autoValidationEnabled": bool(auto_val) if auto_val is not None else True,
+                    "rulesDescription": s["rules_description"] if HAS_STAGE_RULES_DESCRIPTION else None,
                     "winners": winners,
+                    "rules": rules,
                 }
             )
-        rules = []
-        if prize_draw_rules_table is not None:
-            rules_rows = await database.fetch_all(
-                prize_draw_rules_table.select()
-                .where(prize_draw_rules_table.c.draw_id == d["id"])
-                .order_by(prize_draw_rules_table.c.id)
-            )
-            for r in rules_rows:
-                rules.append(
-                    {
-                        "id": r["id"],
-                        "title": r["title"],
-                        "sku_code": r["sku_code"],
-                        "aliases": r["aliases"],
-                        "min_quantity": r["min_quantity"],
-                        "is_active": bool(r["is_active"]) if r["is_active"] is not None else True,
-                    }
-                )
 
-        start_dt = datetime.datetime.fromisoformat(d["start_date"]).date()
-        end_dt = datetime.datetime.fromisoformat(d["end_date"]).date()
-        auto_validation_value = d["auto_validation_enabled"] if HAS_DRAW_AUTO_VALIDATION else None
         draws.append({
             "id": d["id"],
             "title": d["title"],
-            "start": start_dt.isoformat(),
-            "end": end_dt.isoformat(),
-            "status": d["status"],
-            "auto_validation_enabled": bool(auto_validation_value) if auto_validation_value is not None else True,
             "stages": stages,
-            "rules": rules,
+            "hasActiveStage": any(st["status"] == "active" for st in stages),
         })
     return templates.TemplateResponse(
         "prize_draws.html",
         {"request": request, "active_page": "prize_draws", "draws_data": draws, "version": app.state.static_version},
     )
-
-class StageIn(BaseModel):
-    __id: Optional[str]
-    name: str
-    description: Optional[str] = None
-    winnersCount: int
-    textBefore: Optional[str] = None
-    textAfter: Optional[str] = None
-    winners: List[Any] = []
 
 class RuleIn(BaseModel):
     id: Optional[int] = None
@@ -645,43 +893,67 @@ class RuleIn(BaseModel):
     min_quantity: int = 1
     is_active: bool = True
 
+class StageIn(BaseModel):
+    __id: Optional[str]
+    name: str
+    description: Optional[str] = None
+    winnersCount: int
+    textBefore: Optional[str] = None
+    textAfter: Optional[str] = None
+    stageType: str = "standard"
+    progressMessageText: Optional[str] = None
+    winMessageText: Optional[str] = None
+    start: Optional[datetime.date] = None
+    end: Optional[datetime.date] = None
+    status: str = "upcoming"
+    autoValidationEnabled: bool = True
+    rulesDescription: Optional[str] = None
+    winners: List[Any] = []
+    rules: List[RuleIn] = []
+
 class DrawIn(BaseModel):
     id: Optional[int] = None
     title: str
-    start: datetime.date
-    end: datetime.date
-    status: str
-    auto_validation_enabled: bool = True
     stages: List[StageIn]
-    rules: List[RuleIn] = []
 
 @app.post("/prize-draws")
 async def save_draw(draw: DrawIn):
-    # validate date range
-    if draw.end <= draw.start:
-        raise HTTPException(status_code=400, detail="Дата окончания должна быть позже даты начала")
+    # guaranteed_prize-этап без единого правила никогда не сможет засчитать чек (раздел 4.8 ТЗ)
+    for stage in draw.stages:
+        if stage.stageType == "guaranteed_prize" and not stage.rules:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Этап «{stage.name}»: у типа «Гарантированный приз» должно быть хотя бы одно правило",
+            )
+        if stage.start and stage.end and stage.end <= stage.start:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Этап «{stage.name}»: дата окончания должна быть позже даты начала",
+            )
 
-    # ensure no overlap with other active draws
-    if draw.status == "active":
-        overlap_query = (
-            sqlalchemy.select(prize_draws_table.c.id)
-            .where(prize_draws_table.c.status == "active")
-            .where(prize_draws_table.c.id != (draw.id if draw.id is not None else -1))
-            .where(prize_draws_table.c.start_date <= draw.end)
-            .where(prize_draws_table.c.end_date >= draw.start)
+    # Модель "1 активный этап во всей системе": блокируем, если в этом сохранении пытаются
+    # активировать больше одного этапа сразу...
+    active_in_payload = [s for s in draw.stages if s.status == "active"]
+    if len(active_in_payload) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Активным может быть только один этап — в этом розыгрыше отмечено активными несколько",
         )
-        conflict = await database.fetch_one(overlap_query)
+    # ...или если где-то в системе уже активен другой этап (не из этого розыгрыша).
+    if active_in_payload and HAS_STAGE_STATUS:
+        conflict_query = (
+            sqlalchemy.select(prize_draw_stages_table.c.id, prize_draw_stages_table.c.name)
+            .where(prize_draw_stages_table.c.status == "active")
+            .where(prize_draw_stages_table.c.draw_id != (draw.id if draw.id is not None else -1))
+        )
+        conflict = await database.fetch_one(conflict_query)
         if conflict:
-            raise HTTPException(status_code=400, detail="Период пересекается с другим активным розыгрышем")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Нельзя активировать этап — уже активен этап «{conflict['name']}» в другом розыгрыше",
+            )
 
-    draw_values = {
-        "title": draw.title,
-        "start_date": draw.start,
-        "end_date": draw.end,
-        "status": draw.status,
-    }
-    if HAS_DRAW_AUTO_VALIDATION:
-        draw_values["auto_validation_enabled"] = draw.auto_validation_enabled
+    draw_values = {"title": draw.title}
 
     if draw.id is None:
         new_id = await database.execute(
@@ -695,7 +967,7 @@ async def save_draw(draw: DrawIn):
             .values(**draw_values)
         )
 
-    # delete old stages and winners
+    # delete old stages, their winners and their rules
     old_stage_ids = await database.fetch_all(
         sqlalchemy.select(prize_draw_stages_table.c.id)
         .where(prize_draw_stages_table.c.draw_id == new_id)
@@ -705,23 +977,43 @@ async def save_draw(draw: DrawIn):
             prize_draw_winners_table.delete()
             .where(prize_draw_winners_table.c.stage_id == os["id"])
         )
+        if prize_draw_rules_table is not None:
+            await database.execute(
+                prize_draw_rules_table.delete()
+                .where(prize_draw_rules_table.c.stage_id == os["id"])
+            )
     await database.execute(
         prize_draw_stages_table.delete()
         .where(prize_draw_stages_table.c.draw_id == new_id)
     )
 
-    # insert new stages & winners
+    # insert new stages, their winners and their rules (правила теперь на уровне этапа, п.2 ТЗ)
     for order_idx, stage in enumerate(draw.stages):
+        stage_values = {
+            "draw_id": new_id,
+            "name": stage.name,
+            "description": stage.description,
+            "winners_count": stage.winnersCount,
+            "text_before": stage.textBefore,
+            "text_after": stage.textAfter,
+            "order_index": order_idx,
+        }
+        if HAS_STAGE_TYPE:
+            stage_values["stage_type"] = stage.stageType
+        if HAS_STAGE_MESSAGE_TEMPLATES:
+            stage_values["progress_message_text"] = stage.progressMessageText
+            stage_values["win_message_text"] = stage.winMessageText
+        if HAS_STAGE_DATES:
+            stage_values["start_date"] = stage.start or None
+            stage_values["end_date"] = stage.end or None
+        if HAS_STAGE_STATUS:
+            stage_values["status"] = stage.status
+        if HAS_STAGE_AUTO_VALIDATION:
+            stage_values["auto_validation_enabled"] = stage.autoValidationEnabled
+        if HAS_STAGE_RULES_DESCRIPTION:
+            stage_values["rules_description"] = stage.rulesDescription
         stage_id = await database.execute(
-            prize_draw_stages_table.insert().values(
-                draw_id=new_id,
-                name=stage.name,
-                description=stage.description,
-                winners_count=stage.winnersCount,
-                text_before=stage.textBefore,
-                text_after=stage.textAfter,
-                order_index=order_idx
-            )
+            prize_draw_stages_table.insert().values(**stage_values)
         )
         for winner in stage.winners:
             if isinstance(winner, dict):
@@ -743,24 +1035,18 @@ async def save_draw(draw: DrawIn):
             await database.execute(
                 prize_draw_winners_table.insert().values(**insert_values)
             )
-
-    # delete old rules and insert new ones (full rewrite, same pattern as stages)
-    if prize_draw_rules_table is not None:
-        await database.execute(
-            prize_draw_rules_table.delete()
-            .where(prize_draw_rules_table.c.draw_id == new_id)
-        )
-        for rule in draw.rules:
-            await database.execute(
-                prize_draw_rules_table.insert().values(
-                    draw_id=new_id,
-                    title=rule.title,
-                    sku_code=rule.sku_code,
-                    aliases=rule.aliases,
-                    min_quantity=rule.min_quantity,
-                    is_active=rule.is_active,
+        if prize_draw_rules_table is not None:
+            for rule in stage.rules:
+                await database.execute(
+                    prize_draw_rules_table.insert().values(
+                        stage_id=stage_id,
+                        title=rule.title,
+                        sku_code=rule.sku_code,
+                        aliases=rule.aliases,
+                        min_quantity=rule.min_quantity,
+                        is_active=rule.is_active,
+                    )
                 )
-            )
 
     return {"success": True, "id": new_id}
 
@@ -778,17 +1064,17 @@ async def delete_draw(draw_id: int):
                 prize_draw_winners_table.c.stage_id == sid["id"]
             )
         )
+        if prize_draw_rules_table is not None:
+            await database.execute(
+                prize_draw_rules_table.delete().where(
+                    prize_draw_rules_table.c.stage_id == sid["id"]
+                )
+            )
     await database.execute(
         prize_draw_stages_table.delete().where(
             prize_draw_stages_table.c.draw_id == draw_id
         )
     )
-    if prize_draw_rules_table is not None:
-        await database.execute(
-            prize_draw_rules_table.delete().where(
-                prize_draw_rules_table.c.draw_id == draw_id
-            )
-        )
     if has_receipt_draw_id():
         await database.execute(
             receipts_table.update()
@@ -812,6 +1098,11 @@ async def api_determine_winners(stage_id: int, req: DetermineReq):
     )
     if not stage_row:
         raise HTTPException(status_code=404, detail="Stage not found")
+    if HAS_STAGE_TYPE and stage_row["stage_type"] == "guaranteed_prize":
+        raise HTTPException(
+            status_code=400,
+            detail="Для этапа «Гарантированный приз» победители определяются автоматически ботом",
+        )
 
     join_clause = receipts_table.join(
         users_table, receipts_table.c.user_tg_id == users_table.c.tg_id
@@ -844,7 +1135,40 @@ async def api_determine_winners(stage_id: int, req: DetermineReq):
     if not receipts_rows:
         raise HTTPException(status_code=400, detail="Нет чеков для розыгрыша")
 
-    sample = list(receipts_rows)
+    # Если у этапа заданы правила проверки — билет в розыгрыш даёт не каждый чек, а каждый
+    # ПОЛНЫЙ "комплект" накопленного количества (entries_count из _get_stage_progress —
+    # см. receipt_validation.compute_entries_count(): несколько чеков могут сложиться в
+    # один комплект, а один чек с достаточным количеством — сразу дать несколько). Число
+    # билетов пользователя в пуле розыгрыша должно совпадать с тем, что показываем ему в
+    # сообщении (build_standard_qualify_message/build_standard_progress_message), иначе
+    # реальные шансы разойдутся с тем, что человеку обещали. Без правил — поведение не
+    # меняется (обратная совместимость со старыми акциями без правил проверки: билет —
+    # любой подтверждённый чек).
+    active_rules = await _get_stage_rules(stage_id, only_active=True)
+    if active_rules:
+        progress = await _get_stage_progress(stage_id, rules=active_rules)
+        receipts_by_id = {r["id"]: r for r in receipts_rows}
+        sample = []
+        for p in progress:
+            if p["entries_count"] < 1:
+                continue
+            # Представитель для отображения (превью/имя) — любой реально относящийся к
+            # этому этапу чек пользователя; сами комплекты не привязаны 1:1 к чекам.
+            representative = next(
+                (receipts_by_id[rid] for rid in p["entry_receipt_ids"] if rid in receipts_by_id),
+                None,
+            )
+            if representative is None:
+                continue
+            sample.extend([representative] * p["entries_count"])
+        if not sample:
+            raise HTTPException(
+                status_code=400,
+                detail="Нет участников, выполнивших все условия этапа (правила проверки чеков)",
+            )
+    else:
+        sample = list(receipts_rows)
+
     random.shuffle(sample)
     sample = sample[: max(1, req.winners_count)]
 
@@ -879,6 +1203,16 @@ async def api_determine_winners(stage_id: int, req: DetermineReq):
         )
 
     return {"winners": winners_resp}
+
+
+@app.get("/api/draw-stages/{stage_id}/progress")
+async def api_stage_progress(stage_id: int):
+    stage_row = await database.fetch_one(
+        prize_draw_stages_table.select().where(prize_draw_stages_table.c.id == stage_id)
+    )
+    if not stage_row:
+        raise HTTPException(status_code=404, detail="Stage not found")
+    return {"progress": await _get_stage_progress(stage_id)}
 
 
 def _format_winner_message(text_before: str | None, winners: list[str], text_after: str | None) -> str:
@@ -2075,6 +2409,30 @@ async def get_receipt(receipt_id: int):
             for row in items_rows
         ]
 
+    # Правила всех этапов акции чека — для формы ручного ввода товара (раздел 4.7 ТЗ)
+    available_rules: list = []
+    draw_id_val = r.get("draw_id") if has_receipt_draw_id() else None
+    if draw_id_val and prize_draw_rules_table is not None:
+        stages_rows = await database.fetch_all(
+            prize_draw_stages_table.select().where(prize_draw_stages_table.c.draw_id == draw_id_val)
+        )
+        for stage_row in stages_rows:
+            rule_rows = await database.fetch_all(
+                prize_draw_rules_table.select()
+                .where(prize_draw_rules_table.c.stage_id == stage_row["id"])
+                .where(prize_draw_rules_table.c.is_active == True)
+                .order_by(prize_draw_rules_table.c.id)
+            )
+            for rr in rule_rows:
+                available_rules.append(
+                    {
+                        "id": rr["id"],
+                        "title": rr["title"],
+                        "stage_name": stage_row["name"],
+                        "min_quantity": rr["min_quantity"] or 1,
+                    }
+                )
+
     return {
         "id": r["id"],
         "number": r.get("number"),
@@ -2089,18 +2447,39 @@ async def get_receipt(receipt_id: int):
         "draw_title": r.get("draw_title"),
         "comment": r.get("comment") if has_receipt_comment() else None,
         "items": items,
+        "available_rules": available_rules,
     }
+
+class ManualItemIn(BaseModel):
+    rule_id: int
+    quantity: Optional[float] = None
 
 class ReceiptUpdate(BaseModel):
     status: str
     draw_id: Optional[int] = None
     comment: Optional[str] = None
+    manual_item: Optional[ManualItemIn] = None
 
 @app.post("/api/receipts/{receipt_id}")
 async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
     old_row = await database.fetch_one(
         receipts_table.select().where(receipts_table.c.id == receipt_id)
     )
+
+    if upd.manual_item is not None and prize_draw_rules_table is not None:
+        rule_row = await database.fetch_one(
+            prize_draw_rules_table.select().where(prize_draw_rules_table.c.id == upd.manual_item.rule_id)
+        )
+        if not rule_row:
+            raise HTTPException(status_code=404, detail="Правило не найдено")
+        min_quantity = rule_row["min_quantity"] or 1
+        if min_quantity > 1 and upd.manual_item.quantity is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Для этого правила нужно указать количество (min_quantity > 1)",
+            )
+        await _add_manual_receipt_item(receipt_id, upd.manual_item.rule_id, upd.manual_item.quantity)
+
     update_values = {"status": upd.status}
     if has_receipt_draw_id():
         update_values["draw_id"] = upd.draw_id
@@ -2119,14 +2498,82 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
         .where(receipts_table.c.id == receipt_id)
         .values(**update_values)
     )
-    if old_row and has_receipt_status() and has_receipt_msg_id():
+    if old_row and has_receipt_status():
         if hasattr(old_row, "_mapping"):
             row_data = dict(old_row._mapping)
         else:
             row_data = dict(old_row)
-        if row_data.get("status") != upd.status:
+        status_changed = row_data.get("status") != upd.status
+        user_tg_id = row_data.get("user_tg_id")
+        # Гарантированный приз: пересчитать нужно не только при смене статуса, но и когда
+        # чек уже был "Подтверждён" и админ ТОЛЬКО ЧТО добавил ручную позицию — иначе
+        # добавление недостающего товара к уже подтверждённому чеку никогда не проверит
+        # победу повторно (найдено при живом тестировании).
+        should_recheck_stage_progress = upd.status == "Подтверждён" and (
+            status_changed or upd.manual_item is not None
+        )
+
+        # Пересчёт прогресса/победы — это изменение бизнес-данных (prize_draw_winners), а не
+        # просто уведомление, поэтому выполняется независимо от наличия message_id/бота ниже
+        # (баг, найденный при живом тестировании: раньше был вложен в блок отправки сообщения
+        # и не срабатывал вовсе для чеков без message_id или без токена бота).
+        # Модель "1 активный этап во всей системе": чек оценивается по этапу, под которым
+        # он был реально загружен (receipts.stage_id), а не по всем этапам текущего draw_id —
+        # их теперь одновременно активно максимум по одному во всей БД.
+        # guaranteed_prize и standard используют одну и ту же накопительную модель прогресса —
+        # различие только в том, что происходит по достижении порога (автопобеда vs допуск
+        # к розыгрышу, который админ проводит вручную через determine()).
+        stage_event_text: Optional[str] = None
+        if should_recheck_stage_progress and user_tg_id:
+            draw_id_for_progress = upd.draw_id if has_receipt_draw_id() else None
+            stage_id_for_progress = row_data.get("stage_id") if "stage_id" in row_data else None
+            if draw_id_for_progress and stage_id_for_progress and HAS_STAGE_TYPE:
+                stage_row = await database.fetch_one(
+                    prize_draw_stages_table.select().where(
+                        prize_draw_stages_table.c.id == stage_id_for_progress
+                    )
+                )
+                if stage_row:
+                    stage = dict(stage_row)
+                    if stage["stage_type"] == "guaranteed_prize":
+                        winner_name = await _resolve_winner_name(user_tg_id)
+                        result = await _evaluate_guaranteed_prize_stage(
+                            stage, user_tg_id, draw_id_for_progress, receipt_id, winner_name
+                        )
+                        if result["outcome"] == "won":
+                            stage_event_text = receipt_validation.build_win_message(
+                                stage.get("win_message_text") if HAS_STAGE_MESSAGE_TEMPLATES else None
+                            )
+                        elif result["outcome"] == "progress":
+                            remaining_text = receipt_validation.format_remaining_items(
+                                result["rule_progress"]
+                            )
+                            stage_event_text = receipt_validation.build_progress_message(
+                                stage.get("progress_message_text") if HAS_STAGE_MESSAGE_TEMPLATES else None,
+                                remaining_text,
+                            )
+                    else:
+                        result = await _evaluate_standard_stage_progress(
+                            stage, user_tg_id, draw_id_for_progress
+                        )
+                        entries_count = result["entries_count"]
+                        if result["outcome"] == "complete":
+                            stage_event_text = receipt_validation.build_standard_qualify_message(
+                                stage.get("win_message_text") if HAS_STAGE_MESSAGE_TEMPLATES else None,
+                                entries_count,
+                            )
+                        elif result["outcome"] == "progress":
+                            remaining_text = receipt_validation.format_remaining_items(
+                                result["rule_progress"]
+                            )
+                            stage_event_text = receipt_validation.build_standard_progress_message(
+                                stage.get("progress_message_text") if HAS_STAGE_MESSAGE_TEMPLATES else None,
+                                remaining_text,
+                                entries_count,
+                            )
+
+        if (status_changed or stage_event_text) and has_receipt_msg_id():
             message_id = row_data.get("message_id")
-            user_tg_id = row_data.get("user_tg_id")
             if message_id and user_tg_id:
                 bot = get_bot()
                 if not bot:
@@ -2136,11 +2583,13 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
                         upd.status,
                     )
                 else:
-                    status_messages = {
-                        "Подтверждён": "✅ Чек подтверждён",
-                        "Нет товара в чеке": "❌ В чеке не найден нужный товар",
-                    }
-                    text = status_messages.get(upd.status)
+                    text = stage_event_text
+                    if text is None:
+                        status_messages = {
+                            "Подтверждён": "✅ Чек подтверждён",
+                            "Нет товара в чеке": "❌ В чеке не найден нужный товар",
+                        }
+                        text = status_messages.get(upd.status)
                     if text:
                         try:
                             await bot.send_message(

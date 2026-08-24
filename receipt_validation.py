@@ -15,110 +15,170 @@ def parse_aliases(aliases_str: str | None) -> list[str]:
     return [a.strip().casefold() for a in aliases_str.split(";") if a.strip()]
 
 
-def _item_quantity(item: dict) -> tuple[float | None, bool]:
-    """Вернуть (quantity, is_numeric) для позиции чека ФНС."""
-    qty = item.get("quantity")
-    if qty is None:
-        qty = item.get("qty")
-    if qty is None:
-        return None, False
-    try:
-        return float(qty), True
-    except (TypeError, ValueError):
-        return None, False
-
-
 def _format_qty(value: float) -> str:
     return f"{value:g}"
 
 
 @dataclass
-class MatchResult:
+class AccumulatingMatchResult:
     confirmed: bool
-    needs_manual: bool
-    matched_rule_id: int | None
-    reason: str
     item_rule_map: dict[int, int] = field(default_factory=dict)
+    matched_rule_ids: set[int] = field(default_factory=set)
 
 
-def match_items_to_rules(items: list[dict], rules: list[dict]) -> MatchResult:
-    """Сопоставить позиции чека (ФНС) с активными правилами акции.
+def match_items_accumulating(items: list[dict], rules: list[dict]) -> AccumulatingMatchResult:
+    """Сопоставить позиции чека с активными правилами этапа (standard и guaranteed_prize).
 
-    Правило считается выполненным, если найдена позиция с алиасом и
-    (для min_quantity <= 1) сам факт наличия позиции достаточен, либо
-    (для min_quantity > 1) суммарное числовое количество позиций >= min_quantity.
+    Количество товара в рамках ОДНОГО чека не имеет значения — важен только факт, что
+    нашёлся товар по алиасам хотя бы одного активного правила. Итоговое количество
+    суммируется по всем подтверждённым чекам пользователя отдельно — см.
+    sql_mgt.get_user_rule_progress() / evaluate_guaranteed_prize_stage() /
+    evaluate_standard_stage_progress().
     """
     active_rules = [r for r in rules if r.get("is_active", True)]
-
     item_rule_map: dict[int, int] = {}
-    rule_matches: dict[int, dict] = {}
+    matched_rule_ids: set[int] = set()
 
     for rule in active_rules:
         rule_id = rule["id"]
         aliases = parse_aliases(rule.get("aliases"))
-        min_quantity = rule.get("min_quantity") or 1
-        matched_quantity = 0.0
-        quantity_known = True
-        matched_any = False
-
         for idx, item in enumerate(items):
             name = str(item.get("name", "")).casefold()
             if any(alias in name for alias in aliases):
-                matched_any = True
                 item_rule_map.setdefault(idx, rule_id)
-                qty, is_numeric = _item_quantity(item)
-                if is_numeric:
-                    matched_quantity += qty
-                else:
-                    quantity_known = False
+                matched_rule_ids.add(rule_id)
 
-        if matched_any:
-            rule_matches[rule_id] = {
-                "title": rule.get("title"),
-                "min_quantity": min_quantity,
-                "matched_quantity": matched_quantity,
-                "quantity_known": quantity_known,
-            }
-
-    # Есть ли правило, полностью подтверждённое количеством
-    for rule_id, info in rule_matches.items():
-        if info["min_quantity"] <= 1:
-            qty_ok = True
-        else:
-            qty_ok = info["quantity_known"] and info["matched_quantity"] >= info["min_quantity"]
-        if qty_ok:
-            return MatchResult(
-                confirmed=True,
-                needs_manual=False,
-                matched_rule_id=rule_id,
-                reason=(
-                    f"Бот: товар найден по правилу '{info['title']}' "
-                    f"(кол-во {_format_qty(info['matched_quantity'])} >= {info['min_quantity']})"
-                ),
-                item_rule_map=item_rule_map,
-            )
-
-    if rule_matches:
-        rule_id, info = next(iter(rule_matches.items()))
-        qty_display = _format_qty(info["matched_quantity"]) if info["quantity_known"] else "неизвестно"
-        return MatchResult(
-            confirmed=False,
-            needs_manual=True,
-            matched_rule_id=rule_id,
-            reason=(
-                f"Бот: найден товар по правилу '{info['title']}', "
-                f"но количество {qty_display} < {info['min_quantity']} — требуется ручная проверка"
-            ),
-            item_rule_map=item_rule_map,
-        )
-
-    return MatchResult(
-        confirmed=False,
-        needs_manual=True,
-        matched_rule_id=None,
-        reason="Бот: товар по правилам акции не найден в данных ФНС — требуется ручная проверка",
+    return AccumulatingMatchResult(
+        confirmed=bool(matched_rule_ids),
         item_rule_map=item_rule_map,
+        matched_rule_ids=matched_rule_ids,
     )
+
+
+DEFAULT_PROGRESS_MESSAGE_TEMPLATE = (
+    "Чек принят ✅\n\n"
+    "Осталось докупить:\n"
+    "{remaining_items}\n\n"
+    "Учитывается сумма по всем вашим чекам акции 🧮"
+)
+DEFAULT_WIN_MESSAGE = (
+    "Поздравляем🎉\n"
+    "Все условия выполнены – значит, приз скоро будет вашим 🏆\n\n"
+    "Мы свяжемся с вами в ближайшее время, чтобы уточнить данные для отправки подарка 🎁\n\n"
+    "Спасибо, что вы с нами! 🫶🏻"
+)
+EXTRA_RECEIPT_MESSAGE = (
+    "❌ Вы уже выполнили условия этой акции — приз уже ваш, этот чек лишний и в розыгрыше "
+    "не участвует."
+)
+
+
+def build_progress_message(template: str | None, remaining_items: str) -> str:
+    """Подставить {remaining_items} в редактируемый (или дефолтный) шаблон промежуточного
+    сообщения гарантированного приза (раздел 4.10 ТЗ). Для standard-этапов используется
+    build_standard_progress_message() — у него есть ещё {entries_count}."""
+    text = template or DEFAULT_PROGRESS_MESSAGE_TEMPLATE
+    return text.replace("{remaining_items}", remaining_items)
+
+
+def build_win_message(template: str | None) -> str:
+    """Текст финального поздравления — редактируемый (или дефолтный, раздел 4.10 ТЗ)."""
+    return template or DEFAULT_WIN_MESSAGE
+
+
+def _pluralize_ru(n: int, one: str, few: str, many: str) -> str:
+    """Русское склонение по числительному (1 попытка / 2 попытки / 5 попыток)."""
+    n_abs = abs(n)
+    if n_abs % 100 in (11, 12, 13, 14):
+        return many
+    last_digit = n_abs % 10
+    if last_digit == 1:
+        return one
+    if 2 <= last_digit <= 4:
+        return few
+    return many
+
+
+def format_entries_phrase(entries_count: int) -> str:
+    """"N попыток выиграть" с правильным склонением — см. compute_entries_count()."""
+    word = _pluralize_ru(entries_count, "попытка", "попытки", "попыток")
+    return f"{entries_count} {word} выиграть"
+
+
+def compute_entries_count(rule_progress: list[dict]) -> int:
+    """Число полных "комплектов" условий этапа, накопленных пользователем, — это и есть
+    попытки выиграть для standard-этапа (уточнение владельца: "не просто каждый чек, а
+    группа чеков от 1 и более в совокупности проходящая валидацию"). НЕ равно числу чеков:
+    несколько чеков могут в сумме дать только один комплект (например: чек 1 = 1 шт., чек
+    2 = 1 шт., при min_quantity=2 — вместе это 1 комплект/попытка), а один чек с достаточным
+    количеством может сразу дать несколько комплектов (чек на 4 шт. при min_quantity=2 —
+    сразу 2 комплекта). Если правил несколько — число комплектов ограничено самым
+    дефицитным правилом (аналог "сколько раз можно собрать рецепт из того, что накопили").
+    Не персонализирует "чек" в тексте сообщений — комплект может состоять из любого числа
+    чеков, в т.ч. одного.
+    """
+    if not rule_progress:
+        return 0
+    return min(int(rp["progress"] // rp["min_quantity"]) for rp in rule_progress)
+
+
+# standard: чем больше накоплено комплектов условий — тем больше шансов (каждый комплект =
+# билет), в отличие от guaranteed_prize, где выполнение условий = гарантированная победа.
+DEFAULT_STANDARD_PROGRESS_MESSAGE_TEMPLATE = (
+    "Чек принят ✅\n\n"
+    "Осталось докупить:\n"
+    "{remaining_items}\n\n"
+    "Учитывается сумма по всем вашим чекам акции 🧮\n"
+    "Каждый подтверждённый чек — отдельный шанс выиграть. Сейчас у вас {entries_count} 🎟️"
+)
+DEFAULT_STANDARD_QUALIFY_MESSAGE = (
+    "Отлично! Вы выполнили все условия акции и теперь участвуете в розыгрыше приза 🎉\n\n"
+    "Каждый следующий подтверждённый чек — ещё один шанс выиграть, можно продолжать. "
+    "Сейчас у вас {entries_count} 🎟️\n\n"
+    "Победителя определим позже — следите за уведомлениями от бота. Удачи! 🍀"
+)
+
+
+def build_standard_progress_message(
+    template: str | None, remaining_items: str, entries_count: int
+) -> str:
+    """Промежуточное сообщение standard-этапа — остаток товара + текущее число попыток
+    (подтверждённых чеков, зачтённых в розыгрыш этого этапа)."""
+    text = template or DEFAULT_STANDARD_PROGRESS_MESSAGE_TEMPLATE
+    text = text.replace("{remaining_items}", remaining_items)
+    return text.replace("{entries_count}", format_entries_phrase(entries_count))
+
+
+def build_standard_qualify_message(template: str | None, entries_count: int) -> str:
+    """Условия standard-этапа выполнены — участник допущен к розыгрышу, но НЕ победитель
+    (в отличие от build_win_message для guaranteed_prize, где условия = автопобеда).
+    Дальнейшие чеки продолжают копить попытки, поэтому тоже показываем счётчик."""
+    text = template or DEFAULT_STANDARD_QUALIFY_MESSAGE
+    return text.replace("{entries_count}", format_entries_phrase(entries_count))
+
+
+def format_remaining_items(rule_progress: list[dict]) -> str:
+    """Собрать текст остатка товара для промежуточного сообщения (раздел 3.5/4.10 ТЗ).
+
+    rule_progress — список правил этапа с полями title/min_quantity/progress. Учитывает
+    только ещё не выполненные правила (progress < min_quantity); остаток — это КОЛИЧЕСТВО
+    товара, а не число чеков (пользователь может закрыть весь остаток одним чеком).
+
+    Формат одинаковый для одного и нескольких правил — построчный список, всегда с
+    названием товара (раньше единственный недостающий товар с остатком=1 схлопывался в
+    безымянное "1 товар", из-за чего пользователь не понимал, чего именно не хватает).
+    """
+    pending = [
+        rp for rp in rule_progress if rp["progress"] < rp["min_quantity"]
+    ]
+    if not pending:
+        return ""
+
+    lines = []
+    for rp in pending:
+        remaining = rp["min_quantity"] - rp["progress"]
+        lines.append(f"• «{rp['title']}» — ещё {_format_qty(remaining)} шт.")
+    return "\n".join(lines)
 
 
 def ocr_keywords_for_rules(rules: list[dict]) -> list[str]:

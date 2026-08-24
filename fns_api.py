@@ -185,7 +185,12 @@ def _parse_qr_datetime(value: str) -> datetime:
         cleaned = cleaned[:-1]
 
     # Try strict ISO parsing first (handles "2025-04-12T19:42" etc.).
+    # Require an explicit "T" separator: Python 3.11+ datetime.fromisoformat()
+    # also accepts a bare date ("20250412") and silently defaults the time to
+    # midnight, which would send a wrong timestamp to FNS instead of raising.
     for candidate in (cleaned, cleaned.replace(" ", "T")):
+        if "T" not in candidate:
+            continue
         try:
             return datetime.fromisoformat(candidate)
         except ValueError:
