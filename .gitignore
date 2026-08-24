@@ -4,6 +4,8 @@ server_access.md
 .env.*
 secrets/
 *.secret
+/settings.json
+/botFin.conf
 
 # Python
 __pycache__/

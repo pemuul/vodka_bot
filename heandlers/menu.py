@@ -12,6 +12,15 @@ from keyboards.admin_kb import edit_menu_kb, init_object as init_object_akb
 from keys import SPLITTER_STR, DELETE_MESSAGES, SHOW_SECTION_NAME
 
 
+DEFAULT_CHECK_RULES_TEXT = (
+    "Не упустите свой шанс: FINSKY ICE проводит акцию для своих покупателей!\n"
+    "Участвовать очень просто – приобретайте сладкие и полусладкие настойки FINSKY ICE "
+    "в объёме 0,5л, отправляйте фото или QR-код чека в чат-бот✨\n"
+    "При покупке от 5 бутылок гарантированный приз: фирменная термосумка "
+    "и каталог рецептов коктейлей🍹"
+)
+
+
 STATUS_ICON_MAP = {
     "подтверждён": "✅",
     "подтвержден": "✅",
@@ -20,6 +29,8 @@ STATUS_ICON_MAP = {
     "в авто обработке": "⏳",
     "чек уже загружен": "❌",
     "нет товара в чеке": "❌",
+    "на ручной проверке": "⏳",
+    "лишний чек": "🎁",
 }
 DEFAULT_STATUS_ICON = "⏳"
 
@@ -90,6 +101,17 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
         text_message = f'"{tree_name}"'
     
     tree_item_text = tree_item.text
+    active_stage = None
+    if tree_item.item_id == 'check':
+        # Текст правил акции — редактируется в /prize-draws (поле этапа rules_description).
+        # Раньше при пустом поле показывался статичный текст из дерева меню — убрали:
+        # два места хранения одного и того же текста только путали. Теперь единственный
+        # источник — либо кастомный текст активного этапа, либо дефолт ниже в коде.
+        active_stage = await sql_mgt.get_active_stage()
+        if active_stage and active_stage.get("rules_description"):
+            tree_item_text = active_stage["rules_description"]
+        else:
+            tree_item_text = DEFAULT_CHECK_RULES_TEXT
     if tree_item.path == SPLITTER_STR and await sql_mgt.is_user_blocked(message.chat.id):
         blocked_note = (
             "Вы заблокированы!\n"
@@ -168,7 +190,7 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
     on_off_admin_panel = await sql_mgt.get_param(message.chat.id, 'ADMIN_MENU')
     extra_buttons = None
     if tree_item.item_id == 'check':
-        active_draw_id = await sql_mgt.get_active_draw_id()
+        active_draw_id = active_stage["draw_id"] if active_stage else None
         receipts = []
         await sql_mgt.set_param(message.chat.id, 'CHECK_BUTTON_MAP', '')
         if active_draw_id is None:
@@ -177,6 +199,15 @@ async def get_message(message: Message, path=SPLITTER_STR, replace=False):
                 "Следите за рассылками в чат-боте – мы обязательно сообщим о старте новых промоакций!"
             )
         else:
+            if (
+                active_stage.get("stage_type") == "guaranteed_prize"
+                and await sql_mgt.is_stage_winner(active_stage["id"], message.chat.id)
+            ):
+                text_message += (
+                    f"\n\n🎁 Вы уже выполнили условия акции «{active_stage['name']}» — приз "
+                    "уже ваш! Мы скоро с вами свяжемся."
+                )
+
             receipts = await sql_mgt.get_user_receipts(
                 message.chat.id, limit=None, draw_id=active_draw_id
             )

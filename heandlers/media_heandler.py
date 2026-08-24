@@ -499,7 +499,7 @@ def _looks_like_fns_qr(payload: str) -> bool:
     if not all(key in parts and parts[key] and parts[key][0].strip() for key in required):
         return False
     ts = parts["t"][0].strip()
-    if not re.match(r"^\d{8}T\d{4}$", ts):
+    if not re.match(r"^\d{8}T\d{4}(\d{2})?$", ts):
         return False
     amount_raw = parts["s"][0].replace(",", ".").strip()
     try:
@@ -577,6 +577,21 @@ def _check_keywords_with_ocr(path: str, keywords: list[str]) -> tuple[bool, str 
     return vodka, None
 
 
+def _decode_with_zxingcpp(image) -> str | None:
+    """zxing-cpp — нативный (C++) декодер, быстрый и лёгкий по ресурсам, но раньше
+    пробовался только на исходном сером кадре без поворотов/увеличения. Вынесен в
+    отдельную функцию, чтобы вызывать его на КАЖДОМ варианте внутри цикла поворотов
+    _enhanced_qr() — до этой правки повёрнутый/мелкий QR он не имел шанса найти."""
+    try:
+        import zxingcpp  # type: ignore
+        results = zxingcpp.read_barcodes(image)
+        if results:
+            return results[0].text
+    except Exception:
+        pass
+    return None
+
+
 def _enhanced_qr(gray):
     """Attempt to decode difficult QR codes by rotating, scaling,
     thresholding, and using optional ZXing-based readers."""
@@ -603,17 +618,16 @@ def _enhanced_qr(gray):
                 decoded = data.strip()
                 logger.info("[QR] Enhanced cv2 detector success (rotation=%s): %s", rc, decoded)
                 return decoded
+            # zxing-cpp — нативный, быстрый, дёшево по ресурсам: пробуем на том же
+            # повороте/трешолде, где уже споткнулись pyzbar/opencv, а не только один раз
+            # на исходном кадре (см. _decode_with_zxingcpp)
+            zx = _decode_with_zxingcpp(processed)
+            if zx:
+                logger.info("[QR] Enhanced zxing-cpp success (rotation=%s): %s", rc, zx)
+                return zx
         _log_memory_usage(f"enhanced:after-rotation-{rc}")
-    try:
-        import zxingcpp  # type: ignore
-        logger.info("[QR] Trying ZXingCPP reader")
-        results = zxingcpp.read_barcodes(gray)
-        if results:
-            data = results[0].text
-            logger.info("[QR] ZXingCPP success: %s", data)
-            return data
-    except Exception:
-        pass
+    # Последний, самый тяжёлый вариант (pyzxing поднимает JVM-подпроцесс) — только один
+    # раз на исходном кадре, чтобы не гонять JVM 8 раз в цикле выше
     try:
         from pyzxing import BarCodeReader  # type: ignore
         logger.info("[QR] Trying pyzxing reader")
@@ -881,7 +895,13 @@ def _check_vodka_in_receipt(
 
 
 def _build_receipt_item_rows(items: list[dict], item_rule_map: dict[int, int]) -> list[dict]:
-    """Convert raw FNS items into rows for sql_mgt.save_receipt_items()."""
+    """Convert raw FNS items into rows for sql_mgt.save_receipt_items().
+
+    Модель "1 активный этап во всей системе" (см. чат с владельцем): чек всегда
+    оценивается ровно по ОДНОМУ этапу, поэтому позиция чека может совпасть максимум с
+    одним правилом — старая логика "несколько правил на одну позицию" (несколько
+    одновременно активных этапов) больше не нужна.
+    """
     rows = []
     for idx, item in enumerate(items):
         quantity = item.get("quantity")
@@ -903,18 +923,77 @@ def _build_receipt_item_rows(items: list[dict], item_rule_map: dict[int, int]) -
     return rows
 
 
+async def _resolve_winner_name(user_tg_id: int) -> str:
+    user = await sql_mgt.get_user_async(user_tg_id)
+    if user and user.get("name"):
+        return user["name"]
+    return str(user_tg_id)
+
+
+async def _is_extra_receipt(stage: dict | None, user_tg_id: int) -> bool:
+    """True, если этап — guaranteed_prize и пользователь уже его победитель — следующий
+    чек «лишний» и не участвует в проверке (раздел 4.4 ТЗ, модель "1 активный этап во всей
+    системе"). Для standard-этапа это никогда не «лишний» — там побед может быть много
+    (случайный розыгрыш), как и раньше."""
+    if not stage or stage.get("stage_type") != "guaranteed_prize":
+        return False
+    return await sql_mgt.is_stage_winner(stage["id"], user_tg_id)
+
+
+def _guaranteed_ocr_rule_id(rules: list[dict]) -> tuple[list[str], int | None]:
+    """OCR-ключевые слова и id правила для однозначной атрибуции прогресса
+    guaranteed_prize-этапа (раздел 3.4 ТЗ) — только правило с min_quantity==1 можно
+    подтвердить через OCR. Если таких правил у этапа больше одного — атрибуция
+    неоднозначна (OCR не даёт item-level точности, нельзя понять, какое именно совпало),
+    ключевые слова не возвращаются вовсе — чек уходит на ручную проверку (принцип
+    «при сомнении на ручную»)."""
+    candidates = [
+        r for r in rules
+        if r.get("is_active", True) and (r.get("min_quantity") or 1) == 1
+        and receipt_validation.parse_aliases(r.get("aliases"))
+    ]
+    if len(candidates) != 1:
+        return [], None
+    rule = candidates[0]
+    return receipt_validation.parse_aliases(rule.get("aliases")), rule["id"]
+
+
 async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int):
+    """Модель "1 активный этап во всей системе": чек всегда оценивается ровно по ОДНОМУ
+    этапу — тому, что был активен в момент отправки чека (receipts.stage_id, зафиксирован
+    в set_photo()). Это специально НЕ "текущий активный этап на момент обработки" — если
+    админ переключил активный этап, пока чек ждал очереди, чек всё равно оценивается по
+    этапу, под который он был реально загружен."""
     loop = asyncio.get_running_loop()
     keywords_raw = await sql_mgt.get_param(0, 'product_keywords') or ''
     keywords = [k.strip().casefold() for k in keywords_raw.split(';') if k.strip()]
 
     receipt_row = await sql_mgt.get_receipt(receipt_id)
     draw_id = receipt_row.get('draw_id') if receipt_row else None
-    rules = await sql_mgt.get_draw_rules(draw_id) if draw_id else []
-    use_rules = bool(rules)
+    stage_id = receipt_row.get('stage_id') if receipt_row else None
+    user_tg_id = receipt_row.get('user_tg_id') if receipt_row else chat_id
+
+    stage = await sql_mgt.get_stage(stage_id) if stage_id else None
+
+    # Защита от гонки: пользователь мог стать победителем guaranteed_prize-этапа между
+    # постановкой чека в очередь и его обработкой (раздел 4.4/9 ТЗ).
+    if await _is_extra_receipt(stage, user_tg_id):
+        comment_text = "Бот: пользователь уже выполнил условия акции — чек лишний"
+        await sql_mgt.update_receipt_status(receipt_id, "Лишний чек", comment=comment_text)
+        await global_objects.bot.send_message(
+            chat_id,
+            receipt_validation.EXTRA_RECEIPT_MESSAGE,
+            reply_to_message_id=msg_id,
+        )
+        return
+
+    stage_rules = await sql_mgt.get_stage_rules(stage_id) if stage_id else []
+    is_guaranteed = bool(stage) and stage.get("stage_type") == "guaranteed_prize"
+    use_rules = bool(stage_rules)
 
     logger.info(
-        "[QR] Processing receipt %s from %s (rules=%s)", receipt_id, dest, len(rules)
+        "[QR] Processing receipt %s from %s (stage_id=%s type=%s rules=%s)",
+        receipt_id, dest, stage_id, stage.get("stage_type") if stage else None, len(stage_rules),
     )
     qr_data = await loop.run_in_executor(
         global_objects.ocr_pool,
@@ -934,12 +1013,47 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     comment_text: str | None = None
     fns_result: str | None = None  # "success", "no_goods", "error"
     fns_error_text: str | None = None
+    stage_event_message: str | None = None  # текст события накопительного прогресса этапа, если было
     notify_messages = {
-        "Подтверждён": "✅ Чек подтверждён",
         "Чек уже загружен": "❌ Чек уже загружен",
         "Нет товара в чеке": "❌ В чеке не найден нужный товар",
     }
     use_vision = False
+
+    async def _apply_guaranteed_result(result: dict) -> None:
+        nonlocal fns_result, final_status, comment_text, stage_event_message
+        fns_result = "success"
+        final_status = "Подтверждён"
+        if result["outcome"] == "won":
+            comment_text = f"Бот: гарантированный этап '{stage['name']}' — условия выполнены"
+            stage_event_message = receipt_validation.build_win_message(stage.get("win_message_text"))
+        else:
+            remaining_text = receipt_validation.format_remaining_items(result["rule_progress"])
+            comment_text = f"Бот: гарантированный этап '{stage['name']}' — чек принят, есть остаток"
+            stage_event_message = receipt_validation.build_progress_message(
+                stage.get("progress_message_text"), remaining_text
+            )
+
+    async def _apply_standard_result(result: dict) -> None:
+        nonlocal fns_result, final_status, comment_text, stage_event_message
+        fns_result = "success"
+        final_status = "Подтверждён"
+        entries_count = result["entries_count"]
+        if result["outcome"] == "complete":
+            comment_text = (
+                f"Бот: этап '{stage['name']}' — условия выполнены, участвует в розыгрыше "
+                f"(попыток: {entries_count})"
+            )
+            stage_event_message = receipt_validation.build_standard_qualify_message(
+                stage.get("win_message_text"), entries_count
+            )
+        else:
+            remaining_text = receipt_validation.format_remaining_items(result["rule_progress"])
+            comment_text = f"Бот: этап '{stage['name']}' — чек принят, есть остаток"
+            stage_event_message = receipt_validation.build_standard_progress_message(
+                stage.get("progress_message_text"), remaining_text, entries_count
+            )
+
     if qr_data:
         existing = await sql_mgt.find_receipt_by_qr(qr_data)
         logger.info("[QR] Receipt %s checking duplicate status: %s", receipt_id, existing)
@@ -981,39 +1095,56 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
         if vodka_found is None:
             fns_result = "error"
             use_vision = True
-        else:
-            rule_match = None
-            if use_rules:
-                rule_match = receipt_validation.match_items_to_rules(fns_items, rules)
-            rows = _build_receipt_item_rows(
-                fns_items, rule_match.item_rule_map if rule_match else {}
-            )
+        elif use_rules:
+            # Прогресс накапливается по всем правилам этапа независимо от типа — см.
+            # receipt_validation.match_items_accumulating(). Различие guaranteed_prize/standard
+            # только в том, что происходит по достижении порога (автопобеда vs допуск к
+            # розыгрышу, который админ проводит вручную через determine()).
+            stage_match = receipt_validation.match_items_accumulating(fns_items, stage_rules)
+            rows = _build_receipt_item_rows(fns_items, stage_match.item_rule_map)
             await sql_mgt.save_receipt_items(receipt_id, rows)
-
-            if use_rules:
-                if rule_match.confirmed:
-                    fns_result = "success"
-                    final_status = "Подтверждён"
-                    comment_text = rule_match.reason
+            if stage_match.confirmed:
+                # Прогресс считается только по чекам со статусом "Подтверждён" (11.7 ТЗ) —
+                # именно ЭТОТ чек ещё не имеет такого статуса, пишем его ДО пересчёта.
+                stage_kind = "гарантированный" if is_guaranteed else "стандартный"
+                await sql_mgt.update_receipt_status(
+                    receipt_id, "Подтверждён", comment=f"Бот: авто-проверка ({stage_kind} этап)"
+                )
+                if is_guaranteed:
+                    winner_name = await _resolve_winner_name(user_tg_id)
+                    result = await sql_mgt.evaluate_guaranteed_prize_stage(
+                        stage, user_tg_id, draw_id, receipt_id, winner_name
+                    )
+                    await _apply_guaranteed_result(result)
                 else:
-                    fns_result = "no_goods"
-                    final_status = "На ручной проверке"
-                    comment_text = rule_match.reason
-            elif vodka_found:
-                fns_result = "success"
-                final_status = "Подтверждён"
-                comment_text = "Бот: товар найден в данных по QR"
+                    result = await sql_mgt.evaluate_standard_stage_progress(stage, user_tg_id, draw_id)
+                    await _apply_standard_result(result)
             else:
+                # Товара по правилам этапа точно нет в надёжных данных ФНС — авто-отказ, без
+                # ручной подстраховки (сознательное решение владельца проекта: FNS-данные
+                # считаются достаточно надёжным источником для автоматического отказа).
                 fns_result = "no_goods"
                 final_status = "Нет товара в чеке"
-                comment_text = "Бот: товар не найден в данных по QR"
+                comment_text = "Бот: товар по правилам этапа не найден в данных ФНС — авто-отказ"
+        elif vodka_found:
+            fns_result = "success"
+            final_status = "Подтверждён"
+            comment_text = "Бот: товар найден в данных по QR"
+        else:
+            fns_result = "no_goods"
+            final_status = "Нет товара в чеке"
+            comment_text = "Бот: товар не найден в данных по QR"
     else:
         use_vision = True
 
     if use_vision:
-        ocr_keywords = (
-            receipt_validation.ocr_keywords_for_rules(rules) if use_rules else keywords
-        )
+        guaranteed_ocr_rule_id: int | None = None
+        if is_guaranteed and use_rules:
+            ocr_keywords, guaranteed_ocr_rule_id = _guaranteed_ocr_rule_id(stage_rules)
+        elif use_rules:
+            ocr_keywords = receipt_validation.ocr_keywords_for_rules(stage_rules)
+        else:
+            ocr_keywords = keywords
         if ocr_result is None:
             ocr_result = await loop.run_in_executor(
                 global_objects.ocr_pool,
@@ -1030,7 +1161,30 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
         )
         if vodka_by_vision:
             final_status = "Подтверждён"
-            if qr_data:
+            if guaranteed_ocr_rule_id is not None:
+                rule = next(r for r in stage_rules if r["id"] == guaranteed_ocr_rule_id)
+                await sql_mgt.save_receipt_items(receipt_id, [
+                    {
+                        "raw_name": f"OCR: {rule['title']}",
+                        "quantity": 1,
+                        "price": None,
+                        "sum": None,
+                        "matched_rule_id": guaranteed_ocr_rule_id,
+                    }
+                ])
+                # См. комментарий у аналогичного вызова в QR/ФНС-ветке выше: чек должен
+                # получить статус "Подтверждён" ДО пересчёта прогресса.
+                await sql_mgt.update_receipt_status(
+                    receipt_id,
+                    "Подтверждён",
+                    comment="Бот: авто-проверка через OCR (гарантированный этап)",
+                )
+                winner_name = await _resolve_winner_name(user_tg_id)
+                result = await sql_mgt.evaluate_guaranteed_prize_stage(
+                    stage, user_tg_id, draw_id, receipt_id, winner_name
+                )
+                await _apply_guaranteed_result(result)
+            elif qr_data:
                 if fns_result == "error":
                     detail = "ФНС недоступна"
                     if fns_error_text:
@@ -1087,7 +1241,12 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     )
     await sql_mgt.update_receipt_status(receipt_id, final_status, comment=comment_text)
 
-    user_message = notify_messages.get(final_status)
+    if stage_event_message:
+        user_message = stage_event_message
+    elif final_status == "Подтверждён":
+        user_message = "✅ Чек подтверждён"
+    else:
+        user_message = notify_messages.get(final_status)
     if user_message:
         await global_objects.bot.send_message(
             chat_id,
@@ -1105,13 +1264,36 @@ async def set_photo(message: Message) -> None:
         if await sql_mgt.is_user_blocked(message.chat.id):
             await message.reply('Вы заблокированы и не можете участвовать в розыгрыше')
             return
-        draw_id = await sql_mgt.get_active_draw_id()
-        if draw_id is None:
+        active_stage = await sql_mgt.get_active_stage()
+        if active_stage is None:
             await sql_mgt.set_param(message.chat.id, 'GET_CHECK', str(False))
             await message.reply(
                 "📫-Сейчас акция не проводится\n"
                 "Следите за рассылками в чат-боте – мы обязательно сообщим о старте новых промоакций!"
             )
+            return
+        draw_id = active_stage["draw_id"]
+        stage_id = active_stage["id"]
+        # Оптимизация: не тратим OCR/ФНС и не ставим в очередь заведомо лишний чек —
+        # пользователь уже выполнил условия активного guaranteed_prize-этапа (раздел 4.4/9
+        # ТЗ). process_receipt() делает ту же проверку повторно как защиту от гонки.
+        if await _is_extra_receipt(active_stage, message.chat.id):
+            photo = message.photo[-1]
+            photo_file = await global_objects.bot.download(photo.file_id)
+            fname = f"{uuid.uuid4().hex}.jpg"
+            dest = UPLOAD_DIR_CHECKS / fname
+            with dest.open("wb") as f:
+                f.write(photo_file.getvalue())
+            web_path = f"/static/uploads/{fname}"
+            await sql_mgt.add_receipt(
+                web_path,
+                message.chat.id,
+                "Лишний чек",
+                message_id=message.message_id,
+                draw_id=draw_id,
+                stage_id=stage_id,
+            )
+            await message.reply(receipt_validation.EXTRA_RECEIPT_MESSAGE)
             return
         existing_receipts = await sql_mgt.get_user_receipts(
             message.chat.id, limit=None, draw_id=draw_id
@@ -1125,7 +1307,7 @@ async def set_photo(message: Message) -> None:
                 f.write(photo_file.getvalue())
 
             web_path = f"/static/uploads/{fname}"
-            auto_validation = await sql_mgt.get_draw_auto_validation(draw_id)
+            auto_validation = bool(active_stage.get("auto_validation_enabled", 1))
             receipt_status = "В авто обработке" if auto_validation else "На ручной проверке"
             receipt_id = await sql_mgt.add_receipt(
                 web_path,
@@ -1133,6 +1315,7 @@ async def set_photo(message: Message) -> None:
                 receipt_status,
                 message_id=message.message_id,
                 draw_id=draw_id,
+                stage_id=stage_id,
             )
             if auto_validation:
                 await sql_mgt.enqueue_receipt_ocr(receipt_id)

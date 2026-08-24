@@ -1,32 +1,27 @@
+import json
 import sys
-import os
+from pathlib import Path
 
-# Получаем текущую директорию
-current_directory = os.path.dirname(os.path.abspath(__file__))
 
-# Путь к целевой папке
-target_directory = os.path.join(current_directory, './information_telegram_bot')
+CURRENT_DIRECTORY = Path(__file__).resolve().parent
+SETTINGS_PATH = CURRENT_DIRECTORY / "settings.json"
 
-# Добавляем целевую папку в sys.path
-sys.path.insert(0, target_directory)
+with SETTINGS_PATH.open("r", encoding="utf-8") as fh:
+    settings_bot = json.load(fh)
+    version_bot = settings_bot["VERSION_BOT"]
 
-from bot import run_bot
+target_directory = CURRENT_DIRECTORY / version_bot
+sys.path.insert(0, str(target_directory))
 
-TELEGRAM_BOT_TOKEN = '6853605701:AAGjBUGFgLgHgAafGdqG-gb3KCiXytt8BUI' 
-ADMIN_ID_LIST = [1087624586] 
+settings_bot["run_directory"] = str(CURRENT_DIRECTORY)
 
-command_dict = {
-    "help" : {
-        'text': 'По любым предложениям, помощи, корректировке информации вежливо обращаться к админу @stupuraiter💌',
-        "description": "Помощь"
-    },
-    "promote" : {
-        'text': 'Если вы проводите мероприятие на острове Ольхон, свяжитесь с админом @stupuraiter и мы добавим его в список событий.*💌)\n\nДля упрощения, создайте пост в канале и отправте ссылку на него!',
-        "description": "Предложить своё мероприятие"
-    },
-    "support_project" : {
-        'text': 'Понравился бот? Нашли важную для себя информацию и хотели бы поблагодарить команду?\nЛюбую сумму можно отправить по ссылке <a href=\"https://www.tinkoff.ru/cf/2NHCUrarLXZ\">Регина С.</a>',
-        "description": "Поддержать проект💫"
-    }
-}
-run_bot(TELEGRAM_BOT_TOKEN, ADMIN_ID_LIST, command_dict)
+from bot import run_bot  # noqa: E402
+
+
+if __name__ == "__main__":
+    run_bot(
+        settings_bot["TELEGRAM_BOT_TOKEN"],
+        settings_bot.get("ADMIN_ID_LIST", []),
+        settings_bot.get("commands", {}),
+        settings_bot,
+    )

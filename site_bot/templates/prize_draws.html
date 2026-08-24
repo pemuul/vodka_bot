@@ -33,9 +33,8 @@
         <thead>
           <tr>
             <th>Название</th>
-            <th>Дата начала</th>
-            <th>Дата окончания</th>
-            <th>Статус</th>
+            <th>Этапов</th>
+            <th>Активный этап сейчас</th>
           </tr>
         </thead>
         <tbody id="draws-table-body"></tbody>
@@ -47,137 +46,30 @@
   <div class="modal fade" id="modal-draw-edit" tabindex="-1" aria-labelledby="modalDrawLabel" aria-hidden="true">
     <div class="modal-dialog modal-xl modal-dialog-scrollable">
       <div class="modal-content">
-        <div class="modal-header">
-          <h5 class="modal-title" id="modalDrawLabel">Редактирование розыгрыша</h5>
+        <div class="modal-header py-2">
+          <h5 class="modal-title d-flex align-items-center gap-2" id="modalDrawLabel">
+            Редактирование розыгрыша
+            <i class="bi bi-info-circle help-icon" data-bs-toggle="popover" data-bs-trigger="hover focus"
+               data-bs-html="true" data-bs-placement="bottom"
+               data-bs-content="Авто-валидация выкл — чеки сразу на ручную проверку. Правила теперь на уровне ЭТАПА: у «Стандарта» без правил — общие ключевые слова, с правилами — точный товар. «Гарантированный приз» — приз получает каждый, кто накопил товар по правилам (в любом кол-ве чеков), правило обязательно, победитель фиксируется автоматически."></i>
+          </h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
         </div>
-        <div class="modal-body d-flex flex-column" style="height: 80vh;">
-          <!-- Подсказка: как работает проверка чеков -->
-          <div class="px-3 pt-3">
-            <details class="help-block mb-3">
-              <summary class="text-primary">
-                <i class="bi bi-info-circle"></i> Как работает проверка чеков — нажмите, чтобы прочитать
-              </summary>
-              <div class="small text-muted mt-2 p-3 bg-light rounded border">
-                <p class="mb-2">
-                  <strong>Авто-валидация чеков</strong> (чекбокс ниже) — если включена, каждый
-                  загруженный чек бот проверяет сам: сканирует QR-код на фото, запрашивает данные
-                  у ФНС, а если QR не найден или ФНС недоступна — распознаёт текст на фото (OCR).
-                  Если выключена — все чеки этой акции сразу попадают к вам на страницу
-                  «Чеки» со статусом «На ручной проверке», бот их вообще не трогает.
-                </p>
-                <p class="mb-2">
-                  <strong>Правила проверки товара</strong> (список ниже, под кнопками этапов) —
-                  задают, какой именно товар и в каком количестве должен быть в чеке, чтобы он
-                  подтвердился автоматически. Каждое правило — это один товар: варианты написания
-                  (алиасы) + минимальное количество. Если у акции нет ни одного правила —
-                  используются общие ключевые слова из <a href="/settings" target="_blank">настроек
-                  сайта</a> (без проверки количества — как было раньше).
-                </p>
-                <p class="mb-0">
-                  <strong>Главный принцип безопасности:</strong> если бот не может однозначно
-                  подтвердить чек — он <u>никогда</u> не отклоняет его автоматически, а
-                  отправляет на статус «На ручной проверке». Статус «Нет товара в чеке»
-                  бот ставит только для акций без правил (старое поведение по ключевым словам).
-                  Отклонить или подтвердить чек вручную всегда можно на странице «Чеки».
-                </p>
+        <div class="modal-body d-flex flex-column p-2" style="height: 88vh;">
+          <!-- Название акции + все кнопки в один ряд (акция — контейнер без своих данных;
+               даты/статус/автовалидация теперь у каждого этапа отдельно) -->
+          <div class="mb-2 px-1">
+            <div class="d-flex flex-wrap gap-2 align-items-end">
+              <div style="width: 220px;">
+                <label for="edit-draw-title" class="form-label mb-0 small">Название акции</label>
+                <input type="text" id="edit-draw-title" class="form-control form-control-sm" />
               </div>
-            </details>
-          </div>
-          <!-- Основные поля -->
-          <div class="mb-4 px-3">
-            <div class="row g-3 align-items-end">
-              <div class="col-md-3">
-                <label for="edit-draw-title" class="form-label">Название</label>
-                <input type="text" id="edit-draw-title" class="form-control" />
-              </div>
-              <div class="col-md-2">
-                <label for="edit-draw-start" class="form-label">Дата начала</label>
-                <input type="date" id="edit-draw-start" class="form-control" />
-                <div class="invalid-feedback">Дата начала должна быть раньше даты окончания</div>
-              </div>
-              <div class="col-md-2">
-                <label for="edit-draw-end" class="form-label">Дата окончания</label>
-                <input type="date" id="edit-draw-end" class="form-control" />
-                <div class="invalid-feedback">Дата окончания должна быть позже даты начала</div>
-              </div>
-              <div class="col-md-3">
-                <label for="main-draw-status" class="form-label">Статус</label>
-                <select id="main-draw-status" class="form-select">
-                  <option value="upcoming">Ожидается</option>
-                  <option value="active">Активен</option>
-                  <option value="finished">Завершён</option>
-                </select>
-              </div>
-              <div class="col-md-2">
-                <div class="form-check mt-4">
-                  <input type="checkbox" id="edit-draw-auto-validation" class="form-check-input" checked />
-                  <label for="edit-draw-auto-validation" class="form-check-label">
-                    Авто-валидация чеков
-                    <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="top"
-                       title="Включено (по умолчанию) — чек проверяется автоматически: QR → ФНС → правила ниже (или общие ключевые слова, если правил нет). Выключено — все чеки этой акции сразу уходят на ручную проверку, бот их не трогает."></i>
-                  </label>
-                </div>
-              </div>
-              <div class="col-md-2 text-end">
-                <button id="btn-copy-draw" class="btn btn-outline-secondary">Копировать розыгрыш</button>
+              <div class="d-flex gap-2 ms-auto flex-wrap">
+                <button id="btn-copy-draw" class="btn btn-sm btn-outline-secondary">Копировать</button>
+                <button id="btn-add-stage" class="btn btn-sm btn-outline-primary">Добавить этап</button>
+                <button id="btn-delete-draw" class="btn btn-sm btn-outline-danger">Удалить розыгрыш</button>
               </div>
             </div>
-          </div>
-
-          <!-- Добавить этап / Удалить розыгрыш -->
-          <div class="px-3 mb-3">
-            <div class="d-flex gap-2">
-              <button id="btn-add-stage" class="btn btn-outline-primary">Добавить этап</button>
-              <button id="btn-delete-draw" class="btn btn-outline-danger">Удалить розыгрыш</button>
-            </div>
-          </div>
-
-          <!-- Правила проверки чеков -->
-          <div class="px-3 mb-3">
-            <div class="d-flex justify-content-between align-items-center mb-1">
-              <h6 class="mb-0">
-                Правила проверки чеков
-                <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="right"
-                   title="Правило описывает один товар: как он может быть написан в чеке и сколько штук нужно, чтобы чек подтвердился автоматически. Если ни одно правило не выполнено — чек уходит на ручную проверку, а не отклоняется."></i>
-              </h6>
-              <button id="btn-add-rule" class="btn btn-sm btn-outline-primary">Добавить правило</button>
-            </div>
-            <p class="text-muted small mb-2">
-              Если правил нет — используются общие ключевые слова из
-              <a href="/settings" target="_blank">настроек сайта</a> (без проверки количества).
-            </p>
-
-            <div class="row g-2 small text-muted mb-1 d-none d-md-flex">
-              <div class="col-md-3">
-                Название
-                <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
-                   title="Для вашего удобства — не участвует в проверке чека"></i>
-              </div>
-              <div class="col-md-2">
-                SKU / код
-                <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
-                   title="Необязательный внутренний артикул товара — не используется в проверке, только для вашей отчётности"></i>
-              </div>
-              <div class="col-md-3">
-                Алиасы (через ;)
-                <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
-                   title="Варианты написания товара в чеке через точку с запятой. Проверка ищет любой из вариантов как часть названия позиции, без учёта регистра. Пример: finsky;фински;финская водка"></i>
-              </div>
-              <div class="col-md-2">
-                Мин. кол-во
-                <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
-                   title="Сколько единиц товара нужно найти в чеке. Считается ТОЛЬКО по данным ФНС (реальное количество). При значении 1 чек может подтвердиться даже по фото (OCR), если ФНС недоступна."></i>
-              </div>
-              <div class="col-md-1">
-                Активно
-                <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
-                   title="Выключенные правила игнорируются при проверке чеков, но остаются сохранёнными — можно включить обратно в любой момент."></i>
-              </div>
-              <div class="col-md-1"></div>
-            </div>
-
-            <div id="draw-rules-list"></div>
           </div>
 
           <!-- Вкладки -->
@@ -204,10 +96,47 @@
         </div>
       </div>
       <div class="mb-3">
+        <label class="form-label">Тип этапа</label>
+        <select class="form-select stage-type">
+          <option value="standard">Стандарт (случайный розыгрыш)</option>
+          <option value="guaranteed_prize">Гарантированный приз (каждому, кто накопил товар)</option>
+        </select>
+        <div class="form-text">
+          «Гарантированный приз» — приз получает каждый, кто накопил нужный товар по правилам
+          ниже (в любом количестве чеков); победитель фиксируется автоматически.
+        </div>
+      </div>
+      <div class="mb-3 d-flex flex-wrap gap-2 align-items-end">
+        <div style="width: 150px;">
+          <label class="form-label mb-0 small">Начало</label>
+          <input type="date" class="form-control form-control-sm stage-start" />
+        </div>
+        <div style="width: 150px;">
+          <label class="form-label mb-0 small">Окончание</label>
+          <input type="date" class="form-control form-control-sm stage-end" />
+        </div>
+        <div style="width: 150px;">
+          <label class="form-label mb-0 small">
+            Статус
+            <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
+               title="Активным одновременно может быть только ОДИН этап во всей системе — чек попадает именно на активный этап. Сохранение заблокирует, если активный этап уже есть в другой акции."></i>
+          </label>
+          <select class="form-select form-select-sm stage-status">
+            <option value="upcoming">Ожидается</option>
+            <option value="active">Активен</option>
+            <option value="finished">Завершён</option>
+          </select>
+        </div>
+        <div class="form-check mb-1">
+          <input type="checkbox" class="form-check-input stage-auto-validation" checked />
+          <label class="form-check-label small">Авто-валидация</label>
+        </div>
+      </div>
+      <div class="mb-3">
         <label class="form-label">Описание этапа</label>
         <textarea class="form-control stage-text" rows="3"></textarea>
       </div>
-      <div class="mb-3">
+      <div class="mb-3 stage-winners-count-block">
         <label class="form-label">Количество победителей</label>
         <input type="number" class="form-control stage-winners-count" min="1" value="1" />
       </div>
@@ -219,6 +148,82 @@
         <label class="form-label">Текст после списка победителей</label>
         <textarea class="form-control stage-text-after" rows="2"></textarea>
       </div>
+
+      <!-- Тексты сообщений о прогрессе/выполнении условий -->
+      <div class="mb-3 stage-guaranteed-messages-block">
+        <label class="form-label">
+          Промежуточное сообщение (после каждого принятого чека, если условия ещё не выполнены)
+          <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
+             title="Плейсхолдер {remaining_items} — бот сам подставит остаток нужного товара (не число чеков). Для «Стандарта» ещё доступен {entries_count} — текущее число попыток выиграть (чем больше подтверждённых чеков, тем больше шансов). Пусто — используется текст по умолчанию."></i>
+        </label>
+        <textarea class="form-control stage-progress-message" rows="4"
+                  placeholder="Чек принят ✅ Осталось докупить: {remaining_items}..."></textarea>
+      </div>
+      <div class="mb-3 stage-guaranteed-messages-block">
+        <label class="form-label">
+          Финальное сообщение (когда все условия выполнены)
+          <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
+             title="Для «Гарантированного приза» отправляется один раз — в момент победы. Для «Стандарта» — в момент допуска к розыгрышу (не победа); плейсхолдер {entries_count} — текущее число попыток, можно продолжать присылать чеки. Пусто — используется текст по умолчанию."></i>
+        </label>
+        <textarea class="form-control stage-win-message" rows="4"
+                  placeholder="Поздравляем🎉 Все условия выполнены..."></textarea>
+      </div>
+
+      <!-- Правила проверки чеков этого этапа -->
+      <div class="mb-3">
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <h6 class="mb-0">
+            Правила проверки чеков
+            <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="right"
+               title="Правило описывает один товар: как он может быть написан в чеке и сколько штук нужно. Для «Стандарта» без единого правила используются общие ключевые слова из настроек сайта. Для «Гарантированного приза» правило обязательно."></i>
+          </h6>
+          <button class="btn btn-sm btn-outline-primary btn-add-rule">Добавить правило</button>
+        </div>
+        <p class="text-muted small mb-2 stage-rules-hint-standard">
+          Если правил нет — используются общие ключевые слова из
+          <a href="/settings" target="_blank">настроек сайта</a> (без проверки количества).
+        </p>
+        <p class="text-muted small mb-2 stage-rules-hint-guaranteed">
+          У этапа «Гарантированный приз» должно быть хотя бы одно правило — иначе он никогда
+          никого не наградит.
+        </p>
+        <div class="row g-2 small text-muted mb-1 d-none d-md-flex">
+          <div class="col-md-3">Название</div>
+          <div class="col-md-2">
+            SKU / код
+            <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
+               title="Необязательный внутренний артикул товара — не используется в проверке чека, только для вашей отчётности. Пример: FINSKY-05L"></i>
+          </div>
+          <div class="col-md-3">
+            Алиасы (через ;)
+            <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
+               title="Варианты написания товара в чеке через точку с запятой. Проверка ищет любой из вариантов как часть названия позиции, без учёта регистра. Пример: finsky;фински;финская водка"></i>
+          </div>
+          <div class="col-md-2">
+            Мин. кол-во
+            <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
+               title="Сколько единиц товара нужно найти в чеке. Считается ТОЛЬКО по данным ФНС (реальное количество). При значении 1 чек может подтвердиться даже по фото (OCR), если ФНС недоступна."></i>
+          </div>
+          <div class="col-md-1">Активно</div>
+          <div class="col-md-1"></div>
+        </div>
+        <div class="stage-rules-list"></div>
+      </div>
+
+      <!-- Текст правил акции для пользователя (раздел "Мои Чеки" в боте) -->
+      <div class="mb-3">
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <label class="form-label mb-0">
+            Текст правил акции — что видит пользователь в «Мои Чеки»
+            <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
+               title="Пока этот этап активен, бот показывает этот текст в разделе «Мои Чеки». Пусто — покажется текст по умолчанию (общее описание акции FINSKY ICE). «Сгенерировать черновик» соберёт заготовку по товарам и количеству из правил выше — доработайте её сами."></i>
+          </label>
+          <button type="button" class="btn btn-sm btn-outline-secondary btn-generate-rules-draft">Сгенерировать черновик</button>
+        </div>
+        <textarea class="form-control stage-rules-description" rows="4"
+                  placeholder="Пусто — пользователь увидит текст по умолчанию"></textarea>
+      </div>
+
       <div class="mb-3 d-flex gap-2">
         <button class="btn btn-sm btn-outline-secondary btn-export-winners"><i class="bi bi-download"></i> Экспорт списка победителей</button>
         <button class="btn btn-sm btn-outline-info btn-test-send"><i class="bi bi-envelope"></i> Тестовая рассылка</button>
@@ -228,6 +233,12 @@
       <div>
         <h6>Список победителей</h6>
         <ul class="list-group winners-list mb-3"></ul>
+      </div>
+      <div class="mb-3">
+        <button class="btn btn-sm btn-outline-secondary btn-show-progress" type="button">
+          <i class="bi bi-bar-chart"></i> Прогресс участников
+        </button>
+        <div class="progress-table-container mt-2" style="display:none;"></div>
       </div>
     </div>
   </template>
@@ -264,22 +275,34 @@
       const drawsTableBody = document.getElementById("draws-table-body");
       let currentDraw = null, stageCount = 0;
 
+      const DEFAULT_PROGRESS_MESSAGE = "Чек принят ✅\n\nОсталось докупить:\n{remaining_items}\n\nУчитывается сумма по всем вашим чекам акции 🧮";
+      const DEFAULT_STANDARD_PROGRESS_MESSAGE = "Чек принят ✅\n\nОсталось докупить:\n{remaining_items}\n\nУчитывается сумма по всем вашим чекам акции 🧮\nКаждый подтверждённый чек — отдельный шанс выиграть. Сейчас у вас {entries_count} 🎟️";
+      const DEFAULT_WIN_MESSAGE = "Поздравляем🎉\nВсе условия выполнены – значит, приз скоро будет вашим 🏆\n\nМы свяжемся с вами в ближайшее время, чтобы уточнить данные для отправки подарка 🎁\n\nСпасибо, что вы с нами! 🫶🏻";
+      const DEFAULT_STANDARD_QUALIFY_MESSAGE = "Отлично! Вы выполнили все условия акции и теперь участвуете в розыгрыше приза 🎉\n\nКаждый следующий подтверждённый чек — ещё один шанс выиграть, можно продолжать. Сейчас у вас {entries_count} 🎟️\n\nПобедителя определим позже — следите за уведомлениями от бота. Удачи! 🍀";
+
+      function initTooltipsIn(root) {
+        root.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => new bootstrap.Tooltip(el));
+        root.querySelectorAll('[data-bs-toggle="popover"]').forEach(el => new bootstrap.Popover(el));
+      }
+
       document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(
         el => new bootstrap.Tooltip(el)
+      );
+      document.querySelectorAll('[data-bs-toggle="popover"]').forEach(
+        el => new bootstrap.Popover(el)
       );
 
       function renderDrawRow(draw) {
         const tr = document.createElement("tr");
         tr.dataset.drawId = draw.id;
+        const activeStage = (draw.stages || []).find(s => s.status === "active");
         tr.innerHTML = `
           <td>${draw.title}</td>
-          <td>${new Date(draw.start).toLocaleDateString("ru-RU")}</td>
-          <td>${new Date(draw.end).toLocaleDateString("ru-RU")}</td>
-          <td><span class="badge ${
-            draw.status==="active"?"bg-success":draw.status==="upcoming"?"bg-warning":"bg-secondary"
-          }">${
-            draw.status==="active"?"Активен":draw.status==="upcoming"?"Ожидается":"Завершён"
-          }</span></td>`;
+          <td>${(draw.stages || []).length}</td>
+          <td>${activeStage
+            ? `<span class="badge bg-success">🟢 ${activeStage.name}</span>`
+            : `<span class="text-muted">—</span>`
+          }</td>`;
         tr.addEventListener("click", () => openDrawModal(draw.id));
         drawsTableBody.appendChild(tr);
       }
@@ -293,25 +316,16 @@
         if(!currentDraw) return;
         // заполняем поля
         document.getElementById("edit-draw-title").value = currentDraw.title;
-        document.getElementById("edit-draw-start").value = currentDraw.start;
-        document.getElementById("edit-draw-end").value = currentDraw.end;
-        document.getElementById("main-draw-status").value = currentDraw.status;
-        document.getElementById("edit-draw-auto-validation").checked = currentDraw.auto_validation_enabled !== false;
-        document.getElementById("edit-draw-start").classList.remove("is-invalid");
-        document.getElementById("edit-draw-end").classList.remove("is-invalid");
         // чистим старые вкладки
         document.getElementById("drawStagesTabs").innerHTML = "";
         document.getElementById("drawStagesTabsContent").innerHTML = "";
         stageCount = 0;
         currentDraw.stages.forEach(createStageTab);
-        // правила проверки чеков
-        document.getElementById("draw-rules-list").innerHTML = "";
-        currentDraw.rules = currentDraw.rules || [];
-        currentDraw.rules.forEach(createRuleRow);
         bsModal.show();
       }
 
-      function createRuleRow(ruleData) {
+      // rulesListEl — контейнер конкретного этапа (у каждого этапа свой список правил, п.2 ТЗ)
+      function createRuleRow(ruleData, stageData, rulesListEl) {
         const row = document.getElementById("tpl-rule-row").content.cloneNode(true).children[0];
         row.querySelector(".rule-title").value = ruleData.title || "";
         row.querySelector(".rule-sku").value = ruleData.sku_code || "";
@@ -320,20 +334,12 @@
         row.querySelector(".rule-is-active").checked = ruleData.is_active !== false;
         row._ruleData = ruleData;
         row.querySelector(".btn-delete-rule").onclick = () => {
-          const idx = currentDraw.rules.indexOf(ruleData);
-          if (idx !== -1) currentDraw.rules.splice(idx, 1);
+          const idx = stageData.rules.indexOf(ruleData);
+          if (idx !== -1) stageData.rules.splice(idx, 1);
           row.remove();
         };
-        document.getElementById("draw-rules-list").appendChild(row);
+        rulesListEl.appendChild(row);
       }
-
-      // кнопка «Добавить правило»
-      document.getElementById("btn-add-rule").onclick = () => {
-        if (!currentDraw) return;
-        const newRule = { id: null, title: "", sku_code: "", aliases: "", min_quantity: 1, is_active: true };
-        currentDraw.rules.push(newRule);
-        createRuleRow(newRule);
-      };
 
       function createStageTab(stageData) {
         stageCount++;
@@ -355,6 +361,62 @@
         pane.querySelector(".stage-winners-count").value = stageData.winnersCount||1;
         pane.querySelector(".stage-text-before").value = stageData.textBefore||"";
         pane.querySelector(".stage-text-after").value = stageData.textAfter||"";
+        stageData.stageType = stageData.stageType || "standard";
+        pane.querySelector(".stage-type").value = stageData.stageType;
+        pane.querySelector(".stage-progress-message").value = stageData.progressMessageText ||
+          (stageData.stageType === "guaranteed_prize" ? DEFAULT_PROGRESS_MESSAGE : DEFAULT_STANDARD_PROGRESS_MESSAGE);
+        pane.querySelector(".stage-win-message").value = stageData.winMessageText ||
+          (stageData.stageType === "guaranteed_prize" ? DEFAULT_WIN_MESSAGE : DEFAULT_STANDARD_QUALIFY_MESSAGE);
+        pane.querySelector(".stage-start").value = stageData.start || "";
+        pane.querySelector(".stage-end").value = stageData.end || "";
+        pane.querySelector(".stage-status").value = stageData.status || "upcoming";
+        pane.querySelector(".stage-auto-validation").checked = stageData.autoValidationEnabled !== false;
+        pane.querySelector(".stage-rules-description").value = stageData.rulesDescription || "";
+
+        function applyStageTypeVisibility() {
+          const isGuaranteed = pane.querySelector(".stage-type").value === "guaranteed_prize";
+          pane.querySelector(".stage-winners-count-block").style.display = isGuaranteed ? "none" : "";
+          // Сообщения о прогрессе/выполнении условий нужны ОБОИМ типам этапа — standard
+          // тоже копит прогресс по всем правилам, только выполнение условий означает
+          // допуск к розыгрышу, а не автопобеду.
+          pane.querySelector(".btn-determine-winner").style.display = isGuaranteed ? "none" : "";
+          pane.querySelector(".stage-rules-hint-standard").style.display = isGuaranteed ? "none" : "";
+          pane.querySelector(".stage-rules-hint-guaranteed").style.display = isGuaranteed ? "" : "none";
+        }
+        pane.querySelector(".stage-type").onchange = applyStageTypeVisibility;
+        applyStageTypeVisibility();
+
+        // правила проверки чеков этого этапа
+        stageData.rules = stageData.rules || [];
+        const rulesListEl = pane.querySelector(".stage-rules-list");
+        stageData.rules.forEach(ruleData => createRuleRow(ruleData, stageData, rulesListEl));
+        pane.querySelector(".btn-add-rule").onclick = () => {
+          const newRule = { id: null, title: "", sku_code: "", aliases: "", min_quantity: 1, is_active: true };
+          stageData.rules.push(newRule);
+          createRuleRow(newRule, stageData, rulesListEl);
+        };
+
+        // черновик текста правил для "Мои Чеки" — по актуальным строкам формы, не по
+        // сохранённым ранее stageData.rules (админ мог только что дописать правило)
+        pane.querySelector(".btn-generate-rules-draft").onclick = () => {
+          const rows = Array.from(rulesListEl.querySelectorAll(".rule-row")).map(row => ({
+            title: row.querySelector(".rule-title").value || "товар",
+            min_quantity: +row.querySelector(".rule-min-quantity").value || 1,
+          }));
+          if (!rows.length) {
+            alert("Сначала добавьте хотя бы одно правило проверки чеков.");
+            return;
+          }
+          const items = rows.map(r => r.min_quantity > 1 ? `${r.title} (от ${r.min_quantity} шт.)` : r.title).join(", ");
+          const isGuaranteed = pane.querySelector(".stage-type").value === "guaranteed_prize";
+          const draft = isGuaranteed
+            ? `Не упустите свой шанс: акция для наших покупателей!\nПриобретайте ${items} и отправляйте фото или QR-код чека в чат-бот.\nСоберите нужное количество — и гарантированный приз ваш!`
+            : `Участвуйте в розыгрыше: покупайте ${items} и отправляйте фото или QR-код чека в чат-бот. Победителей определяем случайным образом среди всех участников.`;
+          const field = pane.querySelector(".stage-rules-description");
+          if (field.value && !confirm("Поле уже заполнено — заменить текущий текст черновиком?")) return;
+          field.value = draft;
+        };
+
         const winnersListEl = pane.querySelector(".winners-list");
         winnersListEl.innerHTML = "";
         (stageData.winners||[]).forEach(w=>{
@@ -462,7 +524,71 @@
           });
         };
 
+        const progressContainer = pane.querySelector(".progress-table-container");
+        pane.querySelector(".btn-show-progress").onclick = async () => {
+          if (progressContainer.style.display !== "none") {
+            progressContainer.style.display = "none";
+            return;
+          }
+          if (!stageData.id) {
+            alert("Сначала сохраните розыгрыш");
+            return;
+          }
+          progressContainer.style.display = "";
+          progressContainer.innerHTML = '<span class="text-muted small">Загрузка...</span>';
+          const resp = await fetch(`/api/draw-stages/${stageData.id}/progress`);
+          if (!resp.ok) {
+            progressContainer.innerHTML = '<span class="text-danger small">Не удалось загрузить прогресс</span>';
+            return;
+          }
+          const data = await resp.json();
+          const rows = data.progress || [];
+          if (!rows.length) {
+            progressContainer.innerHTML = '<span class="text-muted small">Пока никто не набрал ни одной позиции по правилам этапа.</span>';
+            return;
+          }
+          const isStandard = stageData.stageType !== "guaranteed_prize";
+          const table = document.createElement("table");
+          table.className = "table table-sm table-striped";
+          const thead = document.createElement("thead");
+          thead.innerHTML = isStandard
+            ? "<tr><th>Участник</th><th>Правила</th><th>Попыток</th><th>Статус</th></tr>"
+            : "<tr><th>Участник</th><th>Правила</th><th>Статус</th></tr>";
+          table.appendChild(thead);
+          const tbody = document.createElement("tbody");
+          rows.forEach(row => {
+            const tr = document.createElement("tr");
+            const nameCell = document.createElement("td");
+            const a = document.createElement("a");
+            a.href = `/participants?open=${row.user_tg_id}`;
+            a.target = "_blank";
+            a.textContent = row.user_name || row.user_tg_id;
+            nameCell.appendChild(a);
+            const rulesCell = document.createElement("td");
+            rulesCell.textContent = (row.rule_progress || []).map(rp => {
+              const mark = rp.progress >= rp.min_quantity ? "✅" : "";
+              return `${rp.title}: ${rp.progress}/${rp.min_quantity}${mark}`;
+            }).join("; ");
+            const statusCell = document.createElement("td");
+            statusCell.innerHTML = row.complete
+              ? '<span class="badge bg-success">Все условия выполнены</span>'
+              : '<span class="badge bg-secondary">В процессе</span>';
+            if (isStandard) {
+              const entriesCell = document.createElement("td");
+              entriesCell.textContent = row.entries_count != null ? row.entries_count : "0";
+              tr.append(nameCell, rulesCell, entriesCell, statusCell);
+            } else {
+              tr.append(nameCell, rulesCell, statusCell);
+            }
+            tbody.appendChild(tr);
+          });
+          table.appendChild(tbody);
+          progressContainer.innerHTML = "";
+          progressContainer.appendChild(table);
+        };
+
         document.getElementById("drawStagesTabsContent").append(pane);
+        initTooltipsIn(pane);
         new bootstrap.Tab(li.querySelector("button")).show();
       }
 
@@ -479,7 +605,16 @@
           winnersCount: 1,
           textBefore: "",
           textAfter: "",
-          winners: []
+          stageType: "standard",
+          progressMessageText: "",
+          winMessageText: "",
+          start: "",
+          end: "",
+          status: "upcoming",
+          autoValidationEnabled: true,
+          rulesDescription: "",
+          winners: [],
+          rules: []
         };
         currentDraw.stages.push(newStage);
         createStageTab(newStage);
@@ -508,17 +643,10 @@
       // кнопка «Новый розыгрыш»
       document.getElementById("btn-new-draw").onclick = () => {
         document.getElementById("edit-draw-title").value = "";
-        document.getElementById("edit-draw-start").value = "";
-        document.getElementById("edit-draw-end").value = "";
-        document.getElementById("edit-draw-start").classList.remove("is-invalid");
-        document.getElementById("edit-draw-end").classList.remove("is-invalid");
-        document.getElementById("main-draw-status").value = "upcoming";
-        document.getElementById("edit-draw-auto-validation").checked = true;
         document.getElementById("drawStagesTabs").innerHTML = "";
         document.getElementById("drawStagesTabsContent").innerHTML = "";
-        document.getElementById("draw-rules-list").innerHTML = "";
         stageCount = 0;
-        currentDraw = { id: null, title: "", start: "", end: "", status: "upcoming", auto_validation_enabled: true, stages: [], rules: [] };
+        currentDraw = { id: null, title: "", stages: [] };
         bsModal.show();
       };
 
@@ -530,25 +658,10 @@
         clone.id = null; // чтобы backend вставил новый
         // 2) добавляем « (копия)» в название
         clone.title = currentDraw.title + " (копия)";
-
-        // 3) вычисляем новые даты после последнего розыгрыша
-        const lastEnd = drawsData.reduce(
-          (max, d) => {
-            const end = new Date(d.end);
-            return end > max ? end : max;
-          },
-          new Date(currentDraw.end)
-        );
-        const durationDays = Math.round(
-          (new Date(currentDraw.end) - new Date(currentDraw.start)) / 86400000
-        );
-        const newStart = new Date(lastEnd);
-        newStart.setDate(newStart.getDate() + 1);
-        const newEnd = new Date(newStart);
-        newEnd.setDate(newEnd.getDate() + durationDays);
-        clone.start = newStart.toISOString().slice(0, 10);
-        clone.end = newEnd.toISOString().slice(0, 10);
-        clone.status = "upcoming";
+        // 3) копия никогда не активна сразу — во всей системе может быть активен только
+        // один этап, копирование не должно случайно создать конфликт (даты/остальное —
+        // как в оригинале, админ поправит вручную при необходимости)
+        clone.stages.forEach(s => { s.id = null; s.status = "upcoming"; s.winners = []; });
 
         // 4) отправляем на сервер
         const resp = await fetch("/prize-draws", {
@@ -572,42 +685,59 @@
 
       // кнопка «Сохранить изменения»
       document.getElementById("btn-save-draw").onclick = async () => {
-        const startInput = document.getElementById("edit-draw-start");
-        const endInput = document.getElementById("edit-draw-end");
-        startInput.classList.remove("is-invalid");
-        endInput.classList.remove("is-invalid");
-
-        if (startInput.value >= endInput.value) {
-          startInput.classList.add("is-invalid");
-          endInput.classList.add("is-invalid");
-          return;
-        }
-
         // складываем все поля обратно в currentDraw
         currentDraw.title = document.getElementById("edit-draw-title").value;
-        currentDraw.start = startInput.value;
-        currentDraw.end = endInput.value;
-        currentDraw.status = document.getElementById("main-draw-status").value;
-        currentDraw.auto_validation_enabled = document.getElementById("edit-draw-auto-validation").checked;
-        currentDraw.rules = Array.from(document.querySelectorAll("#draw-rules-list .rule-row")).map(row => ({
-          id: row._ruleData && row._ruleData.id ? row._ruleData.id : null,
-          title: row.querySelector(".rule-title").value,
-          sku_code: row.querySelector(".rule-sku").value || null,
-          aliases: row.querySelector(".rule-aliases").value,
-          min_quantity: +row.querySelector(".rule-min-quantity").value || 1,
-          is_active: row.querySelector(".rule-is-active").checked,
-        }));
         currentDraw.stages.forEach(sd => {
           const pane = document.getElementById(`${sd.__id}-content`);
           sd.description = pane.querySelector(".stage-text").value;
           sd.winnersCount = +pane.querySelector(".stage-winners-count").value || 1;
           sd.textBefore = pane.querySelector(".stage-text-before").value;
           sd.textAfter = pane.querySelector(".stage-text-after").value;
+          sd.stageType = pane.querySelector(".stage-type").value;
+          sd.progressMessageText = pane.querySelector(".stage-progress-message").value || null;
+          sd.winMessageText = pane.querySelector(".stage-win-message").value || null;
+          sd.start = pane.querySelector(".stage-start").value || null;
+          sd.end = pane.querySelector(".stage-end").value || null;
+          sd.status = pane.querySelector(".stage-status").value;
+          sd.autoValidationEnabled = pane.querySelector(".stage-auto-validation").checked;
+          sd.rulesDescription = pane.querySelector(".stage-rules-description").value || null;
+          sd.rules = Array.from(pane.querySelectorAll(".stage-rules-list .rule-row")).map(row => ({
+            id: row._ruleData && row._ruleData.id ? row._ruleData.id : null,
+            title: row.querySelector(".rule-title").value,
+            sku_code: row.querySelector(".rule-sku").value || null,
+            aliases: row.querySelector(".rule-aliases").value,
+            min_quantity: +row.querySelector(".rule-min-quantity").value || 1,
+            is_active: row.querySelector(".rule-is-active").checked,
+          }));
           sd.winners = (sd.winners||[]).map(w => {
             if (typeof w === 'string') return w;
             return {name: w.name, user_id: w.user_id, receipt_id: w.receipt_id};
           });
         });
+
+        // раздел 4.8 ТЗ: у guaranteed_prize-этапа должно быть хотя бы одно правило
+        const emptyGuaranteedStage = currentDraw.stages.find(
+          sd => sd.stageType === "guaranteed_prize" && sd.rules.length === 0
+        );
+        if (emptyGuaranteedStage) {
+          alert(`Этап «${emptyGuaranteedStage.name}»: у типа «Гарантированный приз» должно быть хотя бы одно правило проверки чеков.`);
+          return;
+        }
+
+        // даты этапа: окончание позже начала, если обе заданы
+        const badDatesStage = currentDraw.stages.find(sd => sd.start && sd.end && sd.end <= sd.start);
+        if (badDatesStage) {
+          alert(`Этап «${badDatesStage.name}»: дата окончания должна быть позже даты начала.`);
+          return;
+        }
+
+        // "1 активный этап во всей системе" — внутри ЭТОГО розыгрыша, конфликт с другими
+        // розыгрышами проверит сервер
+        const activeStages = currentDraw.stages.filter(sd => sd.status === "active");
+        if (activeStages.length > 1) {
+          alert("Активным может быть только один этап — сейчас отмечено активными несколько.");
+          return;
+        }
 
         const res = await fetch("/prize-draws", {
           method: "POST",

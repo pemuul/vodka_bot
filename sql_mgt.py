@@ -11,6 +11,7 @@ import logging
 from typing import Iterable, Dict, Any, Optional, List, Tuple
 
 from keys import DB_NAME
+import receipt_validation
 
 
 global_objects = None
@@ -175,6 +176,17 @@ async def recreate_table_with_new_schema(conn, table_name, new_schema, existing_
     await conn.commit()
 
 async def create_or_update_tables(conn, schema_dict):
+    # Однократная миграция prize_draw_rules.draw_id -> stage_id — должна отработать
+    # до того, как generic-механизм ниже увидит несовпадающие по имени столбцы и
+    # молча пересоздаст таблицу без переноса данных (см. CLAUDE.md / раздел 4.2 ТЗ).
+    if "prize_draw_rules" in schema_dict:
+        await migrate_prize_draw_rules_draw_to_stage(conn)
+    # Однократная миграция prize_draws.{start_date,end_date,status,auto_validation_enabled}
+    # -> те же поля на prize_draw_stages (акция становится безданным контейнером, "активным"
+    # может быть только ОДИН этап во всей системе). Тоже должна отработать до generic-сброса.
+    if "prize_draws" in schema_dict and "prize_draw_stages" in schema_dict:
+        await migrate_draw_fields_to_stage(conn)
+
     for table_name, create_execute_script in schema_dict.items():
         column_defs = dict(_parse_table_schema(create_execute_script))
 
@@ -189,6 +201,199 @@ async def create_or_update_tables(conn, schema_dict):
         else:
             # Создаем таблицу, если её нет
             await create_table(conn, create_execute_script)
+
+
+async def migrate_prize_draw_rules_draw_to_stage(conn) -> None:
+    """Одноразовая миграция prize_draw_rules.draw_id -> stage_id.
+
+    Копирует каждое старое привязанное к акции правило на КАЖДЫЙ существующий этап
+    этой акции — воспроизводя прежнее поведение "правило общее на акцию" (этапы
+    раньше вообще не влияли на проверку чека). Акция без единого этапа — правило
+    физически некуда привязать, строка не переносится, в лог пишется предупреждение
+    (не блокирует запуск). Идемпотентно: повторный вызов после успешной миграции —
+    no-op. Атомарно: явная транзакция, откат при любой ошибке не оставляет БД в
+    промежуточном состоянии. См. TZ_GUARANTEED_PRIZE_STAGE_TYPES.md, раздел 4.2.
+    """
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='prize_draw_rules'"
+    )
+    if not await cursor.fetchone():
+        # Таблицы ещё нет вовсе — её создаст обычный create_table() уже по новой схеме.
+        return
+
+    existing_columns = await get_table_info(conn, "prize_draw_rules")
+    if "stage_id" in existing_columns:
+        # Уже мигрировано (или свежая установка) — идемпотентный выход.
+        return
+    if "draw_id" not in existing_columns:
+        # Неожиданная схема без draw_id и без stage_id — нечего мигрировать.
+        return
+
+    await conn.execute("BEGIN IMMEDIATE")
+    try:
+        await cursor.execute(
+            "SELECT id, draw_id, title, sku_code, aliases, min_quantity, is_active, create_dt "
+            "FROM prize_draw_rules"
+        )
+        old_rows = await cursor.fetchall()
+
+        new_rows: list[tuple] = []
+        skipped = 0
+        for _old_id, draw_id, title, sku_code, aliases, min_quantity, is_active, create_dt in old_rows:
+            await cursor.execute(
+                "SELECT id FROM prize_draw_stages WHERE draw_id = ? ORDER BY id", (draw_id,)
+            )
+            stage_ids = [row[0] for row in await cursor.fetchall()]
+            if not stage_ids:
+                skipped += 1
+                logger.warning(
+                    "migrate_prize_draw_rules_draw_to_stage: у акции draw_id=%s нет ни одного "
+                    "этапа — правило '%s' (id=%s) НЕ перенесено, требуется ручной просмотр",
+                    draw_id, title, _old_id,
+                )
+                continue
+            for stage_id in stage_ids:
+                new_rows.append(
+                    (stage_id, title, sku_code, aliases, min_quantity, is_active, create_dt)
+                )
+
+        new_schema_sql = get_table_schema_sql("prize_draw_rules")
+        columns_definition = ", ".join(
+            f"{col} {col_type}" for col, col_type in _parse_table_schema(new_schema_sql)
+        )
+        await cursor.execute("DROP TABLE IF EXISTS prize_draw_rules_migrating_new")
+        await cursor.execute(f"CREATE TABLE prize_draw_rules_migrating_new ({columns_definition})")
+        for values in new_rows:
+            await cursor.execute(
+                "INSERT INTO prize_draw_rules_migrating_new "
+                "(stage_id, title, sku_code, aliases, min_quantity, is_active, create_dt) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                values,
+            )
+        await cursor.execute("DROP TABLE prize_draw_rules")
+        await cursor.execute(
+            "ALTER TABLE prize_draw_rules_migrating_new RENAME TO prize_draw_rules"
+        )
+        await conn.commit()
+    except Exception:
+        await conn.rollback()
+        raise
+
+    logger.info(
+        "migrate_prize_draw_rules_draw_to_stage: перенесено %s старых правил в %s "
+        "новых строк по этапам (пропущено без этапов: %s)",
+        len(old_rows), len(new_rows), skipped,
+    )
+
+
+async def migrate_draw_fields_to_stage(conn) -> None:
+    """Одноразовая миграция: prize_draws.{start_date,end_date,status,auto_validation_enabled}
+    переезжают на prize_draw_stages — акция становится безданным контейнером (просто title),
+    "активным" может быть только ОДИН этап во всей системе (глобальная эксклюзивность).
+
+    Копирует даты/автовалидацию на ВСЕ этапы своей акции (они действовали одинаково на всю
+    акцию раньше). Статус распределяется иначе: только ПЕРВЫЙ этап акции (по order_index)
+    получает старый статус акции, остальные этапы той же акции получают 'upcoming' — у старой
+    модели не было понятия "статус этапа", поэтому не из чего его вывести для остальных.
+    Затем — обязательный проход глобальной дедупликации: если после переноса 'active' оказался
+    более чем у одного этапа (в разных акциях бывший overlap-чек допускал максимум одну active
+    акцию единовременно, но это не гарантия на любых исторических данных) — оставляем только
+    ОДИН (наименьший id), остальные понижаем до 'upcoming'. Акция без единого этапа — даты/
+    статус физически некуда перенести, в лог пишется предупреждение, данные теряются.
+    Атомарно (BEGIN IMMEDIATE/commit/rollback), идемпотентна.
+    """
+    cursor = await conn.cursor()
+    draws_schema = await get_table_info(conn, "prize_draws")
+    if "start_date" not in draws_schema:
+        return  # уже мигрировано (или свежая установка)
+
+    await conn.execute("BEGIN IMMEDIATE")
+    try:
+        stages_schema = await get_table_info(conn, "prize_draw_stages")
+        for col, col_type in (
+            ("start_date", "DATE"),
+            ("end_date", "DATE"),
+            ("status", "TEXT NOT NULL DEFAULT 'upcoming'"),
+            ("auto_validation_enabled", "BOOLEAN DEFAULT 1"),
+        ):
+            if col not in stages_schema:
+                await cursor.execute(
+                    f"ALTER TABLE prize_draw_stages ADD COLUMN {col} {col_type}"
+                )
+
+        await cursor.execute(
+            "SELECT id, start_date, end_date, status, auto_validation_enabled FROM prize_draws"
+        )
+        old_draws = await cursor.fetchall()
+
+        active_candidates: list[int] = []
+        skipped = 0
+        for draw_id, start_date, end_date, status, auto_val in old_draws:
+            await cursor.execute(
+                "SELECT id FROM prize_draw_stages WHERE draw_id = ? ORDER BY order_index, id",
+                (draw_id,),
+            )
+            stage_ids = [row[0] for row in await cursor.fetchall()]
+            if not stage_ids:
+                skipped += 1
+                logger.warning(
+                    "migrate_draw_fields_to_stage: у акции draw_id=%s нет ни одного этапа — "
+                    "даты/статус/автовалидация НЕ перенесены, требуется ручной просмотр",
+                    draw_id,
+                )
+                continue
+            for stage_id in stage_ids:
+                await cursor.execute(
+                    "UPDATE prize_draw_stages SET start_date = ?, end_date = ?, "
+                    "auto_validation_enabled = ? WHERE id = ?",
+                    (start_date, end_date, auto_val, stage_id),
+                )
+            first_stage_id = stage_ids[0]
+            stage_status = status if status else "upcoming"
+            await cursor.execute(
+                "UPDATE prize_draw_stages SET status = ? WHERE id = ?",
+                (stage_status, first_stage_id),
+            )
+            if stage_status == "active":
+                active_candidates.append(first_stage_id)
+
+        # Глобальная эксклюзивность: активным может быть только один этап во всей системе.
+        if len(active_candidates) > 1:
+            keep = min(active_candidates)
+            for stage_id in active_candidates:
+                if stage_id != keep:
+                    await cursor.execute(
+                        "UPDATE prize_draw_stages SET status = 'upcoming' WHERE id = ?",
+                        (stage_id,),
+                    )
+            logger.warning(
+                "migrate_draw_fields_to_stage: найдено %s одновременно 'active' акций — "
+                "оставлен только этап id=%s, остальные понижены до 'upcoming'",
+                len(active_candidates), keep,
+            )
+
+        new_schema_sql = get_table_schema_sql("prize_draws")
+        columns_definition = ", ".join(
+            f"{col} {col_type}" for col, col_type in _parse_table_schema(new_schema_sql)
+        )
+        await cursor.execute("DROP TABLE IF EXISTS prize_draws_migrating_new")
+        await cursor.execute(f"CREATE TABLE prize_draws_migrating_new ({columns_definition})")
+        await cursor.execute(
+            "INSERT INTO prize_draws_migrating_new (id, title, create_dt) "
+            "SELECT id, title, create_dt FROM prize_draws"
+        )
+        await cursor.execute("DROP TABLE prize_draws")
+        await cursor.execute("ALTER TABLE prize_draws_migrating_new RENAME TO prize_draws")
+        await conn.commit()
+    except Exception:
+        await conn.rollback()
+        raise
+
+    logger.info(
+        "migrate_draw_fields_to_stage: перенесено %s акций на этапы (пропущено без этапов: %s)",
+        len(old_draws) - skipped, skipped,
+    )
 
 
 async def create_db():
@@ -1221,46 +1426,44 @@ async def get_question_messages(question_id: int, conn=None) -> List[Dict[str, A
 
 
 @with_connection
-async def get_active_draw_id(date: datetime.date | None = None, conn=None) -> int | None:
-    """Return id of active prize draw for given date, if any."""
+async def get_active_stage(date: datetime.date | None = None, conn=None) -> dict | None:
+    """Единственный "активный" этап во всей системе (глобальная эксклюзивность — только
+    ОДИН этап может иметь status='active' одновременно, обеспечивается на записи в
+    site_bot/main.py:save_draw()). Дата — доп. фильтр по диапазону этапа, если он задан
+    (NULL-даты = без ограничения по датам)."""
     date = date or datetime.date.today()
     cursor = await conn.cursor()
     await cursor.execute(
-        "SELECT id FROM prize_draws WHERE status = 'active' AND start_date <= ? AND end_date >= ? ORDER BY id LIMIT 1",
+        "SELECT * FROM prize_draw_stages WHERE status = 'active' "
+        "AND (start_date IS NULL OR start_date <= ?) "
+        "AND (end_date IS NULL OR end_date >= ?) "
+        "ORDER BY id LIMIT 1",
         (date, date),
     )
     row = await cursor.fetchone()
-    await conn.commit()
-    return row[0] if row else None
+    if not row:
+        return None
+    columns = [col[0] for col in cursor.description]
+    return dict(zip(columns, row))
 
 
 @with_connection
-async def get_draw_auto_validation(draw_id: int | None, conn=None) -> bool:
-    """True, если у акции включена авто-валидация. Безопасный default — True."""
-    if draw_id is None:
-        return True
-    schema = await get_table_info(conn, "prize_draws")
-    if "auto_validation_enabled" not in schema:
-        return True
-    cursor = await conn.cursor()
-    await cursor.execute(
-        "SELECT auto_validation_enabled FROM prize_draws WHERE id = ?", (draw_id,)
-    )
-    row = await cursor.fetchone()
-    if row is None or row[0] is None:
-        return True
-    return bool(row[0])
+async def get_active_draw_id(date: datetime.date | None = None, conn=None) -> int | None:
+    """Id акции, содержащей единственный активный этап (для обратной совместимости мест,
+    которым нужен только draw_id, не весь этап)."""
+    stage = await get_active_stage(date=date, conn=conn)
+    return stage["draw_id"] if stage else None
 
 
 @with_connection
-async def get_draw_rules(draw_id: int, only_active: bool = True, conn=None) -> list[dict]:
-    """Правила проверки чеков для акции. Пустой список = правил нет (fallback на keywords)."""
+async def get_stage_rules(stage_id: int, only_active: bool = True, conn=None) -> list[dict]:
+    """Правила проверки чеков для этапа. Пустой список = правил нет (fallback на keywords)."""
     schema = await get_table_info(conn, "prize_draw_rules")
     if not schema:
         return []
     cursor = await conn.cursor()
-    query = "SELECT * FROM prize_draw_rules WHERE draw_id = ?"
-    params: list = [draw_id]
+    query = "SELECT * FROM prize_draw_rules WHERE stage_id = ?"
+    params: list = [stage_id]
     if only_active:
         query += " AND is_active = 1"
     query += " ORDER BY id"
@@ -1268,6 +1471,305 @@ async def get_draw_rules(draw_id: int, only_active: bool = True, conn=None) -> l
     rows = await cursor.fetchall()
     columns = [col[0] for col in cursor.description]
     return [dict(zip(columns, row)) for row in rows]
+
+
+@with_connection
+async def get_draw_stages(draw_id: int, conn=None) -> list[dict]:
+    """Этапы акции (включая stage_type), отсортированные по order_index."""
+    schema = await get_table_info(conn, "prize_draw_stages")
+    if not schema:
+        return []
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT * FROM prize_draw_stages WHERE draw_id = ? ORDER BY order_index, id",
+        (draw_id,),
+    )
+    rows = await cursor.fetchall()
+    columns = [col[0] for col in cursor.description]
+    stages = [dict(zip(columns, row)) for row in rows]
+    if "stage_type" not in schema:
+        for stage in stages:
+            stage["stage_type"] = "standard"
+    return stages
+
+
+@with_connection
+async def get_stage(stage_id: int, conn=None) -> dict | None:
+    """Один этап по id (со всеми полями, включая stage_type/даты/статус/автовалидацию)."""
+    schema = await get_table_info(conn, "prize_draw_stages")
+    if not schema:
+        return None
+    cursor = await conn.cursor()
+    await cursor.execute("SELECT * FROM prize_draw_stages WHERE id = ?", (stage_id,))
+    row = await cursor.fetchone()
+    if not row:
+        return None
+    columns = [col[0] for col in cursor.description]
+    stage = dict(zip(columns, row))
+    if "stage_type" not in schema:
+        stage["stage_type"] = "standard"
+    return stage
+
+
+@with_connection
+async def get_user_rule_progress(
+    user_tg_id: int, draw_id: int, rule_ids: list[int], conn=None
+) -> dict[int, float]:
+    """Сумма quantity по receipt_items для данных правил, только по 'Подтверждён' чекам этого
+    пользователя в рамках акции (раздел 3.1/11.7 ТЗ). Правило без единой позиции — 0.0."""
+    progress: dict[int, float] = {rid: 0.0 for rid in rule_ids}
+    if not rule_ids:
+        return progress
+    placeholders = ", ".join("?" for _ in rule_ids)
+    cursor = await conn.cursor()
+    await cursor.execute(
+        f"""
+        SELECT receipt_items.matched_rule_id, SUM(receipt_items.quantity)
+        FROM receipt_items
+        JOIN receipts ON receipts.id = receipt_items.receipt_id
+        WHERE receipts.user_tg_id = ?
+          AND receipts.draw_id = ?
+          AND receipt_items.matched_rule_id IN ({placeholders})
+          AND receipts.status = 'Подтверждён'
+        GROUP BY receipt_items.matched_rule_id
+        """,
+        (user_tg_id, draw_id, *rule_ids),
+    )
+    rows = await cursor.fetchall()
+    for rule_id, total in rows:
+        progress[rule_id] = float(total) if total is not None else 0.0
+    return progress
+
+
+@with_connection
+async def is_stage_winner(stage_id: int, user_tg_id: int, conn=None) -> bool:
+    """True, если пользователь уже победитель этого этапа (prize_draw_winners)."""
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT 1 FROM prize_draw_winners WHERE stage_id = ? AND user_tg_id = ? LIMIT 1",
+        (stage_id, user_tg_id),
+    )
+    return await cursor.fetchone() is not None
+
+
+@with_connection
+async def add_stage_winner(
+    stage_id: int, user_tg_id: int, receipt_id: int | None, winner_name: str, conn=None
+) -> None:
+    """Зафиксировать автоматическую победу гарантированного этапа (раздел 3.1 ТЗ)."""
+    schema = await get_table_info(conn, "prize_draw_winners")
+    fields = ["stage_id", "user_tg_id", "winner_name"]
+    values: list = [stage_id, user_tg_id, winner_name]
+    if "receipt_id" in schema:
+        fields.append("receipt_id")
+        values.append(receipt_id)
+    placeholders = ", ".join(["?"] * len(values))
+    cursor = await conn.cursor()
+    await cursor.execute(
+        f"INSERT INTO prize_draw_winners ({', '.join(fields)}) VALUES ({placeholders})",
+        tuple(values),
+    )
+    await conn.commit()
+
+
+@with_connection
+async def add_manual_receipt_item(
+    receipt_id: int, rule_id: int, quantity: float | None, conn=None
+) -> None:
+    """Добавить позицию чека вручную (админ), НЕ стирая уже сохранённые ФНС-позиции —
+    в отличие от save_receipt_items(), которая делает DELETE перед вставкой (раздел 4.7 ТЗ)."""
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "SELECT title FROM prize_draw_rules WHERE id = ?", (rule_id,)
+    )
+    rule_row = await cursor.fetchone()
+    raw_name = f"Ручной ввод: {rule_row[0]}" if rule_row else "Ручной ввод"
+    await cursor.execute(
+        "INSERT INTO receipt_items (receipt_id, raw_name, quantity, price, sum, matched_rule_id) "
+        "VALUES (?, ?, ?, NULL, NULL, ?)",
+        (receipt_id, raw_name, quantity, rule_id),
+    )
+    await conn.commit()
+
+
+@with_connection
+async def evaluate_guaranteed_prize_stage(
+    stage: dict,
+    user_tg_id: int,
+    draw_id: int,
+    receipt_id: int | None,
+    winner_name: str,
+    conn=None,
+) -> dict:
+    """Пересчитать прогресс пользователя по правилам гарантированного этапа и, если условия
+    впервые выполнены, зафиксировать победу (add_stage_winner). Общая функция для автопайплайна
+    (media_heandler.process_receipt) и ручного подтверждения администратором
+    (site_bot/main.py:update_receipt) — раздел 4.6 ТЗ, «прогресс пересчитывается в обоих местах».
+
+    Возвращает {"outcome": "already_winner" | "no_rules" | "won" | "progress",
+                "rule_progress": [...]}  (rule_progress отсутствует для already_winner/no_rules).
+    """
+    stage_id = stage["id"]
+    if await is_stage_winner(stage_id, user_tg_id, conn=conn):
+        return {"outcome": "already_winner"}
+
+    rules = await get_stage_rules(stage_id, only_active=True, conn=conn)
+    if not rules:
+        return {"outcome": "no_rules"}
+
+    rule_ids = [r["id"] for r in rules]
+    progress = await get_user_rule_progress(user_tg_id, draw_id, rule_ids, conn=conn)
+    rule_progress = [
+        {
+            "id": r["id"],
+            "title": r["title"],
+            "min_quantity": r.get("min_quantity") or 1,
+            "progress": progress.get(r["id"], 0.0),
+        }
+        for r in rules
+    ]
+    all_done = all(rp["progress"] >= rp["min_quantity"] for rp in rule_progress)
+    if all_done:
+        await add_stage_winner(stage_id, user_tg_id, receipt_id, winner_name, conn=conn)
+        return {"outcome": "won", "rule_progress": rule_progress}
+    return {"outcome": "progress", "rule_progress": rule_progress}
+
+
+@with_connection
+async def evaluate_standard_stage_progress(
+    stage: dict, user_tg_id: int, draw_id: int, conn=None,
+) -> dict:
+    """Пересчитать накопленный прогресс standard-этапа (та же модель накопления, что и
+    у guaranteed_prize, — см. evaluate_guaranteed_prize_stage). В отличие от неё, НИКОГДА
+    не пишет в prize_draw_winners: победитель standard-этапа выбирается вручную, случайным
+    розыгрышем среди тех, кто выполнил все правила (site_bot/main.py: api_determine_winners).
+
+    Возвращает {"outcome": "no_rules" | "complete" | "progress", "rule_progress": [...],
+    "entries_count": int} (rule_progress/entries_count отсутствуют для no_rules).
+    entries_count — число попыток выиграть на standard-этапе, см.
+    receipt_validation.compute_entries_count() (НЕ число чеков — комплект условий может
+    собираться из нескольких чеков или перевыполняться одним).
+    """
+    rules = await get_stage_rules(stage["id"], only_active=True, conn=conn)
+    if not rules:
+        return {"outcome": "no_rules"}
+
+    rule_ids = [r["id"] for r in rules]
+    progress = await get_user_rule_progress(user_tg_id, draw_id, rule_ids, conn=conn)
+    rule_progress = [
+        {
+            "id": r["id"],
+            "title": r["title"],
+            "min_quantity": r.get("min_quantity") or 1,
+            "progress": progress.get(r["id"], 0.0),
+        }
+        for r in rules
+    ]
+    all_done = all(rp["progress"] >= rp["min_quantity"] for rp in rule_progress)
+    entries_count = receipt_validation.compute_entries_count(rule_progress)
+    return {
+        "outcome": "complete" if all_done else "progress",
+        "rule_progress": rule_progress,
+        "entries_count": entries_count,
+    }
+
+
+@with_connection
+async def get_stage_progress(stage_id: int, rules: list[dict] | None = None, conn=None) -> list[dict]:
+    """Прогресс ВСЕХ пользователей, у кого есть хотя бы одна позиция чека, сматченная на
+    правила этапа (для UI /prize-draws и для фильтра api_determine_winners). В отличие от
+    get_user_rule_progress() — не для одного пользователя, а батчем по всем сразу.
+
+    Возвращает [{"user_tg_id", "user_name", "rule_progress": [...], "complete": bool,
+    "entry_receipt_ids": [...], "entries_count": int}, ...]. entry_receipt_ids — id
+    подтверждённых чеков, засчитанных в правила этапа (используется api_determine_winners(),
+    чтобы в розыгрыш не попадали чеки пользователя, никак не связанные с этим этапом, и
+    чтобы выбрать чек-представитель для отображения победителя). entries_count — число
+    попыток выиграть (см. receipt_validation.compute_entries_count()) — НЕ длина
+    entry_receipt_ids: комплект условий может собираться из нескольких чеков или
+    перевыполняться одним, поэтому число попыток и число чеков-билетов, как правило, не
+    совпадают. Пустой список, если у этапа нет активных правил ИЛИ ни у кого ещё нет ни
+    одной подходящей позиции — это разные случаи, вызывающий код при необходимости
+    различает их отдельным вызовом get_stage_rules().
+    """
+    stage = await get_stage(stage_id, conn=conn)
+    if not stage:
+        return []
+    if rules is None:
+        rules = await get_stage_rules(stage_id, only_active=True, conn=conn)
+    if not rules:
+        return []
+
+    rule_ids = [r["id"] for r in rules]
+    draw_id = stage["draw_id"]
+    placeholders = ", ".join("?" for _ in rule_ids)
+    cursor = await conn.cursor()
+    await cursor.execute(
+        f"""
+        SELECT receipts.user_tg_id, receipt_items.matched_rule_id, SUM(receipt_items.quantity)
+        FROM receipt_items
+        JOIN receipts ON receipts.id = receipt_items.receipt_id
+        WHERE receipts.draw_id = ?
+          AND receipt_items.matched_rule_id IN ({placeholders})
+          AND receipts.status = 'Подтверждён'
+        GROUP BY receipts.user_tg_id, receipt_items.matched_rule_id
+        """,
+        (draw_id, *rule_ids),
+    )
+    rows = await cursor.fetchall()
+
+    progress_by_user: dict[int, dict[int, float]] = {}
+    for user_tg_id, rule_id, total in rows:
+        progress_by_user.setdefault(user_tg_id, {})[rule_id] = float(total) if total is not None else 0.0
+
+    if not progress_by_user:
+        return []
+
+    user_ids = list(progress_by_user.keys())
+    user_placeholders = ", ".join("?" for _ in user_ids)
+    await cursor.execute(
+        f"SELECT tg_id, name FROM users WHERE tg_id IN ({user_placeholders})",
+        tuple(user_ids),
+    )
+    names = {tg_id: name for tg_id, name in await cursor.fetchall()}
+
+    await cursor.execute(
+        f"""
+        SELECT DISTINCT receipts.user_tg_id, receipt_items.receipt_id
+        FROM receipt_items
+        JOIN receipts ON receipts.id = receipt_items.receipt_id
+        WHERE receipts.draw_id = ?
+          AND receipt_items.matched_rule_id IN ({placeholders})
+          AND receipts.status = 'Подтверждён'
+        """,
+        (draw_id, *rule_ids),
+    )
+    entry_receipt_ids_by_user: dict[int, list[int]] = {}
+    for user_tg_id, receipt_id in await cursor.fetchall():
+        entry_receipt_ids_by_user.setdefault(user_tg_id, []).append(receipt_id)
+
+    result = []
+    for user_tg_id, rule_totals in progress_by_user.items():
+        rule_progress = [
+            {
+                "id": r["id"],
+                "title": r["title"],
+                "min_quantity": r.get("min_quantity") or 1,
+                "progress": rule_totals.get(r["id"], 0.0),
+            }
+            for r in rules
+        ]
+        complete = all(rp["progress"] >= rp["min_quantity"] for rp in rule_progress)
+        entry_receipt_ids = entry_receipt_ids_by_user.get(user_tg_id, [])
+        result.append({
+            "user_tg_id": user_tg_id,
+            "user_name": names.get(user_tg_id),
+            "rule_progress": rule_progress,
+            "complete": complete,
+            "entry_receipt_ids": entry_receipt_ids,
+            "entries_count": receipt_validation.compute_entries_count(rule_progress),
+        })
+    return result
 
 
 @with_connection
@@ -1320,6 +1822,7 @@ async def add_receipt(
     message_id: int | None = None,
     qr: str | None = None,
     draw_id: int | None = None,
+    stage_id: int | None = None,
     conn=None,
 ) -> int:
     """Сохранить чек пользователя."""
@@ -1331,6 +1834,9 @@ async def add_receipt(
     if "draw_id" in schema:
         fields.append("draw_id")
         values.append(draw_id)
+    if "stage_id" in schema:
+        fields.append("stage_id")
+        values.append(stage_id)
     if "message_id" in schema:
         fields.append("message_id")
         values.append(message_id)
