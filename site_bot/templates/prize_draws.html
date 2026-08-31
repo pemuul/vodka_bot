@@ -159,14 +159,23 @@
         <textarea class="form-control stage-progress-message" rows="4"
                   placeholder="Чек принят ✅ Осталось докупить: {remaining_items}..."></textarea>
       </div>
-      <div class="mb-3 stage-guaranteed-messages-block">
+      <div class="mb-3 stage-guaranteed-only-block">
         <label class="form-label">
           Финальное сообщение (когда все условия выполнены)
           <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
-             title="Для «Гарантированного приза» отправляется один раз — в момент победы. Для «Стандарта» — в момент допуска к розыгрышу (не победа); плейсхолдер {entries_count} — текущее число попыток, можно продолжать присылать чеки. Пусто — используется текст по умолчанию."></i>
+             title="Отправляется один раз — в момент победы. Пусто — используется текст по умолчанию."></i>
         </label>
         <textarea class="form-control stage-win-message" rows="4"
                   placeholder="Поздравляем🎉 Все условия выполнены..."></textarea>
+      </div>
+      <div class="mb-3 stage-guaranteed-only-block">
+        <label class="form-label">
+          Сообщение при лишнем чеке (пользователь уже выиграл)
+          <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
+             title="Отправляется вместо обычной проверки, если пользователь уже выиграл этот этап и присылает ещё один чек. Пусто — используется текст по умолчанию."></i>
+        </label>
+        <textarea class="form-control stage-extra-receipt-message" rows="4"
+                  placeholder="Вы уже выполнили все условия акции..."></textarea>
       </div>
 
       <!-- Правила проверки чеков этого этапа -->
@@ -278,7 +287,7 @@
       const DEFAULT_PROGRESS_MESSAGE = "Чек принят ✅\n\nОсталось докупить:\n{remaining_items}\n\nУчитывается сумма по всем вашим чекам акции 🧮";
       const DEFAULT_STANDARD_PROGRESS_MESSAGE = "Чек принят ✅\n\nОсталось докупить:\n{remaining_items}\n\nУчитывается сумма по всем вашим чекам акции 🧮\nКаждый подтверждённый чек — отдельный шанс выиграть. Сейчас у вас {entries_count} 🎟️";
       const DEFAULT_WIN_MESSAGE = "Поздравляем🎉\nВсе условия выполнены – значит, приз скоро будет вашим 🏆\n\nМы свяжемся с вами в ближайшее время, чтобы уточнить данные для отправки подарка 🎁\n\nСпасибо, что вы с нами! 🫶🏻";
-      const DEFAULT_STANDARD_QUALIFY_MESSAGE = "Отлично! Вы выполнили все условия акции и теперь участвуете в розыгрыше приза 🎉\n\nКаждый следующий подтверждённый чек — ещё один шанс выиграть, можно продолжать. Сейчас у вас {entries_count} 🎟️\n\nПобедителя определим позже — следите за уведомлениями от бота. Удачи! 🍀";
+      const DEFAULT_EXTRA_RECEIPT_MESSAGE = "Вы уже выполнили все условия акции – приз уже ваш! 🎁\nСогласно правилам акции, один победитель – один приз.\nНе волнуйтесь, скоро у нас будут новые розыгрыши. Спасибо, что вы с нами 🫶🏻";
 
       function initTooltipsIn(root) {
         root.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => new bootstrap.Tooltip(el));
@@ -365,8 +374,8 @@
         pane.querySelector(".stage-type").value = stageData.stageType;
         pane.querySelector(".stage-progress-message").value = stageData.progressMessageText ||
           (stageData.stageType === "guaranteed_prize" ? DEFAULT_PROGRESS_MESSAGE : DEFAULT_STANDARD_PROGRESS_MESSAGE);
-        pane.querySelector(".stage-win-message").value = stageData.winMessageText ||
-          (stageData.stageType === "guaranteed_prize" ? DEFAULT_WIN_MESSAGE : DEFAULT_STANDARD_QUALIFY_MESSAGE);
+        pane.querySelector(".stage-win-message").value = stageData.winMessageText || DEFAULT_WIN_MESSAGE;
+        pane.querySelector(".stage-extra-receipt-message").value = stageData.extraReceiptMessageText || DEFAULT_EXTRA_RECEIPT_MESSAGE;
         pane.querySelector(".stage-start").value = stageData.start || "";
         pane.querySelector(".stage-end").value = stageData.end || "";
         pane.querySelector(".stage-status").value = stageData.status || "upcoming";
@@ -376,9 +385,13 @@
         function applyStageTypeVisibility() {
           const isGuaranteed = pane.querySelector(".stage-type").value === "guaranteed_prize";
           pane.querySelector(".stage-winners-count-block").style.display = isGuaranteed ? "none" : "";
-          // Сообщения о прогрессе/выполнении условий нужны ОБОИМ типам этапа — standard
-          // тоже копит прогресс по всем правилам, только выполнение условий означает
-          // допуск к розыгрышу, а не автопобеду.
+          // Промежуточное сообщение нужно ОБОИМ типам этапа — standard тоже копит прогресс
+          // по всем правилам. А финальное сообщение и сообщение о лишнем чеке — только для
+          // «Гарантированного приза»: у «Стандарта» выполнение условий больше не шлёт
+          // отдельное сообщение (по решению владельца — просто «чек принят», как раньше).
+          pane.querySelectorAll(".stage-guaranteed-only-block").forEach(el => {
+            el.style.display = isGuaranteed ? "" : "none";
+          });
           pane.querySelector(".btn-determine-winner").style.display = isGuaranteed ? "none" : "";
           pane.querySelector(".stage-rules-hint-standard").style.display = isGuaranteed ? "none" : "";
           pane.querySelector(".stage-rules-hint-guaranteed").style.display = isGuaranteed ? "" : "none";
@@ -608,6 +621,7 @@
           stageType: "standard",
           progressMessageText: "",
           winMessageText: "",
+          extraReceiptMessageText: "",
           start: "",
           end: "",
           status: "upcoming",
@@ -696,6 +710,7 @@
           sd.stageType = pane.querySelector(".stage-type").value;
           sd.progressMessageText = pane.querySelector(".stage-progress-message").value || null;
           sd.winMessageText = pane.querySelector(".stage-win-message").value || null;
+          sd.extraReceiptMessageText = pane.querySelector(".stage-extra-receipt-message").value || null;
           sd.start = pane.querySelector(".stage-start").value || null;
           sd.end = pane.querySelector(".stage-end").value || null;
           sd.status = pane.querySelector(".stage-status").value;

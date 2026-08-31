@@ -67,9 +67,10 @@ DEFAULT_WIN_MESSAGE = (
     "Мы свяжемся с вами в ближайшее время, чтобы уточнить данные для отправки подарка 🎁\n\n"
     "Спасибо, что вы с нами! 🫶🏻"
 )
-EXTRA_RECEIPT_MESSAGE = (
-    "❌ Вы уже выполнили условия этой акции — приз уже ваш, этот чек лишний и в розыгрыше "
-    "не участвует."
+DEFAULT_EXTRA_RECEIPT_MESSAGE = (
+    "Вы уже выполнили все условия акции – приз уже ваш! 🎁\n"
+    "Согласно правилам акции, один победитель – один приз.\n"
+    "Не волнуйтесь, скоро у нас будут новые розыгрыши. Спасибо, что вы с нами 🫶🏻"
 )
 
 
@@ -84,6 +85,12 @@ def build_progress_message(template: str | None, remaining_items: str) -> str:
 def build_win_message(template: str | None) -> str:
     """Текст финального поздравления — редактируемый (или дефолтный, раздел 4.10 ТЗ)."""
     return template or DEFAULT_WIN_MESSAGE
+
+
+def build_extra_receipt_message(template: str | None) -> str:
+    """Текст для «лишнего» чека — пользователь уже победитель guaranteed_prize-этапа и
+    прислал ещё один чек (раздел 4.4/9 ТЗ) — редактируемый (или дефолтный)."""
+    return template or DEFAULT_EXTRA_RECEIPT_MESSAGE
 
 
 def _pluralize_ru(n: int, one: str, few: str, many: str) -> str:
@@ -131,12 +138,6 @@ DEFAULT_STANDARD_PROGRESS_MESSAGE_TEMPLATE = (
     "Учитывается сумма по всем вашим чекам акции 🧮\n"
     "Каждый подтверждённый чек — отдельный шанс выиграть. Сейчас у вас {entries_count} 🎟️"
 )
-DEFAULT_STANDARD_QUALIFY_MESSAGE = (
-    "Отлично! Вы выполнили все условия акции и теперь участвуете в розыгрыше приза 🎉\n\n"
-    "Каждый следующий подтверждённый чек — ещё один шанс выиграть, можно продолжать. "
-    "Сейчас у вас {entries_count} 🎟️\n\n"
-    "Победителя определим позже — следите за уведомлениями от бота. Удачи! 🍀"
-)
 
 
 def build_standard_progress_message(
@@ -146,14 +147,6 @@ def build_standard_progress_message(
     (подтверждённых чеков, зачтённых в розыгрыш этого этапа)."""
     text = template or DEFAULT_STANDARD_PROGRESS_MESSAGE_TEMPLATE
     text = text.replace("{remaining_items}", remaining_items)
-    return text.replace("{entries_count}", format_entries_phrase(entries_count))
-
-
-def build_standard_qualify_message(template: str | None, entries_count: int) -> str:
-    """Условия standard-этапа выполнены — участник допущен к розыгрышу, но НЕ победитель
-    (в отличие от build_win_message для guaranteed_prize, где условия = автопобеда).
-    Дальнейшие чеки продолжают копить попытки, поэтому тоже показываем счётчик."""
-    text = template or DEFAULT_STANDARD_QUALIFY_MESSAGE
     return text.replace("{entries_count}", format_entries_phrase(entries_count))
 
 

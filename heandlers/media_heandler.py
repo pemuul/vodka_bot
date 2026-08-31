@@ -982,7 +982,7 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
         await sql_mgt.update_receipt_status(receipt_id, "Лишний чек", comment=comment_text)
         await global_objects.bot.send_message(
             chat_id,
-            receipt_validation.EXTRA_RECEIPT_MESSAGE,
+            receipt_validation.build_extra_receipt_message(stage.get("extra_receipt_message_text")),
             reply_to_message_id=msg_id,
         )
         return
@@ -1040,12 +1040,13 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
         final_status = "Подтверждён"
         entries_count = result["entries_count"]
         if result["outcome"] == "complete":
+            # По решению владельца: полное выполнение условий standard-этапа больше не
+            # шлёт отдельное сообщение — как и раньше, пользователь просто видит, что
+            # чек принят (fallback на "✅ Чек подтверждён" ниже), stage_event_message
+            # остаётся None.
             comment_text = (
                 f"Бот: этап '{stage['name']}' — условия выполнены, участвует в розыгрыше "
                 f"(попыток: {entries_count})"
-            )
-            stage_event_message = receipt_validation.build_standard_qualify_message(
-                stage.get("win_message_text"), entries_count
             )
         else:
             remaining_text = receipt_validation.format_remaining_items(result["rule_progress"])
@@ -1293,7 +1294,11 @@ async def set_photo(message: Message) -> None:
                 draw_id=draw_id,
                 stage_id=stage_id,
             )
-            await message.reply(receipt_validation.EXTRA_RECEIPT_MESSAGE)
+            await message.reply(
+                receipt_validation.build_extra_receipt_message(
+                    active_stage.get("extra_receipt_message_text")
+                )
+            )
             return
         existing_receipts = await sql_mgt.get_user_receipts(
             message.chat.id, limit=None, draw_id=draw_id

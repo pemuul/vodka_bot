@@ -333,6 +333,7 @@ class TestNewSchemaEntries:
         assert "DEFAULT 'standard'" in col_dict["stage_type"]
         assert "progress_message_text" in col_dict
         assert "win_message_text" in col_dict
+        assert "extra_receipt_message_text" in col_dict
 
     def test_receipt_items_schema(self):
         columns = sql_mgt.get_table_schema_columns("receipt_items")

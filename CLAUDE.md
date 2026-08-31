@@ -147,7 +147,7 @@ class GlobalObjects:
 | question_messages | Переписка по вопросу |
 | scheduled_messages | Запланированные рассылки |
 | prize_draws | Акции — теперь **безданный контейнер**: только `id, title, create_dt`. Все даты/статус/настройки переехали на этапы (см. "Один активный этап на всю систему" ниже) |
-| prize_draw_stages | Этапы розыгрыша (winners_count, `stage_type` TEXT DEFAULT 'standard': `standard`/`guaranteed_prize`, `progress_message_text`, `win_message_text` — редактируемые шаблоны сообщений для `guaranteed_prize`; `start_date`/`end_date` DATE, `status` TEXT DEFAULT 'upcoming' (`upcoming`/`active`/`finished`), `auto_validation_enabled` BOOLEAN DEFAULT 1 — переехали сюда с `prize_draws` при пивоте на модель "один активный этап на всю систему"; `status='active'` может быть **не более чем у одного этапа во всей БД одновременно**, это проверяется на записи в `site_bot/main.py:save_draw()`) |
+| prize_draw_stages | Этапы розыгрыша (winners_count, `stage_type` TEXT DEFAULT 'standard': `standard`/`guaranteed_prize`, `progress_message_text`, `win_message_text`, `extra_receipt_message_text` — редактируемые шаблоны сообщений, все три актуальны только для `guaranteed_prize` (для `standard` UI-вкладка их не показывает, а бот их не использует — см. "Гарантированный приз" ниже); `start_date`/`end_date` DATE, `status` TEXT DEFAULT 'upcoming' (`upcoming`/`active`/`finished`), `auto_validation_enabled` BOOLEAN DEFAULT 1 — переехали сюда с `prize_draws` при пивоте на модель "один активный этап на всю систему"; `status='active'` может быть **не более чем у одного этапа во всей БД одновременно**, это проверяется на записи в `site_bot/main.py:save_draw()`) |
 | prize_draw_rules | Правила проверки чеков **этапа** (title, sku_code, aliases через `;`, min_quantity, is_active). Привязаны к `stage_id`, не к акции (переехало с `draw_id` одноразовой автомиграцией `sql_mgt.migrate_prize_draw_rules_draw_to_stage()`, см. "Гарантированный приз" ниже) |
 | prize_draw_winners | Победители этапа — для `standard` заполняется вручную (кнопка «Определить победителя»), для `guaranteed_prize` — автоматически ботом при выполнении условий |
 | participant_settings | Настройки участника (blocked, tester) |
@@ -175,8 +175,10 @@ class GlobalObjects:
    сразу отвечают «сейчас акция не проводится», чек не принимается
 3. **Ранняя проверка «лишний чек»** (`_is_extra_receipt()`): если этап — `guaranteed_prize` и
    пользователь уже его победитель — статус `"Лишний чек"`, сообщение
-   `receipt_validation.EXTRA_RECEIPT_MESSAGE`, чек **не** сохраняется в очередь (оптимизация,
-   не тратим QR/ФНС/OCR на заведомо лишний чек); для `standard`-этапа чек никогда не «лишний»
+   `receipt_validation.build_extra_receipt_message(stage.get("extra_receipt_message_text"))`
+   (редактируемое поле этапа, дефолт `DEFAULT_EXTRA_RECEIPT_MESSAGE`), чек **не** сохраняется
+   в очередь (оптимизация, не тратим QR/ФНС/OCR на заведомо лишний чек); для `standard`-этапа
+   чек никогда не «лишний»
 4. Проверяется `active_stage["auto_validation_enabled"]` — теперь это поле **этапа**, не акции
    (checkbox в `/prize-draws` на вкладке этапа, default `1`)
 5. **Авто-валидация включена**: статус `"В авто обработке"`, запись в `receipt_ocr_queue`
@@ -289,14 +291,17 @@ class GlobalObjects:
   **Важно**: чек должен получить статус `"Подтверждён"` в БД РАНЬШЕ пересчёта прогресса —
   иначе агрегирующий запрос не увидит позиции только что обработанного чека (нашли на этом
   живой баг при разработке — см. `TZ_GUARANTEED_PRIZE_STAGE_TYPES.md`, раздел 4.3/4.6).
-- **Три исхода уведомления** после проверки чека: (1) чек подтверждён, но условия ещё не
-  выполнены — текст с остатком товара, НЕ число оставшихся чеков
+- **Три исхода уведомления** после проверки чека (актуально для `guaranteed_prize`; для
+  `standard` см. отдельный подраздел ниже — там (2) сознательно убрали): (1) чек подтверждён,
+  но условия ещё не выполнены — текст с остатком товара, НЕ число оставшихся чеков
   (`receipt_validation.format_remaining_items()` + `build_progress_message()`,
   плейсхолдер `{remaining_items}` в `prize_draw_stages.progress_message_text`); (2) чек
   закрывает все условия — финальный текст (`build_win_message()`,
   `prize_draw_stages.win_message_text`); (3) чек лишний (условия уже выполнены раньше) —
-  статус `"Лишний чек"`, см. поток выше. Оба текстовых поля редактируемые, пустое значение →
-  дефолт из кода.
+  статус `"Лишний чек"`, текст `build_extra_receipt_message()`,
+  `prize_draw_stages.extra_receipt_message_text` (дефолт `DEFAULT_EXTRA_RECEIPT_MESSAGE`), см.
+  поток выше. Все три текстовых поля редактируемые (вкладка этапа в `/prize-draws`, видна
+  только когда выбран тип «Гарантированный приз»), пустое значение → дефолт из кода.
 - **Ручной ввод товара администратором** (`/receipts`, не привязан к типу этапа — правила
   всех этапов акции доступны в выпадающем списке; только когда нужно — `min_quantity>1`
   требует количество, `min_quantity==1` достаточно факта) — `sql_mgt.add_manual_receipt_item()`
@@ -339,10 +344,14 @@ class GlobalObjects:
   вызывает `add_stage_winner()`/не пишет в `prize_draw_winners`. Возвращает `outcome`:
   `"no_rules"` / `"progress"` / `"complete"` (не `"won"` — это принципиально другое понятие:
   участник допущен к розыгрышу, а не выиграл).
-- Уведомление при `"complete"` — `receipt_validation.build_standard_qualify_message()`
-  (дефолт `DEFAULT_STANDARD_QUALIFY_MESSAGE`, «вы участвуете в розыгрыше», НЕ текст победы) —
-  редактируется тем же полем `prize_draw_stages.win_message_text`, что и у `guaranteed_prize`
-  (разный дефолт и подпись в UI, схема не меняется).
+- **Уведомление при `"complete"` намеренно отсутствует** — по решению владельца (2026-08-31)
+  полное выполнение условий `standard`-этапа больше НЕ шлёт отдельное сообщение о допуске к
+  розыгрышу (было `receipt_validation.build_standard_qualify_message()` /
+  `DEFAULT_STANDARD_QUALIFY_MESSAGE`, оба удалены). Пользователь видит обычное `"✅ Чек
+  подтверждён"` — как было до появления накопительной модели у `standard`. Поля «Финальное
+  сообщение» и «Сообщение при лишнем чеке» в `/prize-draws` теперь скрыты для типа «Стандарт»
+  (видны только для «Гарантированного приза», `stage-guaranteed-only-block` в
+  `prize_draws.html`) — `win_message_text` у `standard`-этапа больше нигде не читается ботом.
 - **Попытка выиграть = полный "комплект" накопленных условий, НЕ чек и НЕ число чеков**
   (уточнение владельца: "не просто каждый чек, а группа чеков от 1 и более в совокупности
   проходящая валидацию"). `receipt_validation.compute_entries_count(rule_progress)` —
@@ -353,10 +362,10 @@ class GlobalObjects:
   избытком товара может сразу дать несколько (4 шт. при `min_quantity=2` — сразу 2 попытки).
   Используется в `evaluate_standard_stage_progress()`/`_evaluate_standard_stage_progress()`
   (`entries_count` в результате) и в `get_stage_progress()`/`_get_stage_progress()` (батч по
-  всем пользователям). Подставляется в сообщения через `{entries_count}`
-  (`build_standard_progress_message()`, `build_standard_qualify_message()`, склонение
-  "N попыток" — `format_entries_phrase()`). Счётчик показывается и после выполнения условий
-  — новые чеки продолжают копить попытки, без верхнего предела.
+  всем пользователям). Подставляется в промежуточное сообщение через `{entries_count}`
+  (`build_standard_progress_message()`, склонение "N попыток" — `format_entries_phrase()`) —
+  счётчик виден, пока условия ещё не выполнены; после `"complete"` отдельного сообщения нет
+  (см. выше), но `entries_count` продолжает расти и виден в «Прогресс участников» в админке.
 - **`entry_receipt_ids`** (в `get_stage_progress()`/`_get_stage_progress()`) — отдельное от
   `entries_count` понятие: список id подтверждённых чеков, у которых есть хотя бы одна
   позиция, сматченная на правило ИМЕННО этого этапа (не любой подтверждённый чек
@@ -644,7 +653,7 @@ python -m pytest tests/ -v -m "not slow"
   включая `match_items_accumulating`, `format_remaining_items`, `compute_entries_count`
   (комплекты условий, не число чеков — дословный пример владельца покрыт отдельным тестом),
   `format_entries_phrase` (русское склонение "N попыток"),
-  `build_progress_message`/`build_win_message`/`build_standard_qualify_message`/
+  `build_progress_message`/`build_win_message`/`build_extra_receipt_message`/
   `build_standard_progress_message`
 - `test_media_heandler_guaranteed_prize.py` — pure/DB-хелперы накопительного прогресса в
   `media_heandler.py` (`_is_extra_receipt`, `_guaranteed_ocr_rule_id` и т.д.) + end-to-end

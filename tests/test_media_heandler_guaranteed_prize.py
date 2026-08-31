@@ -382,8 +382,9 @@ class TestProcessReceiptGuaranteedPrizeIntegration:
 
 # ---------------------------------------------------------------------------
 # process_receipt() standard-этап с накопительным прогрессом — та же модель, что и
-# guaranteed_prize, но НИКОГДА не выигрывает автоматически: полное выполнение условий
-# только допускает к розыгрышу (build_standard_qualify_message), победителя по-прежнему
+# guaranteed_prize, но НИКОГДА не выигрывает автоматически. Полное выполнение условий
+# допускает к розыгрышу, но (по решению владельца) больше НЕ шлёт отдельное сообщение —
+# пользователь просто видит "✅ Чек подтверждён", как и раньше. Победителя по-прежнему
 # выбирает админ вручную через determine().
 # ---------------------------------------------------------------------------
 
@@ -436,11 +437,12 @@ class TestProcessReceiptStandardStageIntegration:
 
         fake_go = media_heandler.global_objects
         sent_text = fake_go.bot.send_message.call_args.args[1]
-        # 2 шт. + 1 шт. = 3 шт. накоплено при min_quantity=3 — это РОВНО 1 комплект/попытка,
-        # не 2 (попытка — не число чеков, а число собранных комплектов условия)
-        assert sent_text == media_heandler.receipt_validation.build_standard_qualify_message(None, 1)
-        assert "1 попытка выиграть" in sent_text
-        assert "Поздравляем" not in sent_text  # это НЕ текст победы guaranteed_prize
+        # 2 шт. + 1 шт. = 3 шт. накоплено при min_quantity=3 — это РОВНО 1 комплект/попытка
+        # (не 2 — попытка не равна числу чеков), но полное выполнение условий standard-этапа
+        # больше не шлёт отдельное сообщение — просто обычное подтверждение чека.
+        assert sent_text == "✅ Чек подтверждён"
+        progress = run(sql_mgt.get_stage_progress(stage_id))
+        assert progress[0]["entries_count"] == 1
 
     def test_owner_example_2_receipts_1_entry_then_3rd_receipt_gives_2(self, mem_db, monkeypatch):
         """End-to-end через process_receipt() дословного примера владельца: "загрузили 2
@@ -465,7 +467,9 @@ class TestProcessReceiptStandardStageIntegration:
         ))
         run(media_heandler.process_receipt(Path("/tmp/owner2.jpg"), user_id, 9011, r2))
         sent_text = fake_go.bot.send_message.call_args.args[1]
-        assert sent_text == media_heandler.receipt_validation.build_standard_qualify_message(None, 1)
+        assert sent_text == "✅ Чек подтверждён"
+        progress = run(sql_mgt.get_stage_progress(stage_id))
+        assert progress[0]["entries_count"] == 1
 
         _mock_qr_and_fns(monkeypatch, _fns_qr(3), [{"name": "Настойка Ром", "quantity": 2}])
         r3 = run(sql_mgt.add_receipt(
@@ -474,7 +478,9 @@ class TestProcessReceiptStandardStageIntegration:
         ))
         run(media_heandler.process_receipt(Path("/tmp/owner3.jpg"), user_id, 9012, r3))
         sent_text = fake_go.bot.send_message.call_args.args[1]
-        assert sent_text == media_heandler.receipt_validation.build_standard_qualify_message(None, 2)
+        assert sent_text == "✅ Чек подтверждён"
+        progress = run(sql_mgt.get_stage_progress(stage_id))
+        assert progress[0]["entries_count"] == 2
 
     def test_full_match_never_writes_winner(self, mem_db, monkeypatch):
         """Критичный regression-guard: standard-этап никогда не выигрывает автоматически,

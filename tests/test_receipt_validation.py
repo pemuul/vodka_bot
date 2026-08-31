@@ -156,19 +156,11 @@ class TestBuildMessages:
     def test_build_win_message_custom(self):
         assert rv.build_win_message("Ура, вы победили!") == "Ура, вы победили!"
 
-    def test_build_standard_qualify_message_default(self):
-        text = rv.build_standard_qualify_message(None, 3)
-        assert "{entries_count}" not in text
-        assert "3 попытки выиграть" in text
+    def test_build_extra_receipt_message_default(self):
+        assert rv.build_extra_receipt_message(None) == rv.DEFAULT_EXTRA_RECEIPT_MESSAGE
 
-    def test_build_standard_qualify_message_custom(self):
-        text = rv.build_standard_qualify_message("Вы участвуете! Билетов: {entries_count}.", 1)
-        assert text == "Вы участвуете! Билетов: 1 попытка выиграть."
-
-    def test_standard_qualify_message_default_is_not_win_message(self):
-        """Регрессия для качественного различия standard vs guaranteed_prize: дефолтные
-        тексты не должны случайно совпасть — иначе стандартный участник решит, что выиграл."""
-        assert rv.DEFAULT_STANDARD_QUALIFY_MESSAGE != rv.DEFAULT_WIN_MESSAGE
+    def test_build_extra_receipt_message_custom(self):
+        assert rv.build_extra_receipt_message("Приз уже ваш, спасибо!") == "Приз уже ваш, спасибо!"
 
     def test_default_progress_message_does_not_personify_the_bot(self):
         """Регрессия: раньше текст был "бот досчитает автоматически" — по просьбе владельца

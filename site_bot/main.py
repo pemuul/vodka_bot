@@ -290,6 +290,7 @@ except Exception:
 
 HAS_STAGE_TYPE = 'stage_type' in prize_draw_stages_table.c
 HAS_STAGE_MESSAGE_TEMPLATES = 'progress_message_text' in prize_draw_stages_table.c
+HAS_STAGE_EXTRA_RECEIPT_MESSAGE = 'extra_receipt_message_text' in prize_draw_stages_table.c
 HAS_STAGE_DATES = 'start_date' in prize_draw_stages_table.c
 HAS_STAGE_STATUS = 'status' in prize_draw_stages_table.c
 HAS_STAGE_AUTO_VALIDATION = 'auto_validation_enabled' in prize_draw_stages_table.c
@@ -864,6 +865,7 @@ async def prize_draws(request: Request):
                     "stageType": s["stage_type"] if HAS_STAGE_TYPE else "standard",
                     "progressMessageText": s["progress_message_text"] if HAS_STAGE_MESSAGE_TEMPLATES else None,
                     "winMessageText": s["win_message_text"] if HAS_STAGE_MESSAGE_TEMPLATES else None,
+                    "extraReceiptMessageText": s["extra_receipt_message_text"] if HAS_STAGE_EXTRA_RECEIPT_MESSAGE else None,
                     "start": str(start_val) if start_val else "",
                     "end": str(end_val) if end_val else "",
                     "status": status_val or "upcoming",
@@ -903,6 +905,7 @@ class StageIn(BaseModel):
     stageType: str = "standard"
     progressMessageText: Optional[str] = None
     winMessageText: Optional[str] = None
+    extraReceiptMessageText: Optional[str] = None
     start: Optional[datetime.date] = None
     end: Optional[datetime.date] = None
     status: str = "upcoming"
@@ -1003,6 +1006,8 @@ async def save_draw(draw: DrawIn):
         if HAS_STAGE_MESSAGE_TEMPLATES:
             stage_values["progress_message_text"] = stage.progressMessageText
             stage_values["win_message_text"] = stage.winMessageText
+        if HAS_STAGE_EXTRA_RECEIPT_MESSAGE:
+            stage_values["extra_receipt_message_text"] = stage.extraReceiptMessageText
         if HAS_STAGE_DATES:
             stage_values["start_date"] = stage.start or None
             stage_values["end_date"] = stage.end or None
@@ -2557,12 +2562,10 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
                             stage, user_tg_id, draw_id_for_progress
                         )
                         entries_count = result["entries_count"]
-                        if result["outcome"] == "complete":
-                            stage_event_text = receipt_validation.build_standard_qualify_message(
-                                stage.get("win_message_text") if HAS_STAGE_MESSAGE_TEMPLATES else None,
-                                entries_count,
-                            )
-                        elif result["outcome"] == "progress":
+                        # "complete" для standard-этапа больше не шлёт отдельное
+                        # сообщение (по решению владельца) — stage_event_text остаётся
+                        # None, дальше сработает обычный fallback по статусу чека.
+                        if result["outcome"] == "progress":
                             remaining_text = receipt_validation.format_remaining_items(
                                 result["rule_progress"]
                             )
