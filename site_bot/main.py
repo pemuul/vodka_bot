@@ -897,6 +897,7 @@ class RuleIn(BaseModel):
 
 class StageIn(BaseModel):
     __id: Optional[str]
+    id: Optional[int] = None
     name: str
     description: Optional[str] = None
     winnersCount: int
@@ -970,27 +971,20 @@ async def save_draw(draw: DrawIn):
             .values(**draw_values)
         )
 
-    # delete old stages, their winners and their rules
-    old_stage_ids = await database.fetch_all(
+    # Существующие этапы/правила этой акции — апсертим ПО ID, а не удаляем и не пересоздаём
+    # на каждое сохранение. receipts.stage_id и receipt_items.matched_rule_id — постоянные
+    # ссылки (накопительный прогресс guaranteed_prize/standard, «пиновка» чека к этапу,
+    # проверка «лишний чек»); раньше delete-all+reinsert на КАЖДОЕ сохранение формы менял id
+    # у всех этапов/правил акции, даже если менялось только текстовое поле — молча обнуляя
+    # прогресс всех участников этапа (живой баг, найденный и исправленный 2026-08-31 на
+    # проде).
+    old_stage_ids_rows = await database.fetch_all(
         sqlalchemy.select(prize_draw_stages_table.c.id)
         .where(prize_draw_stages_table.c.draw_id == new_id)
     )
-    for os in old_stage_ids:
-        await database.execute(
-            prize_draw_winners_table.delete()
-            .where(prize_draw_winners_table.c.stage_id == os["id"])
-        )
-        if prize_draw_rules_table is not None:
-            await database.execute(
-                prize_draw_rules_table.delete()
-                .where(prize_draw_rules_table.c.stage_id == os["id"])
-            )
-    await database.execute(
-        prize_draw_stages_table.delete()
-        .where(prize_draw_stages_table.c.draw_id == new_id)
-    )
+    existing_stage_ids = {row["id"] for row in old_stage_ids_rows}
+    keep_stage_ids: set[int] = set()
 
-    # insert new stages, their winners and their rules (правила теперь на уровне этапа, п.2 ТЗ)
     for order_idx, stage in enumerate(draw.stages):
         stage_values = {
             "draw_id": new_id,
@@ -1017,41 +1011,79 @@ async def save_draw(draw: DrawIn):
             stage_values["auto_validation_enabled"] = stage.autoValidationEnabled
         if HAS_STAGE_RULES_DESCRIPTION:
             stage_values["rules_description"] = stage.rulesDescription
-        stage_id = await database.execute(
-            prize_draw_stages_table.insert().values(**stage_values)
-        )
-        for winner in stage.winners:
-            if isinstance(winner, dict):
-                winner_name = winner.get("name")
-                user_id = winner.get("user_id")
-                r_id = winner.get("receipt_id")
-            else:
-                winner_name = str(winner)
-                user_id = None
-                r_id = None
-            insert_values = {
-                "stage_id": stage_id,
-                "winner_name": winner_name,
-            }
-            if user_id is not None:
-                insert_values["user_tg_id"] = user_id
-            if HAS_PDW_RECEIPT_ID and r_id is not None:
-                insert_values["receipt_id"] = r_id
+
+        if stage.id is not None and stage.id in existing_stage_ids:
+            stage_id = stage.id
             await database.execute(
-                prize_draw_winners_table.insert().values(**insert_values)
+                prize_draw_stages_table.update()
+                .where(prize_draw_stages_table.c.id == stage_id)
+                .values(**stage_values)
             )
+        else:
+            stage_id = await database.execute(
+                prize_draw_stages_table.insert().values(**stage_values)
+            )
+        keep_stage_ids.add(stage_id)
+
+        # Победителей НЕ трогаем здесь: они пишутся напрямую в БД — вручную через
+        # determine(), автоматически через evaluate_guaranteed_prize_stage() — эта форма их
+        # только отображает (нет UI добавить/убрать победителя вручную). Раньше
+        # delete+reinsert из клиентского payload мог молча стереть победителя, которого бот
+        # записал, пока у админа было открыто окно редактирования — тот же класс бага, что и
+        # с id этапов/правил выше.
+
         if prize_draw_rules_table is not None:
+            existing_rule_rows = await database.fetch_all(
+                sqlalchemy.select(prize_draw_rules_table.c.id)
+                .where(prize_draw_rules_table.c.stage_id == stage_id)
+            )
+            existing_rule_ids = {row["id"] for row in existing_rule_rows}
+            keep_rule_ids: set[int] = set()
             for rule in stage.rules:
-                await database.execute(
-                    prize_draw_rules_table.insert().values(
-                        stage_id=stage_id,
-                        title=rule.title,
-                        sku_code=rule.sku_code,
-                        aliases=rule.aliases,
-                        min_quantity=rule.min_quantity,
-                        is_active=rule.is_active,
+                rule_values = {
+                    "stage_id": stage_id,
+                    "title": rule.title,
+                    "sku_code": rule.sku_code,
+                    "aliases": rule.aliases,
+                    "min_quantity": rule.min_quantity,
+                    "is_active": rule.is_active,
+                }
+                if rule.id is not None and rule.id in existing_rule_ids:
+                    await database.execute(
+                        prize_draw_rules_table.update()
+                        .where(prize_draw_rules_table.c.id == rule.id)
+                        .values(**rule_values)
                     )
+                    keep_rule_ids.add(rule.id)
+                else:
+                    new_rule_id = await database.execute(
+                        prize_draw_rules_table.insert().values(**rule_values)
+                    )
+                    keep_rule_ids.add(new_rule_id)
+            removed_rule_ids = existing_rule_ids - keep_rule_ids
+            if removed_rule_ids:
+                await database.execute(
+                    prize_draw_rules_table.delete()
+                    .where(prize_draw_rules_table.c.id.in_(removed_rule_ids))
                 )
+
+    # Этапы, убранные админом из формы (кнопка «Удалить этап») — удаляются вместе со своими
+    # победителями и правилами, как и раньше.
+    removed_stage_ids = existing_stage_ids - keep_stage_ids
+    if removed_stage_ids:
+        await database.execute(
+            prize_draw_winners_table.delete()
+            .where(prize_draw_winners_table.c.stage_id.in_(removed_stage_ids))
+        )
+        if prize_draw_rules_table is not None:
+            await database.execute(
+                prize_draw_rules_table.delete()
+                .where(prize_draw_rules_table.c.stage_id.in_(removed_stage_ids))
+            )
+        await database.execute(
+            prize_draw_stages_table.delete()
+            .where(prize_draw_stages_table.c.id.in_(removed_stage_ids))
+        )
 
     return {"success": True, "id": new_id}
 

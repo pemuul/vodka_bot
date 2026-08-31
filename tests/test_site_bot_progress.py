@@ -336,3 +336,187 @@ class TestApiDetermineWinnersEntryScoping:
         receipt_ids = {w["receipt_id"] for w in winners}
         assert receipt_ids <= {r1, r2, r3}
         assert len(receipt_ids) == 1  # один представитель на все билеты этого пользователя
+
+
+def _insert_winner(db_path, stage_id, user_tg_id, winner_name="Победитель"):
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.execute(
+            "INSERT INTO prize_draw_winners (stage_id, user_tg_id, winner_name) VALUES (?, ?, ?)",
+            (stage_id, user_tg_id, winner_name),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def _fetch_one(db_path, query, params=()):
+    conn = sqlite3.connect(db_path)
+    try:
+        return conn.execute(query, params).fetchone()
+    finally:
+        conn.close()
+
+
+def _fetch_all(db_path, query, params=()):
+    conn = sqlite3.connect(db_path)
+    try:
+        return conn.execute(query, params).fetchall()
+    finally:
+        conn.close()
+
+
+def _stage_dict(db_path, stage_id):
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT * FROM prize_draw_stages WHERE id=?", (stage_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+class TestSaveDrawPreservesIds:
+    """Regression coverage for the live bug found 2026-08-31: save_draw() used to delete
+    ALL of a draw's stages/rules and reinsert them fresh on EVERY save, even when only an
+    unrelated text field changed. That silently reassigned stage/rule ids, orphaning
+    receipts.stage_id and receipt_items.matched_rule_id — which broke accumulated
+    guaranteed_prize/standard progress for anyone who already had a confirmed receipt under
+    the old ids. save_draw() must now update existing rows in place (upsert by id) and only
+    delete rows the admin actually removed from the form."""
+
+    def _draw_payload(self, main_module, draw_id, stage_id, stage_name, rule_id, rule_title,
+                       aliases="forest", min_quantity=2, stage_type="guaranteed_prize"):
+        rule = main_module.RuleIn(id=rule_id, title=rule_title, aliases=aliases, min_quantity=min_quantity)
+        stage = main_module.StageIn(
+            id=stage_id, name=stage_name, winnersCount=1, stageType=stage_type, rules=[rule],
+        )
+        return main_module.DrawIn(id=draw_id, title="Test draw", stages=[stage])
+
+    def test_resave_with_unchanged_rule_keeps_same_ids(self, site_bot_main):
+        db_path, main_module = site_bot_main
+        draw_id = _insert_draw(db_path)
+        stage_id = _insert_stage(db_path, draw_id, name="Этап", stage_type="guaranteed_prize")
+        rule_id = _insert_rule(db_path, stage_id, title="FOREST", aliases="forest", min_quantity=2)
+
+        # первый (частичный) чек накопил прогресс под ТЕКУЩИМ id правила
+        _insert_user(db_path, 40, "Участник")
+        _insert_receipt_with_item(db_path, draw_id, 40, rule_id, 1)
+
+        payload = self._draw_payload(main_module, draw_id, stage_id, "Этап", rule_id, "FOREST")
+        run(main_module.save_draw(payload))
+
+        stage_row = _fetch_one(db_path, "SELECT id FROM prize_draw_stages WHERE draw_id=?", (draw_id,))
+        rule_row = _fetch_one(db_path, "SELECT id FROM prize_draw_rules WHERE stage_id=?", (stage_id,))
+        assert stage_row[0] == stage_id
+        assert rule_row[0] == rule_id
+
+        # прогресс, накопленный ДО сохранения формы, должен остаться виден под тем же rule_id
+        progress_row = _fetch_one(
+            db_path,
+            "SELECT SUM(quantity) FROM receipt_items WHERE matched_rule_id=?",
+            (rule_id,),
+        )
+        assert progress_row[0] == 1
+
+    def test_second_receipt_after_resave_completes_the_stage(self, site_bot_main):
+        """End-to-end reproduction of the reported bug: чек 1 (частичный) -> сохранение формы
+        (раньше меняло id правила) -> чек 2 (добивающий) должен видеть суммарный прогресс
+        под ОДНИМ и тем же rule_id и завершить условия."""
+        db_path, main_module = site_bot_main
+        draw_id = _insert_draw(db_path)
+        stage_id = _insert_stage(db_path, draw_id, name="Этап", stage_type="guaranteed_prize")
+        rule_id = _insert_rule(db_path, stage_id, title="FOREST", aliases="forest", min_quantity=2)
+        _insert_user(db_path, 41, "Участник")
+        _insert_receipt_with_item(db_path, draw_id, 41, rule_id, 1)
+
+        payload = self._draw_payload(main_module, draw_id, stage_id, "Этап", rule_id, "FOREST")
+        run(main_module.save_draw(payload))
+
+        _insert_receipt_with_item(db_path, draw_id, 41, rule_id, 1)
+
+        stage_row = _stage_dict(db_path, stage_id)
+        result = run(main_module._evaluate_guaranteed_prize_stage(
+            stage_row, 41, draw_id, None, "Участник"
+        ))
+        assert result["outcome"] == "won"
+
+    def test_new_rule_added_on_resave_gets_inserted(self, site_bot_main):
+        db_path, main_module = site_bot_main
+        draw_id = _insert_draw(db_path)
+        stage_id = _insert_stage(db_path, draw_id, name="Этап")
+        rule_id = _insert_rule(db_path, stage_id, title="Водка", aliases="vodka")
+
+        existing_rule = main_module.RuleIn(id=rule_id, title="Водка", aliases="vodka", min_quantity=1)
+        new_rule = main_module.RuleIn(id=None, title="Джин", aliases="gin", min_quantity=1)
+        stage = main_module.StageIn(
+            id=stage_id, name="Этап", winnersCount=1, stageType="standard",
+            rules=[existing_rule, new_rule],
+        )
+        run(main_module.save_draw(main_module.DrawIn(id=draw_id, title="Test draw", stages=[stage])))
+
+        rule_rows = _fetch_all(db_path, "SELECT id, title FROM prize_draw_rules WHERE stage_id=?", (stage_id,))
+        titles = {row[1] for row in rule_rows}
+        assert titles == {"Водка", "Джин"}
+        ids = {row[0] for row in rule_rows}
+        assert rule_id in ids  # старое правило сохранило свой id
+
+    def test_rule_removed_from_form_gets_deleted(self, site_bot_main):
+        db_path, main_module = site_bot_main
+        draw_id = _insert_draw(db_path)
+        stage_id = _insert_stage(db_path, draw_id, name="Этап")
+        keep_rule_id = _insert_rule(db_path, stage_id, title="Водка", aliases="vodka")
+        drop_rule_id = _insert_rule(db_path, stage_id, title="Джин", aliases="gin")
+
+        kept = main_module.RuleIn(id=keep_rule_id, title="Водка", aliases="vodka", min_quantity=1)
+        stage = main_module.StageIn(
+            id=stage_id, name="Этап", winnersCount=1, stageType="standard", rules=[kept],
+        )
+        run(main_module.save_draw(main_module.DrawIn(id=draw_id, title="Test draw", stages=[stage])))
+
+        remaining_ids = {row[0] for row in _fetch_all(
+            db_path, "SELECT id FROM prize_draw_rules WHERE stage_id=?", (stage_id,)
+        )}
+        assert remaining_ids == {keep_rule_id}
+        assert drop_rule_id not in remaining_ids
+
+    def test_stage_removed_from_form_deletes_stage_and_cascades(self, site_bot_main):
+        db_path, main_module = site_bot_main
+        draw_id = _insert_draw(db_path)
+        keep_stage_id = _insert_stage(db_path, draw_id, name="Оставить")
+        drop_stage_id = _insert_stage(db_path, draw_id, name="Удалить")
+        drop_rule_id = _insert_rule(db_path, drop_stage_id, title="Ром", aliases="rum")
+        _insert_winner(db_path, drop_stage_id, 99)
+
+        stage = main_module.StageIn(id=keep_stage_id, name="Оставить", winnersCount=1, stageType="standard")
+        run(main_module.save_draw(main_module.DrawIn(id=draw_id, title="Test draw", stages=[stage])))
+
+        remaining_stage_ids = {row[0] for row in _fetch_all(
+            db_path, "SELECT id FROM prize_draw_stages WHERE draw_id=?", (draw_id,)
+        )}
+        assert remaining_stage_ids == {keep_stage_id}
+        assert _fetch_all(db_path, "SELECT id FROM prize_draw_rules WHERE stage_id=?", (drop_stage_id,)) == []
+        assert _fetch_all(db_path, "SELECT id FROM prize_draw_winners WHERE stage_id=?", (drop_stage_id,)) == []
+
+    def test_resave_does_not_delete_a_winner_added_concurrently(self, site_bot_main):
+        """Раньше save_draw() удалял ВСЕХ победителей этапа и вставлял заново из payload
+        клиента — если бот записал победителя, пока у админа было открыто окно
+        редактирования, следующее сохранение формы молча стирало эту победу. Теперь форма
+        вообще не трогает prize_draw_winners для сохраняемых этапов."""
+        db_path, main_module = site_bot_main
+        draw_id = _insert_draw(db_path)
+        stage_id = _insert_stage(db_path, draw_id, name="Этап", stage_type="guaranteed_prize")
+        rule_id = _insert_rule(db_path, stage_id, title="FOREST", aliases="forest", min_quantity=1)
+        winner_id = _insert_winner(db_path, stage_id, 55, "Победитель")
+
+        # клиент открыл форму ДО того, как бот записал победителя — payload его не содержит
+        payload = self._draw_payload(
+            main_module, draw_id, stage_id, "Этап", rule_id, "FOREST", min_quantity=1,
+        )
+        run(main_module.save_draw(payload))
+
+        winner_row = _fetch_one(
+            db_path, "SELECT id FROM prize_draw_winners WHERE id=?", (winner_id,)
+        )
+        assert winner_row is not None
