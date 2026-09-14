@@ -1577,13 +1577,20 @@ async def add_manual_receipt_item(
     receipt_id: int, rule_id: int, quantity: float | None, conn=None
 ) -> None:
     """Добавить позицию чека вручную (админ), НЕ стирая уже сохранённые ФНС-позиции —
-    в отличие от save_receipt_items(), которая делает DELETE перед вставкой (раздел 4.7 ТЗ)."""
+    в отличие от save_receipt_items(), которая делает DELETE перед вставкой (раздел 4.7 ТЗ).
+
+    Если quantity не передан (форма его не спрашивает при min_quantity<=1), считаем факт
+    выбора правила подтверждением одной штуки — иначе SUM(quantity) в get_user_rule_progress()
+    просуммирует NULL и правило никогда не станет выполненным (баг, найденный на проде
+    2026-09-14: правило min_quantity=1, чек подтверждён вручную, прогресс так и остался 0)."""
     cursor = await conn.cursor()
     await cursor.execute(
-        "SELECT title FROM prize_draw_rules WHERE id = ?", (rule_id,)
+        "SELECT title, min_quantity FROM prize_draw_rules WHERE id = ?", (rule_id,)
     )
     rule_row = await cursor.fetchone()
     raw_name = f"Ручной ввод: {rule_row[0]}" if rule_row else "Ручной ввод"
+    if quantity is None and (rule_row is None or (rule_row[1] or 1) <= 1):
+        quantity = 1
     await cursor.execute(
         "INSERT INTO receipt_items (receipt_id, raw_name, quantity, price, sum, matched_rule_id) "
         "VALUES (?, ?, ?, NULL, NULL, ?)",

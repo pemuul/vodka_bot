@@ -733,16 +733,23 @@ async def _resolve_winner_name(user_tg_id: int) -> str:
 
 
 async def _add_manual_receipt_item(receipt_id: int, rule_id: int, quantity: Optional[float]) -> None:
-    """Добавить позицию чека вручную, НЕ стирая уже сохранённые ФНС-позиции (раздел 4.7 ТЗ)."""
+    """Добавить позицию чека вручную, НЕ стирая уже сохранённые ФНС-позиции (раздел 4.7 ТЗ).
+
+    Если quantity не передан (форма его не спрашивает при min_quantity<=1), считаем факт
+    выбора правила подтверждением одной штуки — иначе SUM(quantity) в _get_user_rule_progress()
+    просуммирует NULL и правило никогда не станет выполненным (баг, найденный на проде
+    2026-09-14: правило min_quantity=1, чек подтверждён вручную, прогресс так и остался 0)."""
     if receipt_items_table is None:
         return
     rule_row = None
     if prize_draw_rules_table is not None:
         rule_row = await database.fetch_one(
-            sqlalchemy.select(prize_draw_rules_table.c.title)
+            sqlalchemy.select(prize_draw_rules_table.c.title, prize_draw_rules_table.c.min_quantity)
             .where(prize_draw_rules_table.c.id == rule_id)
         )
     raw_name = f"Ручной ввод: {rule_row['title']}" if rule_row else "Ручной ввод"
+    if quantity is None and (rule_row is None or (rule_row["min_quantity"] or 1) <= 1):
+        quantity = 1
     await database.execute(
         receipt_items_table.insert().values(
             receipt_id=receipt_id,

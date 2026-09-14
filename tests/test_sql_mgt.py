@@ -856,15 +856,23 @@ def test_add_manual_receipt_item_does_not_erase_existing(mem_db):
     assert any(i["matched_rule_id"] == rule_id and i["quantity"] == 2 for i in items)
 
 
-def test_add_manual_receipt_item_quantity_optional(mem_db):
-    rid = run(sql_mgt.add_receipt(file_path="/tmp/manual2.jpg", user_tg_id=1, status="На ручной проверке"))
+def test_add_manual_receipt_item_quantity_optional_defaults_to_one(mem_db):
+    """min_quantity=1 — форма не спрашивает количество, но это НЕ значит quantity=NULL:
+    SUM(quantity) в get_user_rule_progress() иначе никогда не наберёт 1 (баг на проде,
+    2026-09-14 — чек подтверждён вручную, прогресс участника остался 0/1)."""
     draw_id = _insert_draw(mem_db)
     stage_id = _insert_stage(mem_db, draw_id)
     rule_id = _insert_rule(mem_db, stage_id, min_quantity=1)
+    rid = run(sql_mgt.add_receipt(
+        file_path="/tmp/manual2.jpg", user_tg_id=1, status="Подтверждён", draw_id=draw_id,
+    ))
     run(sql_mgt.add_manual_receipt_item(rid, rule_id, None))
     items = run(sql_mgt.get_receipt_items(rid))
     assert len(items) == 1
-    assert items[0]["quantity"] is None
+    assert items[0]["quantity"] == 1
+
+    progress = run(sql_mgt.get_user_rule_progress(1, draw_id, [rule_id]))
+    assert progress[rule_id] == 1.0
 
 
 # ---------------------------------------------------------------------------
