@@ -328,6 +328,13 @@ def _set_scheduled_messages_column_flags(column_names: Set[str]) -> None:
 _set_scheduled_messages_column_flags(_get_table_column_names("scheduled_messages"))
 
 HAS_PM_IS_ANSWER = 'is_answer' in participant_messages_table.c
+HAS_PM_TG_MESSAGE_ID = 'tg_message_id' in participant_messages_table.c
+HAS_PM_RECEIPT_ID = 'receipt_id' in participant_messages_table.c
+
+# Через сколько минут чек, всё ещё висящий в «В авто обработке», считается застрявшим и
+# попадает в уведомления администратора. Нормальная обработка одного чека занимает до минуты
+# (QR + запрос в ФНС, в худшем случае OCR в подпроцессе с таймаутом 45 секунд).
+STUCK_PROCESSING_MINUTES = 15
 HAS_QM_IS_ANSWER = 'is_answer' in question_messages_table.c
 HAS_QM_MEDIA = 'media' in question_messages_table.c
 
@@ -1334,6 +1341,11 @@ async def api_notifications():
 
     if has_receipt_status() and has_receipt_comment():
         comment_col = receipts_table.c.comment
+        # «На ручной проверке» — основной статус, в котором чек ждёт человека. Раньше лента
+        # отбирала только «Ошибка», а этот статус выставляется вместо неё с тех пор, как
+        # правила проверки переехали на уровень этапа: последний чек со статусом «Ошибка»
+        # датирован 16.06.2026, и всё это время ждущие чеки не попадали в уведомления вообще.
+        # Пользователю при этом тоже ничего не уходило — чек просто повисал (до 17 часов).
         rec_rows = await database.fetch_all(
             sqlalchemy.select(
                 receipts_table.c.id,
@@ -1342,7 +1354,7 @@ async def api_notifications():
                 comment_col,
             ).where(
                 sqlalchemy.and_(
-                    receipts_table.c.status == "Ошибка",
+                    receipts_table.c.status.in_(["Ошибка", "На ручной проверке"]),
                     comment_col.isnot(None),
                     comment_col.like("Бот:%"),
                 )
@@ -1359,6 +1371,26 @@ async def api_notifications():
                 "type": "receipt",
                 "id": r["id"],
                 "text": text,
+            })
+
+        # Чек, застрявший в «В авто обработке»: очередь встала или воркер не поднялся. Раньше
+        # это было не видно ниоткуда — очередь пуста, пользователь молчит, в панели тишина.
+        stuck_before = datetime.datetime.utcnow() - datetime.timedelta(
+            minutes=STUCK_PROCESSING_MINUTES
+        )
+        stuck_rows = await database.fetch_all(
+            sqlalchemy.select(receipts_table.c.id, receipts_table.c.number)
+            .where(receipts_table.c.status == "В авто обработке")
+            .where(receipts_table.c.create_dt < stuck_before)
+        )
+        for r in stuck_rows:
+            notifications.append({
+                "type": "receipt",
+                "id": r["id"],
+                "text": (
+                    f"Чек {r['number'] or r['id']} – висит в обработке дольше "
+                    f"{STUCK_PROCESSING_MINUTES} мин, проверьте сервис распознавания"
+                ),
             })
 
     q_rows = await database.fetch_all(
@@ -2568,6 +2600,7 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
         # различие только в том, что происходит по достижении порога (автопобеда vs допуск
         # к розыгрышу, который админ проводит вручную через determine()).
         stage_event_text: Optional[str] = None
+        stage_rule_progress: Optional[List[Dict[str, Any]]] = None
         if should_recheck_stage_progress and user_tg_id:
             draw_id_for_progress = upd.draw_id if has_receipt_draw_id() else None
             stage_id_for_progress = row_data.get("stage_id") if "stage_id" in row_data else None
@@ -2600,19 +2633,19 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
                         result = await _evaluate_standard_stage_progress(
                             stage, user_tg_id, draw_id_for_progress
                         )
-                        entries_count = result["entries_count"]
-                        # "complete" для standard-этапа больше не шлёт отдельное
-                        # сообщение (по решению владельца) — stage_event_text остаётся
-                        # None, дальше сработает обычный fallback по статусу чека.
-                        if result["outcome"] == "progress":
-                            remaining_text = receipt_validation.format_remaining_items(
-                                result["rule_progress"]
-                            )
-                            stage_event_text = receipt_validation.build_standard_progress_message(
-                                stage.get("progress_message_text") if HAS_STAGE_MESSAGE_TEMPLATES else None,
-                                remaining_text,
-                                entries_count,
-                            )
+                        stage_rule_progress = result["rule_progress"]
+                        # Сообщение отправляется в обоих исходах — ровно как в автопайплайне
+                        # (media_heandler.process_receipt). Иначе ручное подтверждение ведёт
+                        # себя иначе, чем автоматическое: при min_quantity == 1 исход всегда
+                        # "complete", и пользователь не получал настроенного в панели текста.
+                        remaining_text = receipt_validation.format_remaining_items(
+                            result["rule_progress"]
+                        )
+                        stage_event_text = receipt_validation.build_standard_progress_message(
+                            stage.get("progress_message_text") if HAS_STAGE_MESSAGE_TEMPLATES else None,
+                            remaining_text,
+                            result["entries_count"],
+                        )
 
         if (status_changed or stage_event_text) and has_receipt_msg_id():
             message_id = row_data.get("message_id")
@@ -2626,15 +2659,26 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
                     )
                 else:
                     text = stage_event_text
+                    # «Чек принят» вместе с «0 попыток» — противоречие, которое трижды ушло
+                    # живому человеку 14.09.2026. Статус и пересчёт прогресса считаются
+                    # разными запросами и в принципе могут разойтись, поэтому расхождение
+                    # проверяется явно, а не только устраняется его причина.
+                    if text and receipt_validation.is_contradictory_acceptance(
+                        upd.status, stage_rule_progress
+                    ):
+                        logger.error(
+                            "Receipt %s: статус %s, но прогресс по всем правилам этапа "
+                            "нулевой (%s) — противоречивое сообщение подавлено",
+                            receipt_id,
+                            upd.status,
+                            stage_rule_progress,
+                        )
+                        text = None
                     if text is None:
-                        status_messages = {
-                            "Подтверждён": "✅ Чек подтверждён",
-                            "Нет товара в чеке": "❌ В чеке не найден нужный товар",
-                        }
-                        text = status_messages.get(upd.status)
+                        text = receipt_validation.build_status_message(upd.status)
                     if text:
                         try:
-                            await bot.send_message(
+                            sent = await bot.send_message(
                                 user_tg_id,
                                 text,
                                 reply_to_message_id=message_id,
@@ -2648,6 +2692,12 @@ async def update_receipt(receipt_id: int, upd: ReceiptUpdate):
                             }
                             if HAS_PM_IS_ANSWER:
                                 log_values["is_answer"] = True
+                            # Запоминаем id отправленного сообщения и чек, к которому оно
+                            # относится, чтобы ответ можно было потом удалить или изменить.
+                            if HAS_PM_TG_MESSAGE_ID:
+                                log_values["tg_message_id"] = getattr(sent, "message_id", None)
+                            if HAS_PM_RECEIPT_ID:
+                                log_values["receipt_id"] = receipt_id
                             await database.execute(
                                 participant_messages_table.insert().values(**log_values)
                             )

@@ -314,6 +314,14 @@ class TestNewSchemaEntries:
         assert "DEFAULT 'upcoming'" in col_dict["status"]
         assert "auto_validation_enabled" in col_dict
 
+    def test_participant_messages_has_message_id_and_receipt_link(self):
+        """Без tg_message_id отправленное сообщение уже никак не изменить и не удалить;
+        receipt_id связывает ответ бота с чеком, по которому он отправлен."""
+        columns = sql_mgt.get_table_schema_columns("participant_messages")
+        names = [c[0] for c in columns]
+        assert "tg_message_id" in names
+        assert "receipt_id" in names
+
     def test_receipts_has_stage_id_column(self):
         columns = sql_mgt.get_table_schema_columns("receipts")
         names = [c[0] for c in columns]

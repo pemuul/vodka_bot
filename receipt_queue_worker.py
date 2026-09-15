@@ -65,6 +65,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 import sql_mgt
+import outgoing_logger
 
 # ---------------- Environment defaults (in-process, без внешних export) ----------------
 os.environ.setdefault("OCR_IN_SUBPROCESS", "1")
@@ -96,6 +97,10 @@ IDLE_SLEEP_SECONDS = 1
 LOCK_TIMEOUT_SECONDS = 300
 RETRY_DELAY_SECONDS = 60
 OCR_IDLE_RELEASE_SECONDS = 60
+# Как часто проверять, не пора ли завершить истёкший этап и включить следующий. Воркер —
+# единственный постоянно работающий фоновый процесс проекта, поэтому смена этапов по датам
+# живёт здесь: cron в проекте не используется, а бот перезапускается по расписанию.
+STAGE_ROLLOVER_CHECK_SECONDS = 300
 SETTINGS_ENV_VAR = "RECEIPT_WORKER_SETTINGS_PATH"
 SETTINGS_PATH = Path(__file__).resolve().parent / "new_bot_file" / "settings.json"
 
@@ -189,6 +194,10 @@ def create_context(
     settings["TELEGRAM_BOT_TOKEN"] = token
 
     bot = Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    # Тот же логгер исходящих, что и у основного бота. Без него ответы этого процесса уходят
+    # пользователю, но не попадают в историю переписки — в админ-панели чат выглядит так,
+    # будто бот на чеки не отвечает вовсе (см. outgoing_logger).
+    bot.session.middleware(outgoing_logger.RequestLogger())
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
     admin_ids = settings.get("ADMIN_ID_LIST")
@@ -226,11 +235,26 @@ async def _wait_with_stop(stop_event: asyncio.Event, timeout: float) -> bool:
     return True
 
 
+async def _rollover_stages_if_due(last_check: float | None) -> float:
+    """Раз в STAGE_ROLLOVER_CHECK_SECONDS двигать этапы по датам. Ошибку глотаем: смена этапов
+    не должна мешать обработке очереди чеков."""
+    now = time.monotonic()
+    if last_check is not None and now - last_check < STAGE_ROLLOVER_CHECK_SECONDS:
+        return last_check
+    try:
+        await sql_mgt.activate_due_stages()
+    except Exception:
+        logging.exception("Не удалось выполнить смену этапов по датам")
+    return now
+
+
 async def _process_queue(stop_event: asyncio.Event) -> None:
     last_job_completed_at: float | None = None
+    last_stage_check: float | None = None
     _log_memory_usage("startup")
 
     while not stop_event.is_set():
+        last_stage_check = await _rollover_stages_if_due(last_stage_check)
         job = await sql_mgt.acquire_next_receipt_for_ocr(
             lock_timeout_seconds=LOCK_TIMEOUT_SECONDS
         )

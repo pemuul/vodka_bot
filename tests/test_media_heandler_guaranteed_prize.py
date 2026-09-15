@@ -438,9 +438,13 @@ class TestProcessReceiptStandardStageIntegration:
         fake_go = media_heandler.global_objects
         sent_text = fake_go.bot.send_message.call_args.args[1]
         # 2 шт. + 1 шт. = 3 шт. накоплено при min_quantity=3 — это РОВНО 1 комплект/попытка
-        # (не 2 — попытка не равна числу чеков), но полное выполнение условий standard-этапа
-        # больше не шлёт отдельное сообщение — просто обычное подтверждение чека.
-        assert sent_text == "✅ Чек подтверждён"
+        # (не 2 — попытка не равна числу чеков). Сообщение о принятом чеке приходит и здесь:
+        # раньше при выполненных условиях оно не отправлялось вовсе, и пользователь получал
+        # жёстко зашитое "✅ Чек подтверждён" вместо настроенного в панели текста.
+        assert sent_text != "✅ Чек подтверждён"
+        assert "1 попытка выиграть" in sent_text
+        # остаток закрыт — блок про "осталось докупить" в тексте не остаётся
+        assert "осталось докупить" not in sent_text.lower()
         progress = run(sql_mgt.get_stage_progress(stage_id))
         assert progress[0]["entries_count"] == 1
 
@@ -467,7 +471,7 @@ class TestProcessReceiptStandardStageIntegration:
         ))
         run(media_heandler.process_receipt(Path("/tmp/owner2.jpg"), user_id, 9011, r2))
         sent_text = fake_go.bot.send_message.call_args.args[1]
-        assert sent_text == "✅ Чек подтверждён"
+        assert "1 попытка выиграть" in sent_text
         progress = run(sql_mgt.get_stage_progress(stage_id))
         assert progress[0]["entries_count"] == 1
 
@@ -478,7 +482,7 @@ class TestProcessReceiptStandardStageIntegration:
         ))
         run(media_heandler.process_receipt(Path("/tmp/owner3.jpg"), user_id, 9012, r3))
         sent_text = fake_go.bot.send_message.call_args.args[1]
-        assert sent_text == "✅ Чек подтверждён"
+        assert "2 попытки выиграть" in sent_text
         progress = run(sql_mgt.get_stage_progress(stage_id))
         assert progress[0]["entries_count"] == 2
 

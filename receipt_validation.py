@@ -19,6 +19,41 @@ def _format_qty(value: float) -> str:
     return f"{value:g}"
 
 
+def fill_placeholder(template: str, placeholder: str, value: str) -> str:
+    """Подставить значение в шаблон, не оставив висящей разметки при пустом значении.
+
+    Пустым остаток бывает штатно — ровно тогда, когда условия этапа уже выполнены. Наивная
+    замена на "" оставляла в тексте заголовок без содержимого («Осталось докупить:» и дальше
+    пустота) — на прод это не ушло только потому, что владелец переписал шаблон и выкинул этот
+    блок; у любого этапа с дефолтным текстом отправилось бы как есть. Поэтому при пустом
+    значении удаляем строку с плейсхолдером целиком, а вместе с ней — предшествующую строку,
+    если она выглядит заголовком к нему (заканчивается двоеточием), и схлопываем образовавшиеся
+    подряд идущие пустые строки.
+    """
+    marker = "{" + placeholder + "}"
+    if marker not in template:
+        return template
+    if value:
+        return template.replace(marker, value)
+
+    lines = template.split("\n")
+    kept: list[str] = []
+    for line in lines:
+        if marker in line:
+            # строка-заголовок прямо над плейсхолдером уходит вместе с ним
+            while kept and not kept[-1].strip():
+                kept.pop()
+            if kept and kept[-1].rstrip().endswith(":"):
+                kept.pop()
+            continue
+        kept.append(line)
+
+    text = "\n".join(kept)
+    while "\n\n\n" in text:
+        text = text.replace("\n\n\n", "\n\n")
+    return text.strip()
+
+
 @dataclass
 class AccumulatingMatchResult:
     confirmed: bool
@@ -79,7 +114,7 @@ def build_progress_message(template: str | None, remaining_items: str) -> str:
     сообщения гарантированного приза (раздел 4.10 ТЗ). Для standard-этапов используется
     build_standard_progress_message() — у него есть ещё {entries_count}."""
     text = template or DEFAULT_PROGRESS_MESSAGE_TEMPLATE
-    return text.replace("{remaining_items}", remaining_items)
+    return fill_placeholder(text, "remaining_items", remaining_items)
 
 
 def build_win_message(template: str | None) -> str:
@@ -143,11 +178,84 @@ DEFAULT_STANDARD_PROGRESS_MESSAGE_TEMPLATE = (
 def build_standard_progress_message(
     template: str | None, remaining_items: str, entries_count: int
 ) -> str:
-    """Промежуточное сообщение standard-этапа — остаток товара + текущее число попыток
-    (подтверждённых чеков, зачтённых в розыгрыш этого этапа)."""
+    """Сообщение о принятом чеке на standard-этапе — остаток товара (если он есть) + текущее
+    число попыток. Шлётся и когда условия ещё не выполнены, и когда уже выполнены: во втором
+    случае остаток пуст и блок про него схлопывается (см. fill_placeholder)."""
     text = template or DEFAULT_STANDARD_PROGRESS_MESSAGE_TEMPLATE
-    text = text.replace("{remaining_items}", remaining_items)
-    return text.replace("{entries_count}", format_entries_phrase(entries_count))
+    text = fill_placeholder(text, "remaining_items", remaining_items)
+    return fill_placeholder(text, "entries_count", format_entries_phrase(entries_count))
+
+
+# ---------------------------------------------------------------------------
+# Единый источник «статус чека → текст пользователю».
+#
+# Раньше таблица дублировалась в боте (media_heandler) и в панели (site_bot/main.py), и в
+# каждой был свой набор статусов: «На ручной проверке» и «Ошибка» не отправляли пользователю
+# вообще ничего — чек молча повисал до тех пор, пока админ случайно не заметит его в списке
+# (на проде такие чеки ждали ответа до 17 часов). Теперь список один, и тест следит, чтобы у
+# каждого статуса из FINAL_RECEIPT_STATUSES был непустой текст.
+# ---------------------------------------------------------------------------
+MESSAGE_RECEIPT_CONFIRMED = "✅ Чек подтверждён"
+MESSAGE_DUPLICATE_RECEIPT = "❌ Чек уже загружен"
+MESSAGE_NO_GOODS = "❌ В чеке не найден нужный товар"
+MESSAGE_MANUAL_REVIEW = (
+    "🧾 Чек получен\n\n"
+    "Автоматически распознать его не удалось — чек проверит наш сотрудник.\n"
+    "Мы сообщим о результате в этом чате."
+)
+MESSAGE_PROCESSING_ERROR = (
+    "🧾 Чек получен\n\n"
+    "Обработать его автоматически не получилось — чек проверит наш сотрудник.\n"
+    "Мы сообщим о результате в этом чате."
+)
+
+STATUS_USER_MESSAGES: dict[str, str] = {
+    "Подтверждён": MESSAGE_RECEIPT_CONFIRMED,
+    "Чек уже загружен": MESSAGE_DUPLICATE_RECEIPT,
+    "Нет товара в чеке": MESSAGE_NO_GOODS,
+    "На ручной проверке": MESSAGE_MANUAL_REVIEW,
+    "Ошибка": MESSAGE_PROCESSING_ERROR,
+}
+
+# Статусы, в которых обработка чека завершена и пользователь обязан получить ответ.
+# «В авто обработке» сюда не входит — это промежуточное состояние, ответ придёт позже.
+# «Лишний чек» тоже: он отправляется отдельным редактируемым текстом этапа ещё в set_photo().
+FINAL_RECEIPT_STATUSES: tuple[str, ...] = (
+    "Подтверждён",
+    "Чек уже загружен",
+    "Нет товара в чеке",
+    "На ручной проверке",
+    "Ошибка",
+)
+
+
+def build_status_message(status: str | None) -> str | None:
+    """Текст пользователю по финальному статусу чека. None — статус не требует ответа."""
+    if not status:
+        return None
+    return STATUS_USER_MESSAGES.get(status)
+
+
+def is_contradictory_acceptance(
+    status: str | None, rule_progress: list[dict] | None
+) -> bool:
+    """True, если чек подтверждён по правилам этапа, но его вклад в прогресс нулевой.
+
+    Именно это ушло живому человеку трижды подряд 14.09.2026: чек получил статус «Подтверждён»,
+    а накопленный прогресс так и остался нулевым (позиция была записана без количества) — и в
+    текст подставилось «0 попыток выиграть». Причину устранили, но две половины фразы
+    по-прежнему считаются разными запросами: статус пишется одним, прогресс другим, и ничто не
+    обязывает их сойтись. Поэтому расхождение проверяется явно.
+
+    Ноль попыток сам по себе — нормальное состояние: при min_quantity = 3 и одном купленном
+    товаре комплект ещё не собран, и «осталось докупить 2 шт., попыток пока 0» — честный текст.
+    Противоречие именно в том, что чек засчитан, а прогресс по ВСЕМ правилам нулевой: такого
+    после подтверждения быть не может, потому что статус пишется до пересчёта и собственные
+    позиции чека уже должны в нём учитываться.
+    """
+    if status != "Подтверждён" or not rule_progress:
+        return False
+    return all((rp.get("progress") or 0) <= 0 for rp in rule_progress)
 
 
 def format_remaining_items(rule_progress: list[dict]) -> str:

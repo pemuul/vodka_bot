@@ -152,9 +152,9 @@
       <!-- Тексты сообщений о прогрессе/выполнении условий -->
       <div class="mb-3 stage-guaranteed-messages-block">
         <label class="form-label">
-          Промежуточное сообщение (после каждого принятого чека, если условия ещё не выполнены)
+          Сообщение после каждого принятого чека
           <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip"
-             title="Плейсхолдер {remaining_items} — бот сам подставит остаток нужного товара (не число чеков). Для «Стандарта» ещё доступен {entries_count} — текущее число попыток выиграть (чем больше подтверждённых чеков, тем больше шансов). Пусто — используется текст по умолчанию."></i>
+             title="Плейсхолдер {remaining_items} — бот сам подставит остаток нужного товара (не число чеков); когда условия уже выполнены, остаток пуст и этот блок из текста убирается. Для «Стандарта» ещё доступен {entries_count} — текущее число попыток выиграть. Пусто — используется текст по умолчанию."></i>
         </label>
         <textarea class="form-control stage-progress-message" rows="4"
                   placeholder="Чек принят ✅ Осталось докупить: {remaining_items}..."></textarea>
@@ -709,8 +709,17 @@
           sd.textAfter = pane.querySelector(".stage-text-after").value;
           sd.stageType = pane.querySelector(".stage-type").value;
           sd.progressMessageText = pane.querySelector(".stage-progress-message").value || null;
-          sd.winMessageText = pane.querySelector(".stage-win-message").value || null;
-          sd.extraReceiptMessageText = pane.querySelector(".stage-extra-receipt-message").value || null;
+          // Поля «Финальное сообщение» и «Лишний чек» скрыты для «Стандарта» и ботом для него
+          // не читаются. Раньше они всё равно сохранялись: скрытые textarea заполнялись
+          // текстом по умолчанию и уезжали в базу, из-за чего у standard-этапов лежал
+          // неиспользуемый «Поздравляем🎉…» и сбивал с толку при разборе.
+          const isGuaranteedStage = sd.stageType === "guaranteed_prize";
+          sd.winMessageText = isGuaranteedStage
+            ? (pane.querySelector(".stage-win-message").value || null)
+            : null;
+          sd.extraReceiptMessageText = isGuaranteedStage
+            ? (pane.querySelector(".stage-extra-receipt-message").value || null)
+            : null;
           sd.start = pane.querySelector(".stage-start").value || null;
           sd.end = pane.querySelector(".stage-end").value || null;
           sd.status = pane.querySelector(".stage-status").value;

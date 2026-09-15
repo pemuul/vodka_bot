@@ -404,6 +404,24 @@ async def create_db():
         #for keys in table_shem.keys():
         #    await create_or_update_tables(conn, table_shem.get(keys))
         await create_or_update_tables(conn, table_shem)
+        await create_indexes(conn)
+
+
+async def create_indexes(conn) -> None:
+    """Индексы, которых нет в декларативной схеме таблиц.
+
+    participant_messages — самая большая таблица в базе (на проде ~116 тыс. строк и растёт с
+    каждым сообщением), поэтому индекс по receipt_id сделан ЧАСТИЧНЫМ: ссылка на чек есть лишь
+    у ответов бота о статусе чека, то есть у долей процента строк. Полный индекс по этой
+    колонке занимал бы место пропорционально всей переписке и ничего бы не давал — частичный
+    остаётся крошечным независимо от того, сколько всего сообщений накопится.
+    """
+    cursor = await conn.cursor()
+    await cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_participant_messages_receipt "
+        "ON participant_messages(receipt_id) WHERE receipt_id IS NOT NULL"
+    )
+    await conn.commit()
 # ==================================================================
 
 
@@ -1276,11 +1294,17 @@ async def add_participant_message(
     buttons: Optional[List[Dict[str, Any]]] = None,
     media: Optional[List[Dict[str, Any]]] = None,
     timestamp: Optional[datetime.datetime] = None,
+    tg_message_id: Optional[int] = None,
+    receipt_id: Optional[int] = None,
     conn=None,
 ) -> int:
     """
     Сохраняет одно сообщение в participant_messages,
     вместе с опциональными списками кнопок и медиа.
+
+    tg_message_id — идентификатор сообщения в Telegram: без него отправленное сообщение уже
+    никак не изменить и не удалить. receipt_id — необязательная ссылка на чек, чтобы можно было
+    найти все ответы бота по конкретному чеку (см. get_receipt_bot_messages).
     """
     ts = timestamp or datetime.datetime.utcnow()
     buttons_json = json.dumps(buttons, ensure_ascii=False) if buttons else ''
@@ -1290,13 +1314,43 @@ async def add_participant_message(
     await cursor.execute(
         """
         INSERT INTO participant_messages
-          (user_tg_id, sender, text, is_answer, buttons, media, timestamp, is_deleted)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+          (user_tg_id, sender, text, is_answer, buttons, media, timestamp, is_deleted,
+           tg_message_id, receipt_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
         """,
-        (user_tg_id, sender, text, int(is_answer), buttons_json, media_json, ts),
+        (
+            user_tg_id, sender, text, int(is_answer), buttons_json, media_json, ts,
+            tg_message_id, receipt_id,
+        ),
     )
     await conn.commit()
     return cursor.lastrowid
+
+
+@with_connection
+async def get_receipt_bot_messages(
+    receipt_id: int, include_deleted: bool = False, conn=None
+) -> list[dict]:
+    """Ответы бота по конкретному чеку — с telegram-идентификаторами, чтобы их можно было
+    удалить или отредактировать после отправки.
+
+    Опирается на частичный индекс по receipt_id: строк со ссылкой на чек в таблице единицы
+    процента, поэтому индекс остаётся крошечным и не растёт вместе со всей перепиской.
+    Учтите ограничение Telegram: бот может удалить своё сообщение только в течение 48 часов
+    после отправки, поэтому хранить эти ссылки дольше нескольких дней смысла нет.
+    """
+    cursor = await conn.cursor()
+    query = (
+        "SELECT id, user_tg_id, text, tg_message_id, timestamp, is_deleted "
+        "FROM participant_messages WHERE receipt_id = ? AND tg_message_id IS NOT NULL"
+    )
+    if not include_deleted:
+        query += " AND is_deleted = 0"
+    query += " ORDER BY id"
+    await cursor.execute(query, (receipt_id,))
+    rows = await cursor.fetchall()
+    columns = [col[0] for col in cursor.description]
+    return [dict(zip(columns, row)) for row in rows]
 
 @with_connection
 async def mark_message_deleted(message_id: int, conn=None):
@@ -1445,6 +1499,66 @@ async def get_active_stage(date: datetime.date | None = None, conn=None) -> dict
         return None
     columns = [col[0] for col in cursor.description]
     return dict(zip(columns, row))
+
+
+@with_connection
+async def activate_due_stages(date: datetime.date | None = None, conn=None) -> dict:
+    """Перевести этапы по датам: завершить истёкший активный и включить следующий.
+
+    Без этого акция останавливается молча. `get_active_stage()` требует одновременно
+    status = 'active' и попадание сегодняшней даты в диапазон этапа, а статус не менял никто:
+    на проде этап «1 месяц» заканчивается 05.10, а следующий лежит в 'upcoming' — с 06.10
+    активного этапа не стало бы вовсе, и каждый присланный чек получил бы «сейчас акция не
+    проводится», даже не сохранившись в базе. Ровно это уже происходило 04–09.09: за шесть
+    дней в базе нет ни одного чека.
+
+    Сохраняем главный инвариант системы — активен не более одного этапа во всей базе:
+    включаем следующий, только если после завершения истёкших не осталось ни одного активного,
+    и берём при этом самый ранний подходящий (start_date <= сегодня <= end_date).
+
+    Возвращает {"finished": [...], "activated": int | None} — id затронутых этапов.
+    """
+    date = date or datetime.date.today()
+    cursor = await conn.cursor()
+
+    await cursor.execute(
+        "SELECT id FROM prize_draw_stages "
+        "WHERE status = 'active' AND end_date IS NOT NULL AND end_date < ?",
+        (date,),
+    )
+    finished = [row[0] for row in await cursor.fetchall()]
+    for stage_id in finished:
+        await cursor.execute(
+            "UPDATE prize_draw_stages SET status = 'finished' WHERE id = ?", (stage_id,)
+        )
+
+    await cursor.execute("SELECT id FROM prize_draw_stages WHERE status = 'active' LIMIT 1")
+    still_active = await cursor.fetchone()
+
+    activated = None
+    if not still_active:
+        await cursor.execute(
+            "SELECT id FROM prize_draw_stages WHERE status = 'upcoming' "
+            "AND start_date IS NOT NULL AND start_date <= ? "
+            "AND (end_date IS NULL OR end_date >= ?) "
+            "ORDER BY start_date, id LIMIT 1",
+            (date, date),
+        )
+        row = await cursor.fetchone()
+        if row:
+            activated = row[0]
+            await cursor.execute(
+                "UPDATE prize_draw_stages SET status = 'active' WHERE id = ?", (activated,)
+            )
+
+    if finished or activated is not None:
+        await conn.commit()
+        logger.info(
+            "activate_due_stages: завершены этапы %s, активирован этап %s",
+            finished or "—",
+            activated if activated is not None else "—",
+        )
+    return {"finished": finished, "activated": activated}
 
 
 @with_connection

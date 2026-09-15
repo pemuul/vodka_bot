@@ -23,6 +23,7 @@ import queue
 #from sql_mgt import sql_mgt.get_param, sql_mgt.set_param, sql_mgt.append_param_get_old
 import sql_mgt
 import receipt_validation
+import outgoing_logger
 #from keys import ADMIN_ID_LIST
 from heandlers import import_files, admin
 from keyboards import admin_kb
@@ -911,6 +912,13 @@ def _build_receipt_item_rows(items: list[dict], item_rule_map: dict[int, int]) -
             quantity = float(quantity) if quantity is not None else None
         except (TypeError, ValueError):
             quantity = None
+        if quantity is None:
+            # ФНС почти всегда отдаёт количество, но если не отдала — считаем позицию за одну
+            # штуку. Иначе SUM(quantity) в get_user_rule_progress() просуммирует NULL, прогресс
+            # останется нулевым, и чек будет подтверждён, но не даст ни одной попытки выиграть.
+            # Ровно этот дефект уже выстрелил на ручном вводе позиций (исправлен в 3ded6c1) —
+            # здесь он до сих пор ждал своей очереди.
+            quantity = 1.0
         rows.append(
             {
                 "raw_name": str(item.get("name", "")).strip() or None,
@@ -921,6 +929,24 @@ def _build_receipt_item_rows(items: list[dict], item_rule_map: dict[int, int]) -
             }
         )
     return rows
+
+
+async def _send_receipt_message(
+    chat_id: int, text: str, reply_to_message_id: int | None, receipt_id: int | None
+) -> None:
+    """Отправить пользователю ответ по чеку, связав сообщение с этим чеком.
+
+    Связь нужна, чтобы отправленное сообщение потом можно было найти и удалить или изменить —
+    например, убрать устаревший ответ, когда администратор поменял статус чека вручную
+    (sql_mgt.get_receipt_bot_messages). Саму запись делает outgoing_logger.RequestLogger,
+    здесь мы только помечаем контекст.
+    """
+    with outgoing_logger.receipt_message_context(receipt_id):
+        await global_objects.bot.send_message(
+            chat_id,
+            text,
+            reply_to_message_id=reply_to_message_id,
+        )
 
 
 async def _resolve_winner_name(user_tg_id: int) -> str:
@@ -980,10 +1006,11 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     if await _is_extra_receipt(stage, user_tg_id):
         comment_text = "Бот: пользователь уже выполнил условия акции — чек лишний"
         await sql_mgt.update_receipt_status(receipt_id, "Лишний чек", comment=comment_text)
-        await global_objects.bot.send_message(
+        await _send_receipt_message(
             chat_id,
             receipt_validation.build_extra_receipt_message(stage.get("extra_receipt_message_text")),
-            reply_to_message_id=msg_id,
+            msg_id,
+            receipt_id,
         )
         return
 
@@ -1014,10 +1041,7 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     fns_result: str | None = None  # "success", "no_goods", "error"
     fns_error_text: str | None = None
     stage_event_message: str | None = None  # текст события накопительного прогресса этапа, если было
-    notify_messages = {
-        "Чек уже загружен": "❌ Чек уже загружен",
-        "Нет товара в чеке": "❌ В чеке не найден нужный товар",
-    }
+    stage_rule_progress: list[dict] | None = None  # прогресс по правилам этапа, если считался
     use_vision = False
 
     async def _apply_guaranteed_result(result: dict) -> None:
@@ -1035,25 +1059,28 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
             )
 
     async def _apply_standard_result(result: dict) -> None:
-        nonlocal fns_result, final_status, comment_text, stage_event_message
+        nonlocal fns_result, final_status, comment_text, stage_event_message, stage_rule_progress
         fns_result = "success"
         final_status = "Подтверждён"
         entries_count = result["entries_count"]
+        stage_rule_progress = result["rule_progress"]
+        remaining_text = receipt_validation.format_remaining_items(result["rule_progress"])
         if result["outcome"] == "complete":
-            # По решению владельца: полное выполнение условий standard-этапа больше не
-            # шлёт отдельное сообщение — как и раньше, пользователь просто видит, что
-            # чек принят (fallback на "✅ Чек подтверждён" ниже), stage_event_message
-            # остаётся None.
             comment_text = (
                 f"Бот: этап '{stage['name']}' — условия выполнены, участвует в розыгрыше "
                 f"(попыток: {entries_count})"
             )
         else:
-            remaining_text = receipt_validation.format_remaining_items(result["rule_progress"])
             comment_text = f"Бот: этап '{stage['name']}' — чек принят, есть остаток"
-            stage_event_message = receipt_validation.build_standard_progress_message(
-                stage.get("progress_message_text"), remaining_text, entries_count
-            )
+        # Сообщение отправляется в ОБОИХ исходах. Раньше при "complete" оно не отправлялось
+        # вовсе, и пользователь получал жёстко зашитое "✅ Чек подтверждён" вместо настроенного
+        # в панели текста. При min_quantity == 1 исход "progress" недостижим в принципе —
+        # первый же засчитанный чек сразу закрывает правило, — то есть настроенный владельцем
+        # текст не отправлялся никогда. Остаток при "complete" пуст, и блок про него
+        # схлопывается внутри build_standard_progress_message().
+        stage_event_message = receipt_validation.build_standard_progress_message(
+            stage.get("progress_message_text"), remaining_text, entries_count
+        )
 
     if qr_data:
         existing = await sql_mgt.find_receipt_by_qr(qr_data)
@@ -1066,10 +1093,11 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
                 "Чек уже загружен",
                 comment=comment_text,
             )
-            await global_objects.bot.send_message(
+            await _send_receipt_message(
                 chat_id,
-                "❌ Чек уже загружен",
-                reply_to_message_id=msg_id,
+                receipt_validation.MESSAGE_DUPLICATE_RECEIPT,
+                msg_id,
+                receipt_id,
             )
             return
         await sql_mgt.update_receipt_qr(receipt_id, qr_data)
@@ -1242,17 +1270,29 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     )
     await sql_mgt.update_receipt_status(receipt_id, final_status, comment=comment_text)
 
-    if stage_event_message:
-        user_message = stage_event_message
-    elif final_status == "Подтверждён":
-        user_message = "✅ Чек подтверждён"
-    else:
-        user_message = notify_messages.get(final_status)
+    # Взаимоисключающий текст («чек принят» + «0 попыток») не отправляется никогда — вместо
+    # него уходит нейтральное подтверждение, а расхождение статуса и пересчёта попадает в лог
+    # как ошибка, чтобы его нашли, а не чтобы его прочитал пользователь.
+    if stage_event_message and receipt_validation.is_contradictory_acceptance(
+        final_status, stage_rule_progress
+    ):
+        logger.error(
+            "[QR] Receipt %s: статус %s, но прогресс по всем правилам этапа нулевой (%s) — "
+            "противоречивое сообщение подавлено, отправлено нейтральное подтверждение",
+            receipt_id,
+            final_status,
+            stage_rule_progress,
+        )
+        stage_event_message = None
+
+    user_message = stage_event_message or receipt_validation.build_status_message(final_status)
     if user_message:
-        await global_objects.bot.send_message(
-            chat_id,
-            user_message,
-            reply_to_message_id=msg_id,
+        await _send_receipt_message(chat_id, user_message, msg_id, receipt_id)
+    else:
+        logger.error(
+            "[QR] Receipt %s: для статуса %s не нашлось текста — пользователь не получил ответ",
+            receipt_id,
+            final_status,
         )
 
 

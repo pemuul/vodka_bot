@@ -49,96 +49,14 @@ from keys import MAIN_JSON_FILE
 from json_data_mgt import Tree_data, TreeObject, copy_or_rename_file, create_folder
 #from sql_mgt import sql_mgt.create_db_file, sql_mgt.upload_admins, sql_mgt.get_admins_id, sql_mgt.init_wallet
 import sql_mgt
+# Логгер исходящих вынесен в общий модуль: его подключает и бот, и воркер очереди чеков,
+# иначе ответы воркера не попадают в историю переписки (см. outgoing_logger).
+from outgoing_logger import RequestLogger, last_reply_keyboard
 
 from heandlers import commands, answer_button_menu, import_files, text_heandler, admin_answer_button, media_heandler, pyments, order, answer_button_settings, answer_button_subscription, confirm_age_phone
 
 MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 
-# Keep track of the last reply keyboard sent to each user so we can
-# recognize when a text message is actually a button press.
-last_reply_keyboard: Dict[int, List[str]] = {}
-
-
-################################################################################
-# 1.  ЛОГ outbound — остаётся почти без изменений
-################################################################################
-class RequestLogger(BaseRequestMiddleware):
-    def __init__(self, ignore: Optional[List[Type[TelegramMethod[Any]]]] = None):
-        self.ignore = ignore or []
-
-    async def __call__(
-        self,
-        make_request: NextRequestMiddlewareType,
-        bot: Bot,
-        method: TelegramMethod[Any],
-        *args, **kwargs
-    ) -> Any:
-        # пропускаем системные методы
-        if type(method) not in self.ignore:
-            chat_id = getattr(method, "chat_id", None)
-            if chat_id is not None:
-                # 1) текст
-                text = getattr(method, "text", None)
-
-                if text:
-                    # 2) кнопки
-                    buttons: List[Dict[str, Any]] = []
-                    markup = getattr(method, "reply_markup", None)
-                    if isinstance(markup, InlineKeyboardMarkup):
-                        for row in markup.inline_keyboard:  # List[List[InlineKeyboardButton]]
-                            for btn in row:
-                                buttons.append({
-                                    "text":         btn.text,
-                                    "callback_data": getattr(btn, "callback_data", None),
-                                    "url":          getattr(btn, "url", None),
-                                    "web_app_url":  getattr(getattr(btn, "web_app", None), "url", None),
-                                })
-                        # inline клавиатура не заменяет reply, поэтому очищаем
-                        last_reply_keyboard.pop(chat_id, None)
-                    elif isinstance(markup, ReplyKeyboardMarkup):
-                        btn_texts: List[str] = []
-                        for row in markup.keyboard:
-                            for btn in row:
-                                btn_info = {"text": btn.text}
-                                if btn.request_contact:
-                                    btn_info["request_contact"] = True
-                                if btn.request_location:
-                                    btn_info["request_location"] = True
-                                if btn.web_app:
-                                    btn_info["web_app_url"] = btn.web_app.url
-                                buttons.append(btn_info)
-                                btn_texts.append(btn.text)
-                        if btn_texts:
-                            last_reply_keyboard[chat_id] = btn_texts
-                    else:
-                        # если клавиатуры нет, забываем прошлую
-                        last_reply_keyboard.pop(chat_id, None)
-
-                    # 3) медиа
-                    media_list: List[Dict[str, Any]] = []
-                    media = getattr(method, "media", None)
-                    # media может быть одним InputMedia или списком
-                    items = media if isinstance(media, list) else [media] if media else []
-                    for m in items:
-                        if isinstance(m, InputMedia):
-                            media_list.append({
-                                "type":    m.type.value if hasattr(m.type, "value") else m.type,
-                                "media":   m.media,
-                                "caption": m.caption,
-                            })
-
-                    # сохраняем в БД одной строкой
-                    #print(method)
-                    await sql_mgt.add_participant_message(
-                        user_tg_id=chat_id,
-                        sender="admin",
-                        text=text,
-                        buttons=buttons or None,
-                        media=media_list or None,
-                    )
-
-        # дальше отправляем сам запрос
-        return await make_request(bot, method, *args, **kwargs)
 
 
 class IncomingLogger(BaseMiddleware):
