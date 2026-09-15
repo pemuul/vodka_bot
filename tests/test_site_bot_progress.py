@@ -520,3 +520,74 @@ class TestSaveDrawPreservesIds:
             db_path, "SELECT id FROM prize_draw_winners WHERE id=?", (winner_id,)
         )
         assert winner_row is not None
+
+
+class TestApiNotificationsSurfacesWaitingReceipts:
+    """Регрессия на главную поломку: чек, который ждёт человека, не был виден ниоткуда.
+
+    Лента уведомлений отбирала чеки строго по статусу «Ошибка», а с переездом правил
+    проверки на уровень этапа вместо него выставляется «На ручной проверке» — последний чек
+    со статусом «Ошибка» на проде датирован 16.06.2026. Пользователю при этом тоже ничего не
+    уходило, поэтому чек мог висеть без ответа часами (на проде — до 17).
+    """
+
+    def _insert_receipt(self, db_path, status, comment, created_shift_minutes=0):
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.execute(
+                "INSERT INTO receipts (user_tg_id, status, comment, create_dt) "
+                "VALUES (?, ?, ?, datetime('now', ?))",
+                (1, status, comment, f"{created_shift_minutes} minutes"),
+            )
+            conn.commit()
+            return cur.lastrowid
+        finally:
+            conn.close()
+
+    def test_manual_review_receipt_is_listed(self, site_bot_main):
+        db_path, main_module = site_bot_main
+        receipt_id = self._insert_receipt(
+            db_path, "На ручной проверке", "Бот: авто-проверка не смогла подтвердить чек"
+        )
+        result = run(main_module.api_notifications())
+        ids = [n["id"] for n in result["notifications"] if n["type"] == "receipt"]
+        assert receipt_id in ids
+
+    def test_error_receipt_still_listed(self, site_bot_main):
+        db_path, main_module = site_bot_main
+        receipt_id = self._insert_receipt(
+            db_path, "Ошибка", "Бот: не удалось прочитать изображение чека"
+        )
+        result = run(main_module.api_notifications())
+        ids = [n["id"] for n in result["notifications"] if n["type"] == "receipt"]
+        assert receipt_id in ids
+
+    def test_stuck_in_processing_is_listed(self, site_bot_main):
+        """Воркер упал или отстал — очередь пуста, пользователь молчит, в панели тишина."""
+        db_path, main_module = site_bot_main
+        receipt_id = self._insert_receipt(
+            db_path, "В авто обработке", None,
+            created_shift_minutes=-(main_module.STUCK_PROCESSING_MINUTES + 5),
+        )
+        result = run(main_module.api_notifications())
+        ids = [n["id"] for n in result["notifications"] if n["type"] == "receipt"]
+        assert receipt_id in ids
+
+    def test_recent_processing_is_not_listed(self, site_bot_main):
+        """Чек, который обрабатывается прямо сейчас, — это норма, а не проблема."""
+        db_path, main_module = site_bot_main
+        receipt_id = self._insert_receipt(
+            db_path, "В авто обработке", None, created_shift_minutes=-1
+        )
+        result = run(main_module.api_notifications())
+        ids = [n["id"] for n in result["notifications"] if n["type"] == "receipt"]
+        assert receipt_id not in ids
+
+    def test_finished_receipt_is_not_listed(self, site_bot_main):
+        db_path, main_module = site_bot_main
+        receipt_id = self._insert_receipt(
+            db_path, "Подтверждён", "Бот: товар найден в данных по QR"
+        )
+        result = run(main_module.api_notifications())
+        ids = [n["id"] for n in result["notifications"] if n["type"] == "receipt"]
+        assert receipt_id not in ids
