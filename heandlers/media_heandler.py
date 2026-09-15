@@ -1288,6 +1288,15 @@ async def process_receipt(dest: Path, chat_id: int, msg_id: int, receipt_id: int
     user_message = stage_event_message or receipt_validation.build_status_message(final_status)
     if user_message:
         await _send_receipt_message(chat_id, user_message, msg_id, receipt_id)
+    elif receipt_validation.is_silent_status(final_status):
+        # Осознанное молчание: чек ждёт администратора, пользователь получит ответ, когда
+        # решение будет принято (CLAUDE.md, «Поток обработки чека», п. 14). Важно, чтобы чек
+        # при этом был виден в ленте уведомлений админки.
+        logger.info(
+            "[QR] Receipt %s: статус %s — пользователю намеренно не пишем, чек ждёт админа",
+            receipt_id,
+            final_status,
+        )
     else:
         logger.error(
             "[QR] Receipt %s: для статуса %s не нашлось текста — пользователь не получил ответ",

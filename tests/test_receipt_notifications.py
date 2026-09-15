@@ -3,8 +3,9 @@
 Покрывают то, что раньше не было покрыто ничем и из-за чего на проде появилась жалоба
 «юзерам перестали идти сообщения»:
 
-* статусы «На ручной проверке» и «Ошибка» не отправляли пользователю ничего — чек молча
-  повисал до тех пор, пока администратор случайно не заметит его в списке;
+* чек, ушедший к администратору («На ручной проверке», «Ошибка»), не попадал в ленту
+  уведомлений и повисал до тех пор, пока его случайно не заметят в списке (пользователю в
+  этих статусах намеренно не пишут — решение владельца, CLAUDE.md п. 14);
 * при min_quantity == 1 исход «условия выполнены» наступал сразу и не слал настроенный в
   панели текст, то есть этот текст не отправлялся никогда;
 * «Чек принят» уходило вместе с «0 попыток выиграть»;
@@ -129,19 +130,30 @@ def _sent_text(fake_go):
 # ---------------------------------------------------------------------------
 
 class TestStatusMessages:
-    def test_every_final_status_has_text(self):
-        """Регрессия на исходную поломку: статус, у которого нет текста, означает, что
-        пользователь не получит вообще ничего. Тест падает при добавлении нового финального
-        статуса без сообщения."""
+    def test_every_final_status_is_decided(self):
+        """У каждого финального статуса либо есть текст, либо он явно помечен «молчим».
+        Третьего быть не должно: статус, про который забыли, — это молча потерянный ответ."""
         for status in receipt_validation.FINAL_RECEIPT_STATUSES:
             message = receipt_validation.build_status_message(status)
-            assert message, f"нет текста для статуса {status!r}"
-            assert message.strip() == message
+            silent = receipt_validation.is_silent_status(status)
+            assert bool(message) != silent, f"статус {status!r} не определён однозначно"
+            if message:
+                assert message.strip() == message
 
-    def test_manual_review_and_error_are_covered(self):
-        """Оба статуса, в которых чек ждёт человека, раньше молчали."""
-        assert receipt_validation.build_status_message("На ручной проверке")
-        assert receipt_validation.build_status_message("Ошибка")
+    def test_manual_review_stays_silent(self):
+        """Решение владельца (CLAUDE.md, «Поток обработки чека», п. 14): чек, ушедший на
+        ручную проверку, НЕ пишет пользователю ничего — ответ придёт, когда администратор
+        примет решение."""
+        assert receipt_validation.build_status_message("На ручной проверке") is None
+        assert receipt_validation.is_silent_status("На ручной проверке") is True
+
+    def test_error_status_stays_silent(self):
+        assert receipt_validation.build_status_message("Ошибка") is None
+        assert receipt_validation.is_silent_status("Ошибка") is True
+
+    def test_answered_statuses_are_not_silent(self):
+        for status in ("Подтверждён", "Чек уже загружен", "Нет товара в чеке"):
+            assert receipt_validation.is_silent_status(status) is False
 
     def test_unknown_status_returns_none(self):
         assert receipt_validation.build_status_message("Неизвестно") is None
@@ -275,9 +287,11 @@ class TestProcessReceiptAlwaysAnswers:
         )
         return draw_id, stage_id, rule_id, fake_go
 
-    def test_manual_review_sends_message(self, mem_db, monkeypatch):
-        """Главная поломка: QR нет, ФНС недоступна, OCR не подтвердил — раньше пользователь
-        не получал ничего и ждал до 17 часов, пока чек не заметит администратор."""
+    def test_manual_review_sends_nothing(self, mem_db, monkeypatch):
+        """QR нет, ФНС недоступна, OCR не подтвердил — чек уходит к администратору, и
+        пользователю НЕ пишут ничего (решение владителя, CLAUDE.md п. 14). Ответ он получит,
+        когда администратор примет решение; сам чек при этом обязан попасть в ленту
+        уведомлений админки — это проверяется в test_site_bot_progress.py."""
         draw_id, stage_id, _rule, fake_go = self._setup(mem_db, monkeypatch)
         monkeypatch.setattr(media_heandler, "_detect_qr", lambda path: None)
         monkeypatch.setattr(
@@ -290,11 +304,10 @@ class TestProcessReceiptAlwaysAnswers:
         run(media_heandler.process_receipt(Path("/tmp/manual.jpg"), 555, 100, receipt_id))
 
         assert run(sql_mgt.get_receipt(receipt_id))["status"] == "На ручной проверке"
-        fake_go.bot.send_message.assert_awaited()
-        assert _sent_text(fake_go) == receipt_validation.MESSAGE_MANUAL_REVIEW
+        fake_go.bot.send_message.assert_not_awaited()
 
-    def test_error_status_sends_message(self, mem_db, monkeypatch):
-        """Этап без правил + нечитаемое изображение → статус «Ошибка», тоже молчавший."""
+    def test_error_status_sends_nothing(self, mem_db, monkeypatch):
+        """Этап без правил + нечитаемое изображение → «Ошибка»: чек так же ждёт человека."""
         fake_go = _FakeGlobalObjects()
         monkeypatch.setattr(media_heandler, "global_objects", fake_go)
         draw_id = _insert_draw(mem_db)
@@ -311,7 +324,7 @@ class TestProcessReceiptAlwaysAnswers:
         run(media_heandler.process_receipt(Path("/tmp/err.jpg"), 556, 101, receipt_id))
 
         assert run(sql_mgt.get_receipt(receipt_id))["status"] == "Ошибка"
-        assert _sent_text(fake_go) == receipt_validation.MESSAGE_PROCESSING_ERROR
+        fake_go.bot.send_message.assert_not_awaited()
 
     def test_single_unit_rule_sends_configured_text(self, mem_db, monkeypatch):
         """При min_quantity == 1 исход всегда «условия выполнены», и настроенный в панели
