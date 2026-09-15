@@ -90,7 +90,29 @@ def get_access_token() -> tuple[str, datetime]:
     env = _post_soap(AUTH_ENDPOINT, "GetMessageRequest", body)
     token = env.findtext(".//auth:Token", namespaces=NAMESPACES)
     expires = env.findtext(".//auth:ExpireTime", namespaces=NAMESPACES)
-    return token, datetime.fromisoformat(expires)
+    if not token:
+        raise RuntimeError("ФНС не вернула токен доступа")
+    return token, _parse_expire_time(expires)
+
+
+def _parse_expire_time(expires: Optional[str]) -> datetime:
+    """Срок жизни токена. Отсутствующее или нечитаемое значение — не повод ронять весь запрос.
+
+    Раньше здесь был просто `datetime.fromisoformat(expires)`, и когда ФНС отвечала без
+    ExpireTime, падало `TypeError: fromisoformat: argument must be str` — оно уносило с собой
+    ВЕСЬ запрос чека, хотя сам токен приходил рабочий. На проде так потерялся 371 запрос
+    (последний раз 30.06.2026): чек уходил в OCR-фолбэк и дальше на ручную проверку, где его
+    никто не ждал. Вызывающий код срок всё равно игнорирует (`token, _ = get_access_token()`),
+    поэтому при непонятном значении просто считаем токен уже истёкшим.
+    """
+    if isinstance(expires, str) and expires.strip():
+        try:
+            return datetime.fromisoformat(expires.strip())
+        except ValueError:
+            logger.warning("[FNS] Не удалось разобрать ExpireTime: %r", expires)
+    else:
+        logger.warning("[FNS] ФНС не вернула ExpireTime, продолжаем с полученным токеном")
+    return datetime.min
 
 
 def send_get_ticket(access_token: str, params: dict) -> str:

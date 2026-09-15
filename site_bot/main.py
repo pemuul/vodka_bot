@@ -1,7 +1,14 @@
 # main.py
 
 from fastapi import FastAPI, Request, Form, HTTPException, Depends, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    RedirectResponse,
+    JSONResponse,
+    Response,
+    StreamingResponse,
+)
+import mimetypes
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -2933,25 +2940,68 @@ async def send_and_log_message(
     return sent_messages, new_id
 
 
+# Telegram Bot API не отдаёт файлы больше 20 МБ, но на это не полагаемся: отдельный потолок
+# гарантирует, что один запрос не утянет за собой память процесса панели (на сервере 3.8 ГБ
+# на три сервиса, из них воркер распознавания сам по себе держит около гигабайта).
+FILE_PROXY_MAX_BYTES = 20 * 1024 * 1024
+FILE_PROXY_CHUNK_BYTES = 64 * 1024
+
+
 @app.get("/api/file/{file_id}")
 async def proxy_file(file_id: str):
+    """Отдать файл из Telegram через себя.
+
+    Раньше эндпоинт делал редирект браузера на `https://api.telegram.org/file/bot<ТОКЕН>/...`
+    Это не работало и не могло работать: сервер ходит в Telegram через VPN-туннель, а браузер
+    администратора — нет, Telegram у него просто заблокирован. Заодно редирект уносил токен
+    бота в адресную строку, историю браузера и любые прокси-логи по пути.
+
+    Поэтому файл читается на сервере и отдаётся потоком по 64 КБ — в память он целиком не
+    попадает. Сбой Telegram (туннель моргнул) отвечает коротким 502, а не пятисотым с полным
+    трейсбеком: на проде таких трейсбеков накопилось 594 штуки.
     """
-    Перенаправляем клиент на URL файла в Telegram CDN.
-    """
-    # Получаем метаданные файла у Telegram
     if not file_id or file_id == "undefined":
         raise HTTPException(status_code=400, detail="File ID is required")
-    
+
     bot = get_bot()
     if not bot:
-        raise HTTPException(status_code=500, detail="Bot is not configured")
+        raise HTTPException(status_code=500, detail="Бот не настроен")
 
-    file = await bot.get_file(file_id)
-    file_path = file.file_path  # например: "photos/file_123.jpg"
-    url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
+    try:
+        file = await bot.get_file(file_id)
+    except Exception as exc:
+        logger.warning("Telegram не отдал метаданные файла %s: %s", file_id, exc)
+        raise HTTPException(status_code=502, detail="Telegram сейчас недоступен")
 
-    # Перенаправляем браузер на этот URL
-    return RedirectResponse(url)
+    file_path = file.file_path
+    if not file_path:
+        raise HTTPException(status_code=404, detail="Файл не найден в Telegram")
+    if file.file_size and file.file_size > FILE_PROXY_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Файл слишком большой")
+
+    url = bot.session.api.file_url(bot.token, file_path)
+
+    async def _iter_file():
+        try:
+            async for chunk in bot.session.stream_content(
+                url,
+                timeout=30,
+                chunk_size=FILE_PROXY_CHUNK_BYTES,
+                raise_for_status=True,
+            ):
+                yield chunk
+        except Exception as exc:
+            # Заголовки уже отправлены — остаётся оборвать поток и записать причину.
+            logger.warning("Обрыв загрузки файла %s из Telegram: %s", file_id, exc)
+
+    media_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+    return StreamingResponse(
+        _iter_file(),
+        media_type=media_type,
+        # Файл в Telegram неизменяем, поэтому пусть браузер кеширует и не дёргает туннель
+        # на каждый показ. Кеш приватный: это переписка с участником.
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 class SendMessageIn(BaseModel):

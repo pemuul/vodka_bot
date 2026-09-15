@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import fns_api
 from fns_api import _parse_qr_datetime, _split_qr_query, qr_to_params, _describe_exception
 
 
@@ -152,3 +153,27 @@ class TestDescribeException:
         desc = _describe_exception(exc)
         assert "RuntimeError" in desc
         assert "HTTP 500" in desc
+
+
+class TestParseExpireTime:
+    """Регрессия на реальную потерю запросов к ФНС.
+
+    `datetime.fromisoformat(expires)` падал с `TypeError: fromisoformat: argument must be
+    str`, когда ФНС отвечала без ExpireTime, и уносил с собой ВЕСЬ запрос чека — хотя токен
+    приходил рабочий. На проде так потерялся 371 запрос (последний раз 30.06.2026): чек
+    уходил в OCR-фолбэк и дальше на ручную проверку.
+    """
+
+    def test_parses_valid_timestamp(self):
+        result = fns_api._parse_expire_time("2026-09-15T12:30:00")
+        assert result == datetime(2026, 9, 15, 12, 30, 0)
+
+    def test_strips_surrounding_whitespace(self):
+        assert fns_api._parse_expire_time("  2026-09-15T12:30:00 ") == datetime(
+            2026, 9, 15, 12, 30, 0
+        )
+
+    @pytest.mark.parametrize("value", [None, "", "   ", "не дата", 12345])
+    def test_bad_value_does_not_raise(self, value):
+        """Любой мусор вместо срока — токен всё равно считаем полученным."""
+        assert fns_api._parse_expire_time(value) == datetime.min

@@ -591,3 +591,121 @@ class TestApiNotificationsSurfacesWaitingReceipts:
         result = run(main_module.api_notifications())
         ids = [n["id"] for n in result["notifications"] if n["type"] == "receipt"]
         assert receipt_id not in ids
+
+
+class TestProxyFile:
+    """Регрессия на два дефекта сразу.
+
+    Эндпоинт делал редирект браузера на `api.telegram.org/file/bot<ТОКЕН>/...`. Сервер ходит
+    в Telegram через VPN-туннель, а браузер администратора — нет: Telegram у него заблокирован,
+    поэтому картинка не открывалась в принципе. Заодно редирект уносил токен бота в адресную
+    строку и историю браузера. И любой сбой туннеля давал 500 с полным трейсбеком — на проде
+    их накопилось 594.
+    """
+
+    class _FakeFile:
+        def __init__(self, file_path="photos/x.jpg", file_size=1024):
+            self.file_path = file_path
+            self.file_size = file_size
+
+    class _FakeApi:
+        def file_url(self, token, path):
+            return f"https://api.telegram.org/file/bot{token}/{path}"
+
+    class _FakeSession:
+        def __init__(self, chunks=(b"one", b"two"), error=None):
+            self.api = TestProxyFile._FakeApi()
+            self._chunks = chunks
+            self._error = error
+
+        async def stream_content(self, url, **kwargs):
+            if self._error:
+                raise self._error
+            for chunk in self._chunks:
+                yield chunk
+
+    class _FakeBot:
+        token = "6802854236:SECRET"
+
+        def __init__(self, file=None, get_file_error=None, session=None):
+            self._file = file or TestProxyFile._FakeFile()
+            self._get_file_error = get_file_error
+            self.session = session or TestProxyFile._FakeSession()
+
+        async def get_file(self, file_id):
+            if self._get_file_error:
+                raise self._get_file_error
+            return self._file
+
+    def _use_bot(self, main_module, monkeypatch, bot):
+        monkeypatch.setattr(main_module, "get_bot", lambda: bot)
+
+    async def _collect(self, response):
+        return b"".join([chunk async for chunk in response.body_iterator])
+
+    def test_streams_bytes_instead_of_redirecting(self, site_bot_main, monkeypatch):
+        _db_path, main_module = site_bot_main
+        self._use_bot(main_module, monkeypatch, self._FakeBot())
+
+        response = run(main_module.proxy_file("abc"))
+
+        assert response.status_code == 200
+        assert response.media_type == "image/jpeg"
+        assert run(self._collect(response)) == b"onetwo"
+
+    def test_never_exposes_bot_token(self, site_bot_main, monkeypatch):
+        _db_path, main_module = site_bot_main
+        self._use_bot(main_module, monkeypatch, self._FakeBot())
+
+        response = run(main_module.proxy_file("abc"))
+
+        rendered = repr(response.headers.items()) + str(getattr(response, "body", b""))
+        assert "SECRET" not in rendered
+        assert not isinstance(response, main_module.RedirectResponse)
+
+    def test_telegram_failure_gives_502_not_500(self, site_bot_main, monkeypatch):
+        _db_path, main_module = site_bot_main
+        self._use_bot(
+            main_module, monkeypatch,
+            self._FakeBot(get_file_error=RuntimeError("Cannot connect to api.telegram.org")),
+        )
+
+        with pytest.raises(main_module.HTTPException) as exc:
+            run(main_module.proxy_file("abc"))
+        assert exc.value.status_code == 502
+
+    def test_oversized_file_is_refused(self, site_bot_main, monkeypatch):
+        _db_path, main_module = site_bot_main
+        big = self._FakeFile(file_size=main_module.FILE_PROXY_MAX_BYTES + 1)
+        self._use_bot(main_module, monkeypatch, self._FakeBot(file=big))
+
+        with pytest.raises(main_module.HTTPException) as exc:
+            run(main_module.proxy_file("abc"))
+        assert exc.value.status_code == 413
+
+    def test_missing_file_path_gives_404(self, site_bot_main, monkeypatch):
+        _db_path, main_module = site_bot_main
+        self._use_bot(
+            main_module, monkeypatch, self._FakeBot(file=self._FakeFile(file_path=None))
+        )
+
+        with pytest.raises(main_module.HTTPException) as exc:
+            run(main_module.proxy_file("abc"))
+        assert exc.value.status_code == 404
+
+    def test_empty_file_id_is_rejected(self, site_bot_main, monkeypatch):
+        _db_path, main_module = site_bot_main
+        self._use_bot(main_module, monkeypatch, self._FakeBot())
+
+        with pytest.raises(main_module.HTTPException) as exc:
+            run(main_module.proxy_file("undefined"))
+        assert exc.value.status_code == 400
+
+    def test_stream_break_does_not_raise_to_client(self, site_bot_main, monkeypatch):
+        """Туннель моргнул посреди передачи — поток обрывается, а не падает пятисотой."""
+        _db_path, main_module = site_bot_main
+        session = self._FakeSession(error=RuntimeError("Connection reset by peer"))
+        self._use_bot(main_module, monkeypatch, self._FakeBot(session=session))
+
+        response = run(main_module.proxy_file("abc"))
+        assert run(self._collect(response)) == b""
