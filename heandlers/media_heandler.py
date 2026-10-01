@@ -8,6 +8,7 @@ import os
 import re
 import threading
 from aiogram.types import Message, FSInputFile
+from aiogram.utils.formatting import Bold, Text
 import time
 import random
 import uuid
@@ -72,6 +73,16 @@ _OCR_SUBPROCESS_TIMEOUT = int(os.getenv("OCR_SUBPROCESS_TIMEOUT", "45"))
 # с плановым самоперезапуском и потолком памяти (см. ocr_worker_client.py).
 _OCR_ENGINE_MODE = os.getenv("OCR_ENGINE", "subprocess").strip().lower()
 UNEXPECTED_MEDIA_MESSAGE = "Если вы хотите что-то уточнить, перейдите в раздел «Задать вопрос»"
+# Ответ на первый чек пользователя в акции (подпись к PDF-каталогу). Жирный задан через
+# entities, а не HTML-тегами: outgoing_logger.RequestLogger пишет caption в participant_messages
+# как есть, а панель показывает его через textContent — теги светились бы там сырыми.
+FIRST_RECEIPT_MESSAGE = Text(
+    "🎁 ",
+    Bold("Держите подарок — электронный каталог коктейлей FINSKY ICE!"),
+    "\nЗагружайте чеки, соответствующие условиям акции, и участвуйте в розыгрыше призов."
+    "\nЧем больше принятых чеков — тем больше шансов на победу!"
+    "\nХотите загрузить ещё чек?",
+)
 
 
 def init_object(global_objects_inp):
@@ -1375,11 +1386,6 @@ async def set_photo(message: Message) -> None:
                 await sql_mgt.enqueue_receipt_ocr(receipt_id)
             receipts_total = len(existing_receipts) + 1
             if receipts_total == 1:
-                first_receipt_text = (
-                    "Поздравляем! Теперь вы участвуете в розыгрыше призов 🎁\n"
-                    "Держите подарок – электронный каталог коктейлей FINSKY ICE🧊\n"
-                    "Чем больше чеков, тем выше шансы на победу! Хотите загрузить еще чеки?🧾"
-                )
                 catalog_path = await sql_mgt.get_param(0, "CATALOG_FILE")
                 if catalog_path:
                     catalog_local = Path(__file__).resolve().parent.parent / "site_bot" / catalog_path.lstrip("/")
@@ -1389,10 +1395,12 @@ async def set_photo(message: Message) -> None:
                                 catalog_local,
                                 filename="Finsky_Ice_Сocktails.pdf",
                             ),
-                            caption=first_receipt_text,
+                            **FIRST_RECEIPT_MESSAGE.as_kwargs(
+                                text_key="caption", entities_key="caption_entities"
+                            ),
                         )
                         return
-                await message.reply(first_receipt_text)
+                await message.reply(**FIRST_RECEIPT_MESSAGE.as_kwargs())
             else:
                 await message.reply(
                     "Чек загружен и находится в статусе Проверка.\n"
