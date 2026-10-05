@@ -311,13 +311,10 @@ class TestApiDetermineWinnersEntryScoping:
                 stage_id, main_module.DetermineReq(winners_count=1)
             ))
 
-    def test_multiple_entries_for_same_user_all_eligible(self, site_bot_main):
-        """Чем больше накоплено комплектов (entries_count) — тем больше билетов в пуле для
-        этого пользователя, что и реализует "чем больше чеков, тем больше шанс". При
-        min_quantity=1 три чека по 1 шт. дают 3 комплекта → 3 билета — но билеты не
-        привязаны 1:1 к конкретным чекам (комплект мог бы собраться и из нескольких), так
-        что все билеты одного пользователя в пуле указывают на один и тот же
-        чек-представитель, а не на три разных."""
+    def test_multiple_entries_for_same_user_win_only_once(self, site_bot_main):
+        """Много билетов (entries_count) повышают шанс, но не дают занять несколько мест:
+        три комплекта у единственного участника при 10 местах — один победитель, а не три
+        копии одной записи (баг на проде, этап 49, 05.10.2026)."""
         db_path, main_module = site_bot_main
         draw_id = _insert_draw(db_path)
         stage_id = _insert_stage(db_path, draw_id)
@@ -331,11 +328,84 @@ class TestApiDetermineWinnersEntryScoping:
             stage_id, main_module.DetermineReq(winners_count=10)
         ))
         winners = result["winners"]
-        assert len(winners) == 3
-        assert all(w["user_id"] == 32 for w in winners)
-        receipt_ids = {w["receipt_id"] for w in winners}
-        assert receipt_ids <= {r1, r2, r3}
-        assert len(receipt_ids) == 1  # один представитель на все билеты этого пользователя
+        assert len(winners) == 1
+        assert winners[0]["user_id"] == 32
+        assert winners[0]["receipt_id"] in {r1, r2, r3}
+        rows = _fetch_all(
+            db_path, "SELECT user_tg_id FROM prize_draw_winners WHERE stage_id = ?", (stage_id,)
+        )
+        assert [r[0] for r in rows] == [32]
+
+    def test_winners_are_distinct_users(self, site_bot_main):
+        """Расклад, близкий к проду: у одного участника львиная доля билетов. Мест меньше,
+        чем участников, — все места заняты, и все победители разные."""
+        db_path, main_module = site_bot_main
+        draw_id = _insert_draw(db_path)
+        stage_id = _insert_stage(db_path, draw_id)
+        rule_id = _insert_rule(db_path, stage_id, min_quantity=1)
+        for tg_id in range(40, 46):
+            _insert_user(db_path, tg_id, f"Участник {tg_id}")
+        _insert_receipt_with_item(db_path, draw_id, 40, rule_id, 33)
+        _insert_receipt_with_item(db_path, draw_id, 41, rule_id, 13)
+        for tg_id in range(42, 46):
+            _insert_receipt_with_item(db_path, draw_id, tg_id, rule_id, 1)
+
+        for _ in range(20):
+            winners = run(main_module.api_determine_winners(
+                stage_id, main_module.DetermineReq(winners_count=4)
+            ))["winners"]
+            user_ids = [w["user_id"] for w in winners]
+            assert len(user_ids) == 4
+            assert len(set(user_ids)) == 4
+
+    def test_without_rules_user_with_many_receipts_wins_once(self, site_bot_main):
+        db_path, main_module = site_bot_main
+        draw_id = _insert_draw(db_path)
+        stage_id = _insert_stage(db_path, draw_id)
+        _insert_user(db_path, 50, "Много чеков")
+        _insert_user(db_path, 51, "Один чек")
+        many = {_insert_confirmed_receipt_unrelated(db_path, draw_id, 50, i) for i in range(5)}
+        single = _insert_confirmed_receipt_unrelated(db_path, draw_id, 51)
+
+        winners = run(main_module.api_determine_winners(
+            stage_id, main_module.DetermineReq(winners_count=10)
+        ))["winners"]
+        by_user = {w["user_id"]: w["receipt_id"] for w in winners}
+        assert len(winners) == 2
+        assert by_user[50] in many
+        assert by_user[51] == single
+
+
+class TestDrawUniqueWinners:
+    """Чистая функция выбора: разные участники, вес = число билетов."""
+
+    def test_never_repeats_a_participant(self, site_bot_main):
+        _, main_module = site_bot_main
+        pool = [("A", 33), ("B", 13), ("C", 1), ("D", 1)]
+        for _ in range(200):
+            winners = main_module._draw_unique_winners(pool, 3)
+            assert len(winners) == 3
+            assert len(set(winners)) == 3
+
+    def test_fewer_participants_than_places(self, site_bot_main):
+        _, main_module = site_bot_main
+        winners = main_module._draw_unique_winners([("A", 5), ("B", 1)], 10)
+        assert sorted(winners) == ["A", "B"]
+
+    def test_zero_weight_never_wins(self, site_bot_main):
+        _, main_module = site_bot_main
+        for _ in range(50):
+            assert main_module._draw_unique_winners([("A", 0), ("B", 1)], 2) == ["B"]
+
+    def test_more_tickets_more_chance(self, site_bot_main):
+        import random as random_module
+        _, main_module = site_bot_main
+        rng = random_module.Random(12345)
+        first_place = {"A": 0, "B": 0}
+        for _ in range(4000):
+            first_place[main_module._draw_unique_winners([("A", 9), ("B", 1)], 1, rng=rng)[0]] += 1
+        share_a = first_place["A"] / 4000
+        assert 0.86 < share_a < 0.94  # ожидание 0.9
 
 
 def _insert_winner(db_path, stage_id, user_tg_id, winner_name="Победитель"):
@@ -375,6 +445,29 @@ def _stage_dict(db_path, stage_id):
         return dict(row) if row else None
     finally:
         conn.close()
+
+
+class TestWinnersExportOpensInExcel:
+    """Выгрузку победителей открывают в Excel с русской локалью: нужны BOM (иначе UTF-8
+    читается как cp1251) и разделитель «;» (иначе всё в колонке A)."""
+
+    def test_bom_semicolon_and_cyrillic(self, site_bot_main):
+        db_path, main_module = site_bot_main
+        draw_id = _insert_draw(db_path)
+        stage_id = _insert_stage(db_path, draw_id)
+        _insert_user(db_path, 5043480779, "Николай К")
+        _insert_winner(db_path, stage_id, 5043480779, "Николай К")
+
+        response = run(main_module.api_draw_stage_export(stage_id))
+        body = response.body
+
+        assert body.startswith(b"\xef\xbb\xbf")
+        assert "charset=utf-8" in response.headers["content-type"]
+        lines = body.decode("utf-8-sig").splitlines()
+        assert lines[0].split(";") == ["Имя", "Telegram ID", "Телефон", "Ссылка на чат"]
+        assert lines[1].split(";") == [
+            "Николай К", "5043480779", "", "tg://user?id=5043480779",
+        ]
 
 
 class TestSaveDrawPreservesIds:

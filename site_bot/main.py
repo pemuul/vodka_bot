@@ -1149,6 +1149,22 @@ class DetermineReq(BaseModel):
     winners_count: int
 
 
+def _draw_unique_winners(pool: list, winners_count: int, rng=random) -> list:
+    """Выбирает до winners_count РАЗНЫХ участников из pool = [(представитель, билетов), ...].
+
+    Тянет по одному: шанс участника пропорционален числу его билетов, выигравший выбывает
+    вместе со всеми своими билетами. Раньше пул был плоским списком копий
+    ([представитель] * билеты) и брался срез после shuffle — человек с 13 билетами из 84
+    занимал 3 из 10 мест одной и той же записью (прод, этап 49, 05.10.2026). Участников
+    меньше, чем мест, — победителей столько, сколько участников."""
+    candidates = [(row, weight) for row, weight in pool if weight > 0]
+    winners = []
+    while candidates and len(winners) < winners_count:
+        idx = rng.choices(range(len(candidates)), weights=[w for _, w in candidates])[0]
+        winners.append(candidates.pop(idx)[0])
+    return winners
+
+
 @app.post("/api/draw-stages/{stage_id}/determine")
 async def api_determine_winners(stage_id: int, req: DetermineReq):
     stage_row = await database.fetch_one(
@@ -1202,11 +1218,14 @@ async def api_determine_winners(stage_id: int, req: DetermineReq):
     # реальные шансы разойдутся с тем, что человеку обещали. Без правил — поведение не
     # меняется (обратная совместимость со старыми акциями без правил проверки: билет —
     # любой подтверждённый чек).
+    #
+    # Пул — это (представитель, число билетов) на пользователя, а не плоский список копий:
+    # один человек выигрывает не больше одного места (см. _draw_unique_winners()).
     active_rules = await _get_stage_rules(stage_id, only_active=True)
     if active_rules:
         progress = await _get_stage_progress(stage_id, rules=active_rules)
         receipts_by_id = {r["id"]: r for r in receipts_rows}
-        sample = []
+        pool = []
         for p in progress:
             if p["entries_count"] < 1:
                 continue
@@ -1218,17 +1237,21 @@ async def api_determine_winners(stage_id: int, req: DetermineReq):
             )
             if representative is None:
                 continue
-            sample.extend([representative] * p["entries_count"])
-        if not sample:
+            pool.append((representative, p["entries_count"]))
+        if not pool:
             raise HTTPException(
                 status_code=400,
                 detail="Нет участников, выполнивших все условия этапа (правила проверки чеков)",
             )
     else:
-        sample = list(receipts_rows)
+        # Без правил билет — каждый подтверждённый чек; представитель — случайный из чеков
+        # пользователя.
+        receipts_by_user: Dict[int, list] = {}
+        for r in receipts_rows:
+            receipts_by_user.setdefault(r["user_tg_id"], []).append(r)
+        pool = [(random.choice(rows), len(rows)) for rows in receipts_by_user.values()]
 
-    random.shuffle(sample)
-    sample = sample[: max(1, req.winners_count)]
+    sample = _draw_unique_winners(pool, max(1, req.winners_count))
 
     await database.execute(
         prize_draw_winners_table.delete().where(
@@ -1463,8 +1486,12 @@ async def api_draw_stage_export(stage_id: int):
     )
     rows = await database.fetch_all(query)
 
+    # Файл открывают двойным кликом в Excel с русской локалью: без BOM он читает UTF-8 как
+    # cp1251 (кракозябры), а разделитель списка там «;» — с запятыми вся строка попадала в
+    # колонку A.
     output = io.StringIO()
-    writer = csv.writer(output)
+    output.write("﻿")
+    writer = csv.writer(output, delimiter=";")
     writer.writerow(["Имя", "Telegram ID", "Телефон", "Ссылка на чат"])
     for r in rows:
         name = r["user_name"] or r["winner_name"]
@@ -1477,7 +1504,7 @@ async def api_draw_stage_export(stage_id: int):
     headers = {
         "Content-Disposition": f"attachment; filename=winners_stage_{stage_id}.csv"
     }
-    return Response(csv_data, media_type="text/csv", headers=headers)
+    return Response(csv_data, media_type="text/csv; charset=utf-8", headers=headers)
 
 
 @app.get("/questions", response_class=HTMLResponse)
